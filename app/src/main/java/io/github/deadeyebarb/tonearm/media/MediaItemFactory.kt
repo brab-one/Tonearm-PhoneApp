@@ -103,7 +103,10 @@ class MediaItemFactory(context: Context) {
             song.bitDepth?.let { putInt(SongExtras.BIT_DEPTH, it) }
             song.samplingRate?.let { putInt(SongExtras.SAMPLE_RATE, it) }
             song.channelCount?.let { putInt(SongExtras.CHANNELS, it) }
-            song.size?.let { putLong(SongExtras.SIZE, it) }
+            song.size?.let {
+                putLong(SongExtras.SIZE, it)
+                SongSizes.remember(serverId, song.id, it)
+            }
             song.starred?.let { putString(SongExtras.STARRED, it) }
             song.replayGain?.let { rg ->
                 rg.trackGain?.let { putFloat(SongExtras.TRACK_GAIN, it) }

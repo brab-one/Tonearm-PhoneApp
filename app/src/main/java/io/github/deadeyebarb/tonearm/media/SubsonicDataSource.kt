@@ -2,6 +2,7 @@ package io.github.deadeyebarb.tonearm.media
 
 import android.net.Uri
 import androidx.core.net.toUri
+import androidx.media3.common.C
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.HttpDataSource
@@ -43,7 +44,12 @@ class SubsonicDataSource private constructor(
         val source = OkHttpDataSource.Factory(callFactory).setUserAgent(USER_AGENT).createDataSource()
         listeners.forEach(source::addTransferListener)
         delegate = source
-        return source.open(dataSpec.buildUpon().setUri(uri).build())
+        val length = source.open(dataSpec.buildUpon().setUri(uri).build())
+        if (length != C.LENGTH_UNSET.toLong() || dataSpec.length != C.LENGTH_UNSET.toLong() || parts == null) return length
+        // No Content-Length (a proxy re-chunked the response): the original file's size is known.
+        if (SongUri.formatOf(parts.quality).first != SongUri.RAW) return length
+        val size = SongSizes.of(parts.serverId, parts.songId) ?: return length
+        return (size - dataSpec.position).takeIf { it > 0 } ?: length
     }
 
     private fun openYouTube(dataSpec: DataSpec, videoId: String, retry: Boolean): Long {
