@@ -1,4 +1,4 @@
-# Tonearm
+# Tonearm for Android
 
 A lossless-first Android music player for **Subsonic / OpenSubsonic** servers (Navidrome, Gonic,
 Airsonic-Advanced, LMS, …), with **mutual TLS** support so it works behind a reverse proxy that
@@ -8,6 +8,7 @@ your **Maloja** scrobbles, music requests through **Lidarr**, AI picks from **Br
 
 Related repositories:
 
+- [**Tonearm**](https://github.com/brab-one/Tonearm): start here, the short install and setup guide for everything
 - [**Tonearm-Desktop**](https://github.com/brab-one/Tonearm-Desktop): the desktop app for Linux and
   Windows (native, not a web app) with the same server support and a Lidarr/Brainarr dashboard
 - [**Tonearm-Connect**](https://github.com/brab-one/Tonearm-Connect): the Lidarr plugin that lets this
