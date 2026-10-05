@@ -63,8 +63,13 @@ class SubsonicDataSource private constructor(
         val source = OkHttpDataSource.Factory(youtubeClient).setUserAgent(audio.userAgent).createDataSource()
         listeners.forEach(source::addTransferListener)
         delegate = source
+        // googlevideo sends a whole-file request at about 32 KB/s, barely above what the song needs; asked for
+        // a range it sends at full speed. ExoPlayer leaves the Range header out when reading from the start.
+        val spec = dataSpec.buildUpon().setUri(audio.url.toUri()).apply {
+            if (dataSpec.position == 0L && dataSpec.length == C.LENGTH_UNSET.toLong()) setHttpRequestHeaders(dataSpec.httpRequestHeaders + ("Range" to "bytes=0-"))
+        }.build()
         return try {
-            source.open(dataSpec.buildUpon().setUri(audio.url.toUri()).build())
+            source.open(spec)
         } catch (e: HttpDataSource.InvalidResponseCodeException) {
             // The URL went stale (or was issued for another client): resolve it once more.
             if (!retry || e.responseCode != 403) throw e
