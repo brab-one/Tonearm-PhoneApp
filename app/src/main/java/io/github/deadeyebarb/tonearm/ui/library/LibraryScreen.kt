@@ -237,6 +237,8 @@ private fun FavoritesPage() {
     val pending by c.likes.pending.items.collectAsStateWithLifecycle()
     val phoneLikes by c.likes.phone.collectAsStateWithLifecycle()
     val phoneSongs by c.local.songs.collectAsStateWithLifecycle()
+    // Likes made on the desktop arrive here too.
+    LaunchedEffect(Unit) { if (c.likes.syncNow()) c.likes.resolveNow() }
     LaunchedEffect(phoneLikes.isNotEmpty()) { if (phoneLikes.isNotEmpty() && phoneSongs == null) runCatching { c.local.load() } }
     val likedOnPhone = remember(phoneLikes, phoneSongs) { phoneSongs.orEmpty().filter { it.id in phoneLikes } }
     LoadContent(vm) { result ->

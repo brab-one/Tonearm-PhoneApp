@@ -1,5 +1,7 @@
 package io.github.deadeyebarb.tonearm
 
+import io.github.deadeyebarb.tonearm.integrations.FetchTracker
+import io.github.deadeyebarb.tonearm.likes.LikesSync
 import io.github.deadeyebarb.tonearm.local.LocalMusic
 import io.github.deadeyebarb.tonearm.youtube.YouTubeCatalog
 import io.github.deadeyebarb.tonearm.data.Likes
@@ -98,9 +100,10 @@ class AppContainer(val app: Application) {
     private val youtubeHttpClient = baseHttpClient.newBuilder().apply { interceptors().remove(UserAgentInterceptor) }.build()
     val youtube = YouTubeMusic(youtubeHttpClient)
     val catalog = YouTubeCatalog(youtube)
+    val fetches = FetchTracker(LidarrClient(integrationHttp, json), api)
     val local = LocalMusic(app)
     val songRequests = SongRequests(LidarrClient(integrationHttp, json), MusicBrainz(baseHttpClient, json))
-    val likes = Likes(app, json, scope, api, sessions, starred, integrations, songRequests, settings, messages)
+    val likes = Likes(app, json, scope, api, sessions, starred, integrations, songRequests, LikesSync(ConnectClient(integrationHttp, json), json), settings, messages)
     val weekly = WeeklyPicks(api, LidarrClient(integrationHttp, json), json, connect.deviceId, java.io.File(app.filesDir, "weekly-run.json"))
     val continuation = QueueContinuation(api, sessions, youtube, settings)
     val media by lazy { MediaEngine(app, sessions, settings, network, youtube, youtubeHttpClient) }

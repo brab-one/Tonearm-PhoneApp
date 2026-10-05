@@ -170,6 +170,30 @@ class ConnectClient(private val http: IntegrationHttp, private val json: Json) {
         call(config, key, "forget", listOf("device" to device))
     }
 
+    /** A shared document from the plugin's store (protocol 2): its JSON (null if never saved) and version. */
+    data class Stored(val value: String?, val version: Long)
+
+    /** Thrown by [storeGet]/[storePut] when the plugin is older than its store. */
+    class StoreUnsupportedException : IntegrationHttpException(0, "Lidarr: Tonearm Connect is too old to share likes; update it under System → Plugins")
+
+    suspend fun storeGet(config: LidarrConfig, key: String, name: String): Stored = store {
+        val response = call(config, key, "get", listOf("key" to name))
+        Stored(response["value"]?.jsonPrimitive?.contentOrNull, response["version"]?.jsonPrimitive?.long ?: 0)
+    }
+
+    /** Saves [value] if the stored version is still [ifVersion]. Null when someone saved in between. */
+    suspend fun storePut(config: LidarrConfig, key: String, name: String, value: String, ifVersion: Long): Stored? = store {
+        val response = call(config, key, "put", listOf("key" to name, "ifVersion" to ifVersion), value)
+        if (response["ok"]?.jsonPrimitive?.contentOrNull == "true") Stored(value, response["version"]?.jsonPrimitive?.long ?: 0) else null
+    }
+
+    private suspend fun <T> store(block: suspend () -> T): T = try {
+        block()
+    } catch (e: IntegrationHttpException) {
+        if ("Unknown op" in e.message.orEmpty()) throw StoreUnsupportedException()
+        throw e
+    }
+
     private suspend fun call(config: LidarrConfig, key: String, op: String, params: List<Pair<String, Any?>> = emptyList(), payload: String = ""): JsonObject {
         val url = IntegrationHttp.url(config.url, "api/v1/notification/action/tonearm", listOf("op" to op) + params)
         val body = buildJsonObject {

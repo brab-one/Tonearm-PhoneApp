@@ -129,6 +129,13 @@ fun TonearmRoot(container: AppContainer, openPlayerRequests: Int, requestNotific
             snackbar.showSnackbar(it)
         }
     }
+    // Lidarr's queue and wanted list, for the status icons on songs from outside the library.
+    LaunchedEffect(Unit) {
+        while (true) {
+            container.integrations.requireLidarrOrNull()?.let { (config, key) -> runCatching { container.fetches.refresh(config, key) } }
+            kotlinx.coroutines.delay(60_000)
+        }
+    }
     LaunchedEffect(openPlayerRequests) {
         if (openPlayerRequests > 0 && list.servers.isNotEmpty()) actions.openNowPlaying()
     }

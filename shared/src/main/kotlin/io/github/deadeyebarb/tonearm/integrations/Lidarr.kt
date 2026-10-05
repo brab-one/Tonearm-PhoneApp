@@ -130,6 +130,9 @@ data class LidarrCommand(
 }
 
 @Serializable
+private class LidarrWantedPage(val records: List<LidarrAlbum> = emptyList())
+
+@Serializable
 private class LidarrQueuePage(val records: List<LidarrQueueItem> = emptyList(), val totalRecords: Int = 0)
 
 /** One search hit: an artist or an album, with Lidarr's own JSON kept for adding it. */
@@ -393,6 +396,12 @@ class LidarrClient(private val http: IntegrationHttp, private val json: Json) {
             },
         ),
     )
+
+    /** Monitored albums Lidarr doesn't have yet (what it's looking for). */
+    suspend fun wanted(config: LidarrConfig, key: String, pageSize: Int = 1000): List<LidarrAlbum> {
+        val body = get(config, key, "wanted/missing", listOf("page" to 1, "pageSize" to pageSize, "monitored" to true, "includeArtist" to true))
+        return json.decodeFromString(LidarrWantedPage.serializer(), body).records
+    }
 
     suspend fun queue(config: LidarrConfig, key: String): List<LidarrQueueItem> {
         val body = get(config, key, "queue", listOf("page" to 1, "pageSize" to 50, "includeArtist" to true, "includeAlbum" to true))

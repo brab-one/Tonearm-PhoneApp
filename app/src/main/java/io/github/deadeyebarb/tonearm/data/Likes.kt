@@ -1,5 +1,7 @@
 package io.github.deadeyebarb.tonearm.data
 
+import io.github.deadeyebarb.tonearm.integrations.SongRequestResult
+import io.github.deadeyebarb.tonearm.likes.LikesSync
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.coroutines.flow.update
@@ -42,6 +44,7 @@ class Likes(
     private val starred: StarredStore,
     private val integrations: IntegrationsService,
     private val requests: SongRequests,
+    private val sync: LikesSync,
     private val settings: SettingsRepository,
     private val messages: Messages,
 ) {
@@ -71,12 +74,24 @@ class Likes(
         val ref = entry.song.toTrackRef()
         if (!liked) {
             pending.remove(ref)
+            syncSoon()
             return
         }
         pending.add(ref)
         // Maybe the library has it already (downloaded since it was found on YouTube Music).
         if (resolveNow().isNotEmpty()) return
+        syncSoon()
         request(ref)
+    }
+
+    /** Shares pending likes with the desktop through Lidarr (Tonearm Connect); false if that isn't possible. */
+    suspend fun syncNow(): Boolean {
+        val (config, key) = integrations.requireLidarrOrNull() ?: return false
+        return runCatching { sync.sync(config, key, pending) }.getOrDefault(false)
+    }
+
+    private fun syncSoon() {
+        scope.launch { syncNow() }
     }
 
     private fun request(ref: TrackRef) {
@@ -85,7 +100,9 @@ class Likes(
             try {
                 val (config, key) = integrations.requireLidarrOrNull() ?: return@launch
                 val result = requests.request(config, key, ref)
-                pending.setRequest(ref, result.message)
+                val album = result as? SongRequestResult.Album
+                pending.setRequest(ref, result.message, album?.title, album?.artist)
+                syncNow()
                 messages.show(result.message)
             } catch (e: CancellationException) {
                 throw e
@@ -102,6 +119,7 @@ class Likes(
         val found = runCatching { pending.resolve(api, session) }.getOrDefault(emptyList())
         found.forEach { starred.remember(session.id, it.id, true) }
         if (found.isNotEmpty()) {
+            syncSoon()
             messages.show(if (found.size == 1) "${found[0].title} is in your library now" else "${found.size} liked songs are in your library now")
         }
         found
@@ -111,15 +129,19 @@ class Likes(
     fun start() {
         scope.launch {
             sessions.active.first { it != null }
+            var round = 0
             while (true) {
-                runCatching { resolveNow() }
-                delay(RESOLVE_EVERY)
+                // Likes from the desktop first, then check which of them have arrived.
+                syncNow()
+                if (round++ % (RESOLVE_EVERY / SYNC_EVERY).toInt() == 0) runCatching { resolveNow() }
+                delay(SYNC_EVERY)
             }
         }
     }
 
     companion object {
         private const val RESOLVE_EVERY = 20 * 60_000L
+        private const val SYNC_EVERY = 4 * 60_000L
 
         fun Song.toTrackRef() = TrackRef(
             title = title,

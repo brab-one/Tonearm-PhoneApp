@@ -1,5 +1,8 @@
 package io.github.deadeyebarb.tonearm.ui.player
 
+import io.github.deadeyebarb.tonearm.integrations.Fetch
+import io.github.deadeyebarb.tonearm.ui.common.label
+import io.github.deadeyebarb.tonearm.ui.common.rememberFetchState
 import io.github.deadeyebarb.tonearm.local.LocalMusic
 import io.github.deadeyebarb.tonearm.ui.common.LikeButton
 import android.os.Build
@@ -279,7 +282,10 @@ private fun Readout(entry: QueueSong?, format: AudioFormatInfo?) {
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
         if (LocalMusic.isLocal(entry.serverId)) HudTag("ON THIS PHONE", color = hud.accent2)
         when {
-            YouTubeMusic.isYouTube(entry.serverId) -> HudTag("YOUTUBE MUSIC", color = hud.accent2)
+            YouTubeMusic.isYouTube(entry.serverId) -> {
+                HudTag("YOUTUBE MUSIC", color = hud.accent2)
+                rememberFetchState(song, entry.serverId)?.let { HudTag(it.label(), color = if (it.fetch == Fetch.IN_LIBRARY) hud.ok else hud.accent) }
+            }
             transcoded -> HudTag("TRANSCODED", color = hud.accent2)
             isLossless(song.suffix) && isHiRes(depth, rate) -> HudTag("HI-RES", filled = true)
             isLossless(song.suffix) -> HudTag("LOSSLESS")

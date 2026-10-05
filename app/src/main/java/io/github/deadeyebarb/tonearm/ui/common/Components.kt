@@ -110,6 +110,7 @@ fun SongRow(
     val isCurrent = now != null && now.first == sid && now.second == song.id
     val playing = LocalPlaying.current
     val download = downloadOf(sid, song.id)
+    val fetch = rememberFetchState(song, sid)
     ListItem(
         modifier = modifier
             .clickable(onClick = onClick)
@@ -166,6 +167,7 @@ fun SongRow(
                 if (download?.completed == true) {
                     Icon(Icons.Rounded.DownloadDone, "Downloaded", Modifier.size(14.dp), tint = hud.ok)
                 }
+                FetchIcon(fetch)
                 Text(
                     listOfNotNull(song.artistLabel.ifEmpty { null }, song.album.takeIf { showAlbum }).joinToString(" · "),
                     maxLines = 1, overflow = TextOverflow.Ellipsis, color = hud.dim,
