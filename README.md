@@ -4,7 +4,7 @@ A lossless-first Android music player for **Subsonic / OpenSubsonic** servers (N
 Airsonic-Advanced, LMS, …), with **mutual TLS** support so it works behind a reverse proxy that
 requires client certificates, a neon sci-fi HUD design, Android Auto support, recommendations from
 your **Maloja** scrobbles, music requests through **Lidarr**, AI picks from **Brainarr**, and
-**YouTube Music** playback for anything you don't have yet (which then gets requested in Lidarr).
+**YouTube Music** playback for anything you don't have yet (like a song there and its album gets requested in Lidarr).
 
 Related repositories:
 
@@ -39,12 +39,19 @@ Related repositories:
 - Synced lyrics (OpenSubsonic `songLyrics`) with tap-to-seek, plain lyrics fallback
 - Scrobbling (now playing + submissions, retried when offline)
 - Android Auto browsing, voice search ("play … on Tonearm"), playback resumption
+- **When the queue ends**: stop, keep going with similar music (library first, then YouTube Music's radio
+  for the last song), or play another of your playlists
+- Seeking works even behind proxies that drop range requests: the file size from the server fills in
 
 **Library**
-- Home: recently added / played, most played, favorites, discover, shuffle all
-- Artists (A–Z), albums (7 sort orders, endless scrolling), playlists, genres, favorites
+- Home: recently added / played, most played, liked, discover, shuffle all
+- Artists (A–Z), albums (7 sort orders, endless scrolling), playlists, genres, liked
 - Album, artist (bio, popular songs, similar artists), playlist and genre pages; search
-- Favorites (star/unstar) everywhere, including the notification
+- **Like** button everywhere (mini player, Now Playing, song menus, the notification and the car). Liking a
+  YouTube Music song requests its album in Lidarr (never the whole discography) and likes it on the server
+  once it's downloaded; until then it waits under Library → Liked
+- **YouTube Music artists and albums**: search and artist pages show artists' bios, popular songs and the albums
+  you don't have, playable from YouTube Music, with "Request album"
 - Playlist management: create, rename, delete, add and remove songs
 - Instant mix from any song (needs similar-song data on the server)
 
@@ -59,14 +66,17 @@ Related repositories:
   and follow Lidarr's download queue
 - **Brainarr** picks: what the AI import list in your Lidarr added, with library / download status,
   "Ask Brainarr" (top of Discover) to have Lidarr run it now, "Get" for picks it added unmonitored, and a Brainarr mix of the ones you have
+- **Weekly picks** (Brainarr screen): every week Brainarr picks a few albums, Lidarr downloads them and they arrive
+  as a "Weekly picks" playlist. A week later the playlist and its music are deleted again, except albums with a
+  song you liked or put in another playlist; like the playlist itself (and name it) to keep all of it
 - Optional direct scrobbling to Maloja; all integrations can reuse the music server's mTLS client certificate
 
 **Offline**
 - Download songs, albums and playlists in original quality (Wi-Fi only by default)
 - Downloaded songs play from the device, with cover art, even with no connection
 - 2 GB streaming cache (configurable) so replays don't hit the network
-- Cache ahead: the next 3 songs of the queue (configurable, shuffle-aware) are cached while one plays,
-  so skips are instant and a dead spot in the car doesn't stop the music
+- Cache ahead: the next 3 songs of the queue (configurable up to the whole queue, shuffle-aware) are cached
+  while one plays, so skips are instant and a dead spot in the car doesn't stop the music
 
 **Servers & security**
 - Multiple servers; token, legacy (hex password) or API-key login
@@ -211,15 +221,15 @@ yet, the **On YouTube Music** section of Search, and "play … on Tonearm" in th
 no match. They stream from YouTube Music (Opus, up to 160 kbps; Now Playing shows a YOUTUBE MUSIC tag)
 in the same queue as library songs, with the visualizer, cache-ahead and Maloja scrobbling (if on).
 
-When such a song actually plays, its artist is requested in Lidarr with your usual request settings,
-so the lossless version lands on your server and plays from there next time. Only an exact name match
-in Lidarr is requested (for "A, B & C" credits the whole credit, then the first artist), each artist
-once. Both parts can be turned off in **Settings → YouTube Music**.
+Playing a song requests nothing. **Liking** one asks Lidarr for the album it's on (found through
+MusicBrainz, studio albums first), so the lossless version lands on your server; once it's there the song
+is liked in your library. If its album can't be found, nothing is requested. Turn this off under
+**Settings → YouTube Music → Request songs you like**.
 
 This uses [NewPipeExtractor](https://github.com/TeamNewPipe/NewPipeExtractor), the library behind
 NewPipe, without a Google account. It's unofficial: YouTube's terms don't allow third-party players,
 and changes on YouTube's side can break it until the library catches up. YouTube Music songs can't be
-downloaded, favorited, added to server playlists or show lyrics.
+downloaded, added to server playlists or show lyrics.
 
 ## Tonearm Connect (phone ↔ desktop)
 
