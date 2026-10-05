@@ -159,6 +159,23 @@ class Library:
         self.playlists["pl1"] = {"id": "pl1", "name": "Mock Favorites", "owner": USER, "public": False,
                                  "songs": ["al1-2", "al3-1", "al2-1"], "created": "2024-01-01T00:00:00Z"}
 
+    def arrive(self, title: str, artist: str, album: str):
+        """A song "downloaded by Lidarr": a new album with one song (the audio of al1-1)."""
+        artist_id = next((k for k, v in ARTISTS.items() if v.lower() == artist.lower()), None) or f"arn{len(ARTISTS)}"
+        ARTISTS.setdefault(artist_id, artist)
+        album_id = f"new{len(self.albums)}"
+        path = self.media / f"{album_id}-1.flac"
+        shutil.copy(self.media / "al1-1.flac", path)
+        song = dict(self.songs["al1-1"])
+        song.update({"id": f"{album_id}-1", "parent": album_id, "title": title, "album": album, "artist": artist, "artistId": artist_id,
+                     "albumId": album_id, "track": 1, "path": f"{artist}/{album}/01 {title}.flac"})
+        self.songs[song["id"]] = song
+        self.albums[album_id] = {
+            "id": album_id, "name": album, "artist": artist, "artistId": artist_id, "coverArt": "al1", "songCount": 1,
+            "duration": song["duration"], "year": 2026, "genre": "Rock", "created": now(), "genres": [{"name": "Rock"}], "_songs": [song],
+        }
+        return song
+
     def album(self, a):
         out = {k: v for k, v in a.items() if not k.startswith("_")}
         if a["id"] in self.starred:
@@ -196,6 +213,8 @@ def now():
 
 
 class Handler(BaseHTTPRequestHandler):
+    no_ranges = False
+    stream_kbps = 0
     lib: Library = None
     server_version = "MockSubsonic/1.0"
 
@@ -256,6 +275,12 @@ class Handler(BaseHTTPRequestHandler):
         url = urlparse(self.path)
         q = {k: v for k, v in parse_qs(url.query).items()}
         one = lambda k, d=None: q.get(k, [d])[0]
+        if url.path == "/mock/arrive":
+            # Test hook: a song shows up in the library, as if Lidarr had downloaded it.
+            with self.lib.lock:
+                song = self.lib.arrive(one("title", "Untitled"), one("artist", "Unknown"), one("album") or one("title", "Untitled"))
+            print(f"    arrived: {song['artist']} - {song['title']} ({song['id']})", flush=True)
+            return self.send_raw(song, 200)
         if url.path.startswith("/mock-images/"):
             name = Path(url.path).name
             return self.send_file(self.lib.media / name, "image/jpeg")
@@ -650,11 +675,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def api_createPlaylist(self, q, one):
         pid = one("playlistId")
-        if pid and pid in self.lib.playlists:      # Subsonic: createPlaylist with playlistId replaces the songs
+        if pid and pid not in self.lib.playlists:
+            return self.error(70, "Playlist not found")
+        if pid:      # Subsonic: createPlaylist with playlistId replaces the songs
             self.lib.playlists[pid]["songs"] = q.get("songId", [])
             print(f"    playlist {pid} replaced with {len(q.get('songId', []))} songs", flush=True)
         else:
-            pid = f"pl{len(self.lib.playlists) + 1}"
+            self.lib.next_playlist = getattr(self.lib, "next_playlist", len(self.lib.playlists)) + 1
+            pid = f"pl{self.lib.next_playlist}"
             self.lib.playlists[pid] = {"id": pid, "name": one("name", "New playlist"), "owner": USER, "public": False,
                                        "songs": q.get("songId", []), "created": now()}
             print(f"    playlist {pid} '{one('name')}' created with {len(q.get('songId', []))} songs", flush=True)
@@ -719,6 +747,21 @@ class Handler(BaseHTTPRequestHandler):
         size = path.stat().st_size
         start, end = 0, size - 1
         rng = self.headers.get("Range")
+        if Handler.no_ranges and path.suffix == ".flac":
+            # Like a reverse proxy that re-chunks streams: no ranges, no length.
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.end_headers()
+            try:
+                with open(path, "rb") as f:
+                    while chunk := f.read(16384):
+                        self.wfile.write(chunk)
+                        if Handler.stream_kbps:
+                            time.sleep(len(chunk) / (Handler.stream_kbps * 1024))
+            except (BrokenPipeError, ConnectionResetError, ssl.SSLError):
+                pass
+            self.close_connection = True
+            return
         if rng and (m := re.match(r"bytes=(\d*)-(\d*)", rng)):
             if m.group(1):
                 start = int(m.group(1))
@@ -756,6 +799,9 @@ def main():
     parser.add_argument("--plain", action="store_true", help="serve plain http")
     parser.add_argument("--empty-library", action="store_true", help="serve no music, like a freshly installed server")
     parser.add_argument("--brainarr-untagged", action="store_true", help="the Brainarr import list has no tag yet")
+    parser.add_argument("--no-ranges", action="store_true",
+                        help="stream songs without Content-Length or range support, like some reverse proxies")
+    parser.add_argument("--stream-kbps", type=int, default=0, help="with --no-ranges: stream this slowly (KiB/s), like a remote server")
     parser.add_argument("--san", action="append", default=["DNS:localhost", "IP:127.0.0.1", "IP:10.0.2.2"],
                         help="subject alternative names for the server certificate (first run only)")
     args = parser.parse_args()
@@ -765,6 +811,8 @@ def main():
     make_media(data / "media")
     Handler.lib = Library(data / "media")
     # Brainarr's earlier picks: one you already have, one still downloading.
+    Handler.no_ranges = args.no_ranges
+    Handler.stream_kbps = args.stream_kbps
     Handler.lib.brainarr_tags = [] if args.brainarr_untagged else [BRAINARR_TAG["id"]]
     Handler.lib.lidarr_tags = [] if args.brainarr_untagged else [dict(BRAINARR_TAG)]
     Handler.add_lidarr_artist(Handler, "mb-signal-garden", tags=Handler.lib.brainarr_tags, days_ago=3, on_disk=True)
