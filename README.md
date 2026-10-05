@@ -53,6 +53,8 @@ Related repositories:
 - **YouTube Music artists and albums**: search and artist pages show artists' bios, popular songs and the albums
   you don't have, playable from YouTube Music, with "Request album"
 - Playlist management: create, rename, delete, add and remove songs
+- **This phone** (Library tab): music files stored on the phone, by album, in search, liked songs and Android Auto
+  ("On this phone" under Library). They play straight from storage, next to the server's library
 - Instant mix from any song (needs similar-song data on the server)
 
 **Discover (Maloja + Lidarr)**
