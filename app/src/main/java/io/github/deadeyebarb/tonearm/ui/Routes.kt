@@ -24,4 +24,5 @@ import kotlinx.serialization.Serializable
 @Serializable data class GenreRoute(val name: String)
 @Serializable data class AlbumListRoute(val type: String)
 @Serializable data class YtArtistRoute(val url: String, val name: String, val imageUrl: String? = null, val subscribers: Long? = null)
+@Serializable data class LocalAlbumRoute(val id: String)
 @Serializable data class YtAlbumRoute(val url: String, val title: String, val artist: String? = null, val imageUrl: String? = null)

@@ -1,5 +1,6 @@
 package io.github.deadeyebarb.tonearm.ui.common
 
+import io.github.deadeyebarb.tonearm.local.LocalMusic
 import io.github.deadeyebarb.tonearm.integrations.IntegrationsService
 import io.github.deadeyebarb.tonearm.ui.YtAlbumRoute
 import io.github.deadeyebarb.tonearm.ui.YtArtistRoute
@@ -153,7 +154,7 @@ class AppActions(
 
     fun download(items: List<QueueSong>) {
         // YouTube Music songs can't be downloaded; Lidarr gets the real thing instead.
-        @Suppress("NAME_SHADOWING") val items = items.filterNot { YouTubeMusic.isYouTube(it.serverId) }
+        @Suppress("NAME_SHADOWING") val items = items.filterNot { YouTubeMusic.isYouTube(it.serverId) || LocalMusic.isLocal(it.serverId) }
         if (items.isEmpty()) return
         requestNotificationPermission()
         container.downloads.download(items)
@@ -221,6 +222,9 @@ val LocalStarOverrides = staticCompositionLocalOf<Map<String, Boolean>> { emptyM
 
 /** Video ids of YouTube Music songs liked before they're in the library. */
 val LocalPendingLikes = staticCompositionLocalOf<Set<String>> { emptySet() }
+
+/** Ids of liked songs stored on the phone. */
+val LocalPhoneLikes = staticCompositionLocalOf<Set<String>> { emptySet() }
 
 /** Whether playback is running (for "now playing" indicators). */
 val LocalPlaying = staticCompositionLocalOf { false }

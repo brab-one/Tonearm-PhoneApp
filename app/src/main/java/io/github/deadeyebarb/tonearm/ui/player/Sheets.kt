@@ -1,5 +1,6 @@
 package io.github.deadeyebarb.tonearm.ui.player
 
+import io.github.deadeyebarb.tonearm.local.LocalMusic
 import android.os.SystemClock
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -151,6 +152,7 @@ fun LyricsSheet(entry: QueueSong, onDismiss: () -> Unit) {
     val c = LocalContext.current.container
     val vm = rememberLoader("lyrics", entry.serverId, entry.song.id) {
         if (YouTubeMusic.isYouTube(entry.serverId)) throw IOException("No lyrics for songs playing from YouTube Music")
+        if (LocalMusic.isLocal(entry.serverId)) throw IOException("No lyrics for songs stored on the phone")
         c.api.lyrics(c.sessions.session(entry.serverId) ?: throw NoServerException(), entry.song)
     }
     val state by c.player.state.collectAsStateWithLifecycle()

@@ -1,5 +1,6 @@
 package io.github.deadeyebarb.tonearm.ui.connect
 
+import io.github.deadeyebarb.tonearm.local.LocalMusic
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -217,12 +218,14 @@ private fun RemoteControl(devices: List<ConnectDevice>, device: ConnectDevice, o
                     "Play this phone's music there", {
                         val phone = actions.player.state.value
                         val order = phone.order.ifEmpty { phone.queue.indices.toList() }
-                        val queue = order.mapNotNull { phone.queue.getOrNull(it)?.toQueueSong() }
+                        // Songs stored on the phone can't play elsewhere.
+                        val entries = order.mapNotNull { i -> phone.queue.getOrNull(i)?.toQueueSong()?.takeUnless { LocalMusic.isLocal(it.serverId) }?.let { i to it } }
+                        val queue = entries.map { it.second }
                         if (queue.isEmpty()) {
-                            actions.message("Nothing is playing on this phone")
+                            actions.message(if (phone.queue.isEmpty()) "Nothing is playing on this phone" else "Songs stored on this phone can only play here")
                         } else {
-                            val index = order.indexOf(phone.currentIndex).coerceAtLeast(0)
-                            val position = actions.player.position
+                            val index = entries.indexOfFirst { it.first == phone.currentIndex }.coerceAtLeast(0)
+                            val position = if (entries[index].first == phone.currentIndex) actions.player.position else 0L
                             actions.launch {
                                 c.connect.send(device.state.id, ConnectCommand(ConnectCommand.LOAD, queue = queue.map { it.toConnect() }, index = index, positionMs = position))
                                 actions.player.pause()

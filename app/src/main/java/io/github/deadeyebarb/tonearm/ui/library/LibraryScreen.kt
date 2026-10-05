@@ -1,5 +1,10 @@
 package io.github.deadeyebarb.tonearm.ui.library
 
+import io.github.deadeyebarb.tonearm.ui.common.ErrorState
+import io.github.deadeyebarb.tonearm.subsonic.userMessage
+import io.github.deadeyebarb.tonearm.subsonic.Starred
+import androidx.compose.runtime.LaunchedEffect
+import io.github.deadeyebarb.tonearm.local.LocalMusic
 import io.github.deadeyebarb.tonearm.subsonic.Song
 import io.github.deadeyebarb.tonearm.media.QueueSong
 import io.github.deadeyebarb.tonearm.youtube.YouTubeMusic
@@ -68,7 +73,7 @@ import io.github.deadeyebarb.tonearm.ui.common.TextInputDialog
 import io.github.deadeyebarb.tonearm.ui.common.rememberLoader
 import kotlinx.coroutines.launch
 
-private enum class LibraryTab(val label: String) { ARTISTS("Artists"), ALBUMS("Albums"), PLAYLISTS("Playlists"), GENRES("Genres"), FAVORITES("Liked") }
+private enum class LibraryTab(val label: String) { ARTISTS("Artists"), ALBUMS("Albums"), PLAYLISTS("Playlists"), GENRES("Genres"), FAVORITES("Liked"), PHONE("This phone") }
 
 @Composable
 fun LibraryScreen() {
@@ -112,6 +117,7 @@ fun LibraryScreen() {
                 LibraryTab.PLAYLISTS -> PlaylistsPage()
                 LibraryTab.GENRES -> GenresPage()
                 LibraryTab.FAVORITES -> FavoritesPage()
+                LibraryTab.PHONE -> PhonePage()
             }
         }
     }
@@ -226,14 +232,40 @@ private fun GenresPage() {
 private fun FavoritesPage() {
     val c = LocalContext.current.container
     val actions = LocalActions.current
-    val vm = rememberLoader("starred", serverKey()) { c.api.starred() }
+    // Without the server, likes on the phone still show.
+    val vm = rememberLoader("starred", serverKey()) { runCatching { c.api.starred() } }
     val pending by c.likes.pending.items.collectAsStateWithLifecycle()
-    LoadContent(vm) { starred ->
-        if (starred.song.isEmpty() && starred.album.isEmpty() && starred.artist.isEmpty() && pending.isEmpty()) {
+    val phoneLikes by c.likes.phone.collectAsStateWithLifecycle()
+    val phoneSongs by c.local.songs.collectAsStateWithLifecycle()
+    LaunchedEffect(phoneLikes.isNotEmpty()) { if (phoneLikes.isNotEmpty() && phoneSongs == null) runCatching { c.local.load() } }
+    val likedOnPhone = remember(phoneLikes, phoneSongs) { phoneSongs.orEmpty().filter { it.id in phoneLikes } }
+    LoadContent(vm) { result ->
+        val starred = result.getOrNull() ?: Starred()
+        val failure = result.exceptionOrNull()
+        if (failure != null && likedOnPhone.isEmpty()) {
+            ErrorState(failure.userMessage(), onRetry = { vm.reload() })
+            return@LoadContent
+        }
+        if (starred.song.isEmpty() && starred.album.isEmpty() && starred.artist.isEmpty() && pending.isEmpty() && likedOnPhone.isEmpty()) {
             EmptyState(Icons.Rounded.FavoriteBorder, "Nothing liked yet", "Tap the heart on songs, albums and artists to collect them here.")
             return@LoadContent
         }
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+            if (failure != null) {
+                item {
+                    Text(
+                        "Your server can't be reached (${failure.userMessage()}), so only what's on this phone shows.",
+                        style = MaterialTheme.typography.bodySmall, color = Hud.colors.danger, modifier = Modifier.padding(16.dp),
+                    )
+                }
+            }
+            if (likedOnPhone.isNotEmpty()) {
+                val entries = likedOnPhone.map { QueueSong(LocalMusic.SOURCE_ID, it) }
+                item { SectionHeader("On this phone") }
+                itemsIndexed(entries, key = { _, e -> "ph:${e.song.id}" }) { i, entry ->
+                    SongRow(entry.song, serverId = LocalMusic.SOURCE_ID, onClick = { actions.playEntries(entries, i) })
+                }
+            }
             if (pending.isNotEmpty()) {
                 val waiting = pending.mapNotNull { like ->
                     like.ref.youtubeId?.let { id ->

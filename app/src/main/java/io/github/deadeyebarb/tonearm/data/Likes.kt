@@ -1,5 +1,11 @@
 package io.github.deadeyebarb.tonearm.data
 
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import io.github.deadeyebarb.tonearm.local.LocalMusic
 import android.content.Context
 import io.github.deadeyebarb.tonearm.integrations.IntegrationsService
 import io.github.deadeyebarb.tonearm.integrations.SongRequests
@@ -29,7 +35,7 @@ import java.io.File
  */
 class Likes(
     context: Context,
-    json: Json,
+    private val json: Json,
     private val scope: CoroutineScope,
     private val api: SubsonicApi,
     private val sessions: SessionManager,
@@ -40,13 +46,24 @@ class Likes(
     private val messages: Messages,
 ) {
     val pending = PendingLikes(File(context.filesDir, "pending_likes.json"), json)
+    private val phoneFile = File(context.filesDir, "phone_likes.json")
+    private val _phone = MutableStateFlow(runCatching { json.decodeFromString(ListSerializer(String.serializer()), phoneFile.readText()).toSet() }.getOrDefault(emptySet()))
+    /** Ids of liked songs stored on the phone (they aren't on the server to be starred there). */
+    val phone: StateFlow<Set<String>> = _phone
     private val resolving = Mutex()
 
-    fun isLiked(entry: QueueSong): Boolean =
-        if (YouTubeMusic.isYouTube(entry.serverId)) pending.isLiked(entry.song.id)
-        else starred.isStarred(entry.serverId, entry.song.id, entry.song.starred != null)
+    fun isLiked(entry: QueueSong): Boolean = when {
+        YouTubeMusic.isYouTube(entry.serverId) -> pending.isLiked(entry.song.id)
+        LocalMusic.isLocal(entry.serverId) -> entry.song.id in _phone.value
+        else -> starred.isStarred(entry.serverId, entry.song.id, entry.song.starred != null)
+    }
 
     suspend fun set(entry: QueueSong, liked: Boolean) {
+        if (LocalMusic.isLocal(entry.serverId)) {
+            _phone.update { if (liked) it + entry.song.id else it - entry.song.id }
+            phoneFile.writeText(json.encodeToString(ListSerializer(String.serializer()), _phone.value.toList()))
+            return
+        }
         if (!YouTubeMusic.isYouTube(entry.serverId)) {
             starred.set(entry.serverId, StarKind.SONG, entry.song.id, liked)
             return

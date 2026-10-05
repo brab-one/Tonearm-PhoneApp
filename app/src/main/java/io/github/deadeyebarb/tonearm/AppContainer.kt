@@ -1,5 +1,6 @@
 package io.github.deadeyebarb.tonearm
 
+import io.github.deadeyebarb.tonearm.local.LocalMusic
 import io.github.deadeyebarb.tonearm.youtube.YouTubeCatalog
 import io.github.deadeyebarb.tonearm.data.Likes
 import io.github.deadeyebarb.tonearm.integrations.MusicBrainz
@@ -97,6 +98,7 @@ class AppContainer(val app: Application) {
     private val youtubeHttpClient = baseHttpClient.newBuilder().apply { interceptors().remove(UserAgentInterceptor) }.build()
     val youtube = YouTubeMusic(youtubeHttpClient)
     val catalog = YouTubeCatalog(youtube)
+    val local = LocalMusic(app)
     val songRequests = SongRequests(LidarrClient(integrationHttp, json), MusicBrainz(baseHttpClient, json))
     val likes = Likes(app, json, scope, api, sessions, starred, integrations, songRequests, settings, messages)
     val weekly = WeeklyPicks(api, LidarrClient(integrationHttp, json), json, connect.deviceId, java.io.File(app.filesDir, "weekly-run.json"))

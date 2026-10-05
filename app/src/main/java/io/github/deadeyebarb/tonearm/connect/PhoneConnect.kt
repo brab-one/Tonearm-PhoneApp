@@ -1,5 +1,6 @@
 package io.github.deadeyebarb.tonearm.connect
 
+import io.github.deadeyebarb.tonearm.local.LocalMusic
 import android.content.Context
 import android.os.Build
 import io.github.deadeyebarb.tonearm.integrations.IntegrationNotConfiguredException
@@ -44,7 +45,11 @@ class PhoneConnect(context: Context, private val integrations: IntegrationsServi
 
 fun QueueSong.toConnect(): ConnectSong = ConnectSong(
     id = song.id,
-    source = if (YouTubeMusic.isYouTube(serverId)) ConnectSong.YOUTUBE else ConnectSong.SERVER,
+    source = when {
+        YouTubeMusic.isYouTube(serverId) -> ConnectSong.YOUTUBE
+        LocalMusic.isLocal(serverId) -> ConnectSong.LOCAL
+        else -> ConnectSong.SERVER
+    },
     title = song.title,
     artist = song.artistLabel.ifEmpty { null },
     album = song.album,

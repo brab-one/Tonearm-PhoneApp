@@ -1,5 +1,6 @@
 package io.github.deadeyebarb.tonearm.playback
 
+import io.github.deadeyebarb.tonearm.local.LocalMusic
 import android.content.ContentResolver
 import android.net.Uri
 import android.os.Bundle
@@ -97,6 +98,9 @@ class LibraryTree(private val c: AppContainer) {
                 albumFolder(MediaIds.ALBUMS, "Albums", R.drawable.ic_car_album),
                 factory.folder(MediaIds.PLAYLISTS, "Playlists", artwork = icon(R.drawable.ic_car_playlist), mediaType = MediaMetadata.MEDIA_TYPE_FOLDER_PLAYLISTS),
                 factory.folder(MediaIds.GENRES, "Genres", artwork = icon(R.drawable.ic_car_genre), mediaType = MediaMetadata.MEDIA_TYPE_FOLDER_GENRES),
+            ) + listOfNotNull(
+                // Music stored on the phone, once Tonearm may see it.
+                albumFolder(MediaIds.PHONE, "On this phone", R.drawable.ic_car_album).takeIf { c.local.hasPermission() },
             )
             MediaIds.NEWEST -> api.albumList(AlbumListType.NEWEST, 60, session = session).map { factory.album(s, it) }
             MediaIds.RECENT -> api.albumList(AlbumListType.RECENT, 60, session = session).map { factory.album(s, it) }
@@ -113,6 +117,7 @@ class LibraryTree(private val c: AppContainer) {
                 )
             }
             MediaIds.STARRED, MediaIds.DOWNLOADS -> songsOf(parentId).map { factory.song(it, parentId) }
+            MediaIds.PHONE -> c.local.albums(c.local.load()).map { factory.album(LocalMusic.SOURCE_ID, it) }
             else -> {
                 val parsed = MediaIds.parse(parentId)
                 when (parsed.type) {
@@ -143,6 +148,10 @@ class LibraryTree(private val c: AppContainer) {
         }
         val parsed = MediaIds.parse(containerId)
         val serverId = parsed.serverId ?: return emptyList()
+        if (LocalMusic.isLocal(serverId)) {
+            val songs = c.local.load()
+            return if (parsed.type == MediaIds.ALBUM) c.local.albums(songs).firstOrNull { it.id == parsed.id }?.song.orEmpty().map { QueueSong(serverId, it) } else emptyList()
+        }
         val session = c.sessions.session(serverId) ?: return emptyList()
         return when (parsed.type) {
             MediaIds.ALBUM -> api.album(parsed.id!!, session).song
@@ -156,6 +165,9 @@ class LibraryTree(private val c: AppContainer) {
         if (mediaId == MediaIds.ROOT) return root()
         val parsed = MediaIds.parse(mediaId)
         if (parsed.type != MediaIds.SONG) return null
+        if (LocalMusic.isLocal(parsed.serverId)) {
+            return c.local.load().firstOrNull { it.id == parsed.id }?.let { factory.song(LocalMusic.SOURCE_ID, it, parsed.context) }
+        }
         val session = c.sessions.session(parsed.serverId ?: return null) ?: return null
         return factory.song(session.id, api.song(parsed.id!!, session), parsed.context)
     }

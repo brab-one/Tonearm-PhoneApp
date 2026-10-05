@@ -1,5 +1,11 @@
 package io.github.deadeyebarb.tonearm.media
 
+import android.util.Size
+import android.provider.MediaStore
+import android.os.Build
+import android.graphics.Bitmap
+import android.content.ContentUris
+import io.github.deadeyebarb.tonearm.local.LocalMusic
 import android.content.ContentProvider
 import android.content.ContentValues
 import android.content.Context
@@ -47,6 +53,7 @@ object ArtworkCache {
             file.setLastModified(System.currentTimeMillis())
             return file
         }
+        if (LocalMusic.isLocal(serverId)) return localCover(context, coverId, file)
         val (client, request) = if (YouTubeMusic.isYouTube(serverId)) {
             // YouTube Music covers are plain URLs; only its image hosts are fetched.
             val url = coverId.toHttpUrlOrNull()?.takeIf { it.isHttps && YouTubeMusic.isThumbnailHost(it.host) }
@@ -65,6 +72,30 @@ object ArtworkCache {
         }
         trim(dir)
         return file
+    }
+
+    /** Album art of music on the phone: what Android extracted, or a thumbnail it makes now. */
+    private fun localCover(context: Context, albumId: String, file: File): File {
+        val tmp = File.createTempFile("art", ".tmp", file.parentFile)
+        try {
+            val copied = runCatching {
+                context.contentResolver.openInputStream(LocalMusic.coverUri(albumId))?.use { input -> tmp.outputStream().use { input.copyTo(it) } }
+            }.getOrNull() != null && tmp.length() > 0
+            if (!copied && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val album = ContentUris.withAppendedId(MediaStore.Audio.Albums.EXTERNAL_CONTENT_URI, albumId.toLong())
+                val bitmap = context.contentResolver.loadThumbnail(album, Size(SIZE, SIZE), null)
+                tmp.outputStream().use { bitmap.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+            }
+            if (tmp.length() == 0L) throw FileNotFoundException("No album art on the phone")
+            if (!tmp.renameTo(file)) tmp.copyTo(file, overwrite = true)
+            return file
+        } catch (e: FileNotFoundException) {
+            throw e
+        } catch (e: Exception) {
+            throw FileNotFoundException(e.message ?: "No album art")
+        } finally {
+            tmp.delete()
+        }
     }
 
     private fun trim(dir: File) {

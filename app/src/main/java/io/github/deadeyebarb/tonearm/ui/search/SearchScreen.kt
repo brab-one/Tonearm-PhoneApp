@@ -1,5 +1,6 @@
 package io.github.deadeyebarb.tonearm.ui.search
 
+import io.github.deadeyebarb.tonearm.local.LocalMusic
 import io.github.deadeyebarb.tonearm.ui.detail.YouTubeAlbumRow
 import io.github.deadeyebarb.tonearm.ui.detail.YouTubeArtistRow
 import io.github.deadeyebarb.tonearm.youtube.YtAlbum
@@ -136,6 +137,9 @@ class SearchViewModel(private val c: AppContainer) : ViewModel() {
         private set
     var ytAlbums by mutableStateOf<List<YtAlbum>>(emptyList())
         private set
+    /** Matching songs stored on the phone. */
+    var phone by mutableStateOf<List<Song>>(emptyList())
+        private set
     private var job: Job? = null
     private var lastQuery = ""
 
@@ -149,12 +153,14 @@ class SearchViewModel(private val c: AppContainer) : ViewModel() {
             youtube = null
             ytArtists = emptyList()
             ytAlbums = emptyList()
+            phone = emptyList()
             return
         }
         job = viewModelScope.launch {
             if (debounce) delay(300)
             if (state == null) state = Load.Loading
             val yt = if (c.settings.state.value.youtubeFallback) async { runCatching { c.youtube.searchSongs(q, 15) } } else null
+            if (c.local.hasPermission()) launch { phone = runCatching { c.local.load(); c.local.search(q).take(30) }.getOrDefault(emptyList()) }
             if (c.settings.state.value.youtubeCatalog) {
                 launch { ytArtists = runCatching { c.catalog.searchArtists(q, 8) }.getOrDefault(emptyList()) }
                 launch { ytAlbums = runCatching { c.catalog.searchAlbums(q, 12) }.getOrDefault(emptyList()) }
@@ -228,7 +234,7 @@ fun SearchScreen() {
                     val result = state.value
                     val youtube = vm.youtube
                     val youtubeHits = (youtube as? Load.Ready)?.value.orEmpty()
-                    if (result.artist.isEmpty() && result.album.isEmpty() && result.song.isEmpty() && youtubeHits.isEmpty()) {
+                    if (result.artist.isEmpty() && result.album.isEmpty() && result.song.isEmpty() && youtubeHits.isEmpty() && vm.phone.isEmpty()) {
                         Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
                             EmptyState(Icons.Rounded.SearchOff, "Nothing found for “${query.trim()}”", modifier = Modifier.weight(1f))
                             if (youtube == Load.Loading) YouTubeSearching()
@@ -258,6 +264,13 @@ fun SearchScreen() {
                                 item { SectionHeader("Songs") }
                                 itemsIndexed(result.song, key = { _, s -> s.id }) { i, song ->
                                     SongRow(song, onClick = { actions.play(result.song, i) })
+                                }
+                            }
+                            if (vm.phone.isNotEmpty()) {
+                                val entries = vm.phone.map { QueueSong(LocalMusic.SOURCE_ID, it) }
+                                item { SectionHeader("On this phone") }
+                                itemsIndexed(entries, key = { _, e -> "ph:" + e.song.id }) { i, entry ->
+                                    SongRow(entry.song, serverId = LocalMusic.SOURCE_ID, onClick = { actions.playEntries(entries, i) })
                                 }
                             }
                             if (vm.ytArtists.isNotEmpty()) {

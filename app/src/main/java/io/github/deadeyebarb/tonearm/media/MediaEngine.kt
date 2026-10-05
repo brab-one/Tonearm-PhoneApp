@@ -1,5 +1,7 @@
 package io.github.deadeyebarb.tonearm.media
 
+import io.github.deadeyebarb.tonearm.local.LocalRouting
+import io.github.deadeyebarb.tonearm.local.LocalMusic
 import android.content.Context
 import android.net.Uri
 import androidx.media3.database.StandaloneDatabaseProvider
@@ -59,14 +61,14 @@ class MediaEngine(
         .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
         .setUpstreamDataSourceFactory(subsonicUpstream)
 
-    val playbackDataSourceFactory: DataSource.Factory = ResolvingDataSource.Factory(
+    val playbackDataSourceFactory: DataSource.Factory = LocalRouting(context, ResolvingDataSource.Factory(
         CacheDataSource.Factory()
             .setCache(downloadCache)
             .setCacheKeyFactory { spec -> downloadCacheKey(spec) }
             .setCacheWriteDataSinkFactory(null)
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
             .setUpstreamDataSourceFactory(streamLayer),
-    ) { spec -> stampQuality(spec) }
+    ) { spec -> stampQuality(spec) })
 
     /**
      * Fills the stream cache with a song's audio, at the quality playback would pick right now, so it
@@ -75,7 +77,8 @@ class MediaEngine(
     fun cacheWriter(uri: Uri): CacheWriter? {
         val spec = stampQuality(DataSpec(uri))
         val parts = SongUri.parse(spec.uri) ?: return null
-        if (parts.quality == SongUri.DOWNLOADED) return null
+        // Songs on the phone are there already.
+        if (parts.quality == SongUri.DOWNLOADED || LocalMusic.isLocal(parts.serverId)) return null
         return CacheWriter(streamLayer.createDataSource(), spec, null, null)
     }
 

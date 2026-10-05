@@ -1,5 +1,6 @@
 package io.github.deadeyebarb.tonearm.ui.player
 
+import io.github.deadeyebarb.tonearm.local.LocalMusic
 import io.github.deadeyebarb.tonearm.ui.common.LikeButton
 import android.os.Build
 import androidx.compose.animation.animateColorAsState
@@ -223,7 +224,7 @@ private fun Header(entry: QueueSong?, onBack: () -> Unit, onSleep: () -> Unit) {
                         add(MenuAction("Add to playlist", Icons.AutoMirrored.Rounded.PlaylistAdd) { actions.addToPlaylist(listOf(entry)) })
                         add(MenuAction("Instant mix", Icons.Rounded.AutoAwesome) { actions.instantMix(entry) })
                     }
-                    if (!YouTubeMusic.isYouTube(entry.serverId)) add(MenuAction("Download", Icons.Rounded.Download) { actions.download(listOf(entry)) })
+                    if (!YouTubeMusic.isYouTube(entry.serverId) && !LocalMusic.isLocal(entry.serverId)) add(MenuAction("Download", Icons.Rounded.Download) { actions.download(listOf(entry)) })
                 }
                 add(MenuAction("Equalizer", Icons.Rounded.Equalizer) { actions.navigate(EqualizerRoute) })
                 add(MenuAction("Sleep timer", Icons.Rounded.Bedtime, onSleep))
@@ -276,6 +277,7 @@ private fun Readout(entry: QueueSong?, format: AudioFormatInfo?) {
     val rate = format?.sampleRate ?: song.samplingRate
     val kbps = if (transcoded) format.bitrate?.div(1000) else song.bitRate
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (LocalMusic.isLocal(entry.serverId)) HudTag("ON THIS PHONE", color = hud.accent2)
         when {
             YouTubeMusic.isYouTube(entry.serverId) -> HudTag("YOUTUBE MUSIC", color = hud.accent2)
             transcoded -> HudTag("TRANSCODED", color = hud.accent2)

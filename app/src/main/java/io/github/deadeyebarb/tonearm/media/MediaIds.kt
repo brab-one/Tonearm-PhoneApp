@@ -26,6 +26,7 @@ object MediaIds {
     const val MALOJA_MIX = "maloja_mix"
     const val DAILY = "daily_discovery"
     const val BRAINARR_MIX = "brainarr_mix"
+    const val PHONE = "phone_music"
 
     const val SONG = "song"
     const val ALBUM = "album"

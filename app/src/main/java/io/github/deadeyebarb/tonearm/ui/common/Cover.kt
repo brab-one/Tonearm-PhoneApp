@@ -1,5 +1,6 @@
 package io.github.deadeyebarb.tonearm.ui.common
 
+import io.github.deadeyebarb.tonearm.local.LocalMusic
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -64,6 +65,8 @@ fun CoverArt(
             coverId == null -> null
             // YouTube Music covers are URLs already.
             YouTubeMusic.isYouTube(serverId) -> coverId
+            // Album art of songs on the phone comes from Android's media library (through the artwork provider).
+            LocalMusic.isLocal(serverId) -> c.mediaItems.artworkUri(LocalMusic.SOURCE_ID, coverId)
             session == null -> null
             else -> coverRequest(context, session, coverId, size)
         }

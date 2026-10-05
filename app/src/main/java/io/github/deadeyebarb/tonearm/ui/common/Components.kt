@@ -1,5 +1,6 @@
 package io.github.deadeyebarb.tonearm.ui.common
 
+import io.github.deadeyebarb.tonearm.local.LocalMusic
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -83,8 +84,11 @@ enum class SongLeading { Cover, TrackNumber, None }
 
 @Composable
 fun isStarred(serverId: String?, id: String, fromServer: Boolean): Boolean =
-    if (YouTubeMusic.isYouTube(serverId)) id in LocalPendingLikes.current
-    else serverId?.let { LocalStarOverrides.current["$it/$id"] } ?: fromServer
+    when {
+        YouTubeMusic.isYouTube(serverId) -> id in LocalPendingLikes.current
+        LocalMusic.isLocal(serverId) -> id in LocalPhoneLikes.current
+        else -> serverId?.let { LocalStarOverrides.current["$it/$id"] } ?: fromServer
+    }
 
 @Composable
 fun downloadOf(serverId: String?, songId: String): DownloadEntry? = serverId?.let { LocalDownloads.current["$it/$songId"] }
@@ -196,8 +200,8 @@ fun SongMenuButton(song: Song, serverId: String?, extraActions: List<MenuAction>
         add(MenuAction("Add to queue", Icons.AutoMirrored.Rounded.QueueMusic) { actions.enqueue(listOf(entry)) })
         if (sameServer) add(MenuAction("Add to playlist", Icons.AutoMirrored.Rounded.PlaylistAdd) { actions.addToPlaylist(listOf(entry)) })
         add(MenuAction(if (starred) "Unlike" else "Like", if (starred) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder) { actions.setLiked(entry, !starred) })
-        // A YouTube Music song isn't on any server: nothing to download.
-        if (!YouTubeMusic.isYouTube(serverId)) {
+        // A YouTube Music song or one stored on the phone isn't on any server: nothing to download.
+        if (!YouTubeMusic.isYouTube(serverId) && !LocalMusic.isLocal(serverId)) {
             if (download == null || download.failed) {
                 add(MenuAction("Download", Icons.Rounded.Download) { actions.download(listOf(entry)) })
             } else {
@@ -246,13 +250,13 @@ fun Badge(text: String, modifier: Modifier = Modifier, emphasized: Boolean = tru
 }
 
 @Composable
-fun AlbumCard(album: Album, modifier: Modifier = Modifier, onClick: () -> Unit) {
+fun AlbumCard(album: Album, modifier: Modifier = Modifier, serverId: String? = null, onClick: () -> Unit) {
     val hud = Hud.colors
     Column(modifier.clip(MaterialTheme.shapes.medium).clickable(onClick = onClick).padding(6.dp)) {
         CoverArt(
             album.coverArt,
             Modifier.fillMaxWidth().aspectRatio(1f).border(1.dp, hud.accent.copy(alpha = 0.22f), MaterialTheme.shapes.medium),
-            size = CoverSize.CARD, shape = MaterialTheme.shapes.medium,
+            serverId = serverId, size = CoverSize.CARD, shape = MaterialTheme.shapes.medium,
         )
         Spacer(Modifier.height(8.dp))
         Text(album.name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis, color = hud.text)

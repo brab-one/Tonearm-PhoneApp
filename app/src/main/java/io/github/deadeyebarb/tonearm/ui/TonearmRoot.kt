@@ -1,5 +1,7 @@
 package io.github.deadeyebarb.tonearm.ui
 
+import io.github.deadeyebarb.tonearm.ui.library.PhoneAlbumScreen
+import io.github.deadeyebarb.tonearm.ui.common.LocalPhoneLikes
 import io.github.deadeyebarb.tonearm.youtube.YtAlbum
 import io.github.deadeyebarb.tonearm.youtube.YtArtist
 import io.github.deadeyebarb.tonearm.ui.detail.YouTubeAlbumScreen
@@ -119,6 +121,7 @@ fun TonearmRoot(container: AppContainer, openPlayerRequests: Int, requestNotific
     val downloads by container.downloads.entries.collectAsStateWithLifecycle()
     val stars by container.starred.overrides.collectAsStateWithLifecycle()
     val pendingLikes by container.likes.pending.items.collectAsStateWithLifecycle()
+    val phoneLikes by container.likes.phone.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(Unit) {
         container.messages.flow.collect {
@@ -139,6 +142,7 @@ fun TonearmRoot(container: AppContainer, openPlayerRequests: Int, requestNotific
         LocalDownloads provides downloads,
         LocalStarOverrides provides stars,
         LocalPendingLikes provides remember(pendingLikes) { pendingLikes.mapNotNull { it.ref.youtubeId }.toSet() },
+        LocalPhoneLikes provides phoneLikes,
         LocalNowPlaying provides player.current?.let { it.serverId to it.songId },
         LocalPlaying provides player.isPlaying,
     ) {
@@ -189,6 +193,7 @@ fun TonearmRoot(container: AppContainer, openPlayerRequests: Int, requestNotific
                 composable<PlaylistRoute> { PlaylistScreen(it.toRoute<PlaylistRoute>().id) }
                 composable<GenreRoute> { GenreScreen(it.toRoute<GenreRoute>().name) }
                 composable<AlbumListRoute> { AlbumListScreen(it.toRoute<AlbumListRoute>().type) }
+                composable<LocalAlbumRoute> { PhoneAlbumScreen(it.toRoute<LocalAlbumRoute>().id) }
                 composable<YtArtistRoute> {
                     val r = it.toRoute<YtArtistRoute>()
                     YouTubeArtistScreen(YtArtist(r.url, r.name, r.imageUrl, r.subscribers))
