@@ -38,6 +38,8 @@ data class ConnectSong(
     companion object {
         const val SERVER = "server"
         const val YOUTUBE = "ytmusic"
+        /** A file on the desktop that plays it (the id is its path); other devices can only show it. */
+        const val LOCAL = "local"
     }
 }
 

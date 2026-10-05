@@ -1,5 +1,10 @@
 package io.github.deadeyebarb.tonearm.ui
 
+import io.github.deadeyebarb.tonearm.youtube.YtAlbum
+import io.github.deadeyebarb.tonearm.youtube.YtArtist
+import io.github.deadeyebarb.tonearm.ui.detail.YouTubeAlbumScreen
+import io.github.deadeyebarb.tonearm.ui.detail.YouTubeArtistScreen
+import io.github.deadeyebarb.tonearm.ui.common.LocalPendingLikes
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -113,6 +118,7 @@ fun TonearmRoot(container: AppContainer, openPlayerRequests: Int, requestNotific
     val player by container.player.state.collectAsStateWithLifecycle()
     val downloads by container.downloads.entries.collectAsStateWithLifecycle()
     val stars by container.starred.overrides.collectAsStateWithLifecycle()
+    val pendingLikes by container.likes.pending.items.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(Unit) {
         container.messages.flow.collect {
@@ -132,6 +138,7 @@ fun TonearmRoot(container: AppContainer, openPlayerRequests: Int, requestNotific
         LocalActions provides actions,
         LocalDownloads provides downloads,
         LocalStarOverrides provides stars,
+        LocalPendingLikes provides remember(pendingLikes) { pendingLikes.mapNotNull { it.ref.youtubeId }.toSet() },
         LocalNowPlaying provides player.current?.let { it.serverId to it.songId },
         LocalPlaying provides player.isPlaying,
     ) {
@@ -182,6 +189,14 @@ fun TonearmRoot(container: AppContainer, openPlayerRequests: Int, requestNotific
                 composable<PlaylistRoute> { PlaylistScreen(it.toRoute<PlaylistRoute>().id) }
                 composable<GenreRoute> { GenreScreen(it.toRoute<GenreRoute>().name) }
                 composable<AlbumListRoute> { AlbumListScreen(it.toRoute<AlbumListRoute>().type) }
+                composable<YtArtistRoute> {
+                    val r = it.toRoute<YtArtistRoute>()
+                    YouTubeArtistScreen(YtArtist(r.url, r.name, r.imageUrl, r.subscribers))
+                }
+                composable<YtAlbumRoute> {
+                    val r = it.toRoute<YtAlbumRoute>()
+                    YouTubeAlbumScreen(YtAlbum(r.url, r.title, r.artist, r.imageUrl))
+                }
                 composable<SettingsRoute> { SettingsScreen() }
                 composable<ServersRoute> { ServersScreen() }
                 composable<EqualizerRoute> { EqualizerScreen() }

@@ -1,5 +1,6 @@
 package io.github.deadeyebarb.tonearm.playback
 
+import io.github.deadeyebarb.tonearm.data.QueueEnd
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
@@ -63,7 +64,8 @@ class PlaybackService : MediaLibraryService() {
     private lateinit var scrobbler: Scrobbler
     private lateinit var cacheAhead: CacheAhead
     /** The YouTube Music item auto-request last ran for, so pausing and resuming doesn't repeat it. */
-    private var autoRequestedFor: String? = null
+    /** The last song the queue was extended after ("When the queue ends"). */
+    private var continuedAfter: String? = null
     private val searchResults = mutableMapOf<String, List<MediaItem>>()
     private var saveJob: Job? = null
 
@@ -119,6 +121,7 @@ class PlaybackService : MediaLibraryService() {
 
         observeSettings()
         scope.launch { c.starred.overrides.collect { updateButtons() } }
+        scope.launch { c.likes.pending.items.collect { updateButtons() } }
         // When a server is added (or switched), drop any "set up Tonearm" error the car is showing
         // and have connected browsers reload, so Android Auto picks up the library right away.
         scope.launch {
@@ -168,7 +171,10 @@ class PlaybackService : MediaLibraryService() {
 
         override fun onEvents(player: Player, events: Player.Events) {
             if (events.containsAny(Player.EVENT_SHUFFLE_MODE_ENABLED_CHANGED, Player.EVENT_REPEAT_MODE_CHANGED)) updateButtons()
-            if (events.containsAny(Player.EVENT_IS_PLAYING_CHANGED, Player.EVENT_MEDIA_ITEM_TRANSITION) && player.isPlaying) requestIfFromYouTube()
+            if (events.containsAny(Player.EVENT_MEDIA_ITEM_TRANSITION, Player.EVENT_TIMELINE_CHANGED, Player.EVENT_REPEAT_MODE_CHANGED)) {
+                continueIfLast()
+                updateButtons()
+            }
             if (events.containsAny(
                     Player.EVENT_TIMELINE_CHANGED, Player.EVENT_MEDIA_ITEM_TRANSITION, Player.EVENT_IS_PLAYING_CHANGED,
                     Player.EVENT_SHUFFLE_MODE_ENABLED_CHANGED, Player.EVENT_REPEAT_MODE_CHANGED,
@@ -211,11 +217,11 @@ class PlaybackService : MediaLibraryService() {
 
     private fun updateButtons() {
         val entry = player.currentMediaItem?.toQueueSong()
-        val starred = entry != null && c.starred.isStarred(entry.serverId, entry.song.id, entry.song.starred != null)
-        val star = CommandButton.Builder(if (starred) CommandButton.ICON_HEART_FILLED else CommandButton.ICON_HEART_UNFILLED)
-            .setDisplayName(if (starred) "Remove from favorites" else "Add to favorites")
+        val liked = entry != null && c.likes.isLiked(entry)
+        val star = CommandButton.Builder(if (liked) CommandButton.ICON_HEART_FILLED else CommandButton.ICON_HEART_UNFILLED)
+            .setDisplayName(if (liked) "Unlike" else "Like")
             .setSessionCommand(toggleStarCommand)
-            .setEnabled(entry != null && !YouTubeMusic.isYouTube(entry.serverId))
+            .setEnabled(entry != null)
             .build()
         val shuffle = CommandButton.Builder(if (player.shuffleModeEnabled) CommandButton.ICON_SHUFFLE_ON else CommandButton.ICON_SHUFFLE_OFF)
             .setDisplayName(if (player.shuffleModeEnabled) "Shuffle off" else "Shuffle on")
@@ -235,20 +241,27 @@ class PlaybackService : MediaLibraryService() {
         session.setMediaButtonPreferences(listOf(star, shuffle, repeat))
     }
 
-    /** Songs that actually play from YouTube Music get their artist requested in Lidarr. */
-    private fun requestIfFromYouTube() {
+    /** On the last song, appends what "When the queue ends" asks for, so playback carries on gaplessly. */
+    private fun continueIfLast() {
+        if (player.mediaItemCount == 0 || player.hasNextMediaItem() || player.repeatMode != Player.REPEAT_MODE_OFF) return
+        if (c.settings.state.value.whenQueueEnds == QueueEnd.STOP) return
         val item = player.currentMediaItem ?: return
-        val entry = item.toQueueSong()?.takeIf { YouTubeMusic.isYouTube(it.serverId) } ?: return
-        if (autoRequestedFor == item.mediaId) return
-        autoRequestedFor = item.mediaId
-        c.autoRequest.onPlaying(entry.song)
+        if (continuedAfter == item.mediaId) return
+        continuedAfter = item.mediaId
+        val last = item.toQueueSong() ?: return
+        val played = (0 until player.mediaItemCount).mapNotNull { player.getMediaItemAt(it).toQueueSong() }.map(QueueContinuation::key).toSet()
+        scope.launch {
+            val more = runCatching { c.continuation.next(last, played) }.getOrDefault(emptyList())
+            if (more.isEmpty() || player.hasNextMediaItem()) return@launch
+            player.addMediaItems(more.map { c.mediaItems.song(it) })
+        }
     }
 
     private fun toggleStar() {
-        val entry = player.currentMediaItem?.toQueueSong()?.takeUnless { YouTubeMusic.isYouTube(it.serverId) } ?: return
-        val starred = c.starred.isStarred(entry.serverId, entry.song.id, entry.song.starred != null)
+        val entry = player.currentMediaItem?.toQueueSong() ?: return
+        val liked = c.likes.isLiked(entry)
         scope.launch {
-            runCatching { c.starred.set(entry.serverId, StarKind.SONG, entry.song.id, !starred) }
+            runCatching { c.likes.set(entry, !liked) }.onFailure { c.messages.show(it.userMessage()) }
         }
     }
 

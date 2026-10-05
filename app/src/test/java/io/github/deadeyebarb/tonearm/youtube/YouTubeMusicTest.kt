@@ -1,6 +1,5 @@
 package io.github.deadeyebarb.tonearm.youtube
 
-import io.github.deadeyebarb.tonearm.integrations.AutoRequest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -55,13 +54,5 @@ class YouTubeMusicTest {
         assertFalse(YouTubeMusic.isThumbnailHost("evilgoogleusercontent.com"))
         assertFalse(YouTubeMusic.isThumbnailHost("192.168.0.10"))
         assertFalse(YouTubeMusic.isThumbnailHost(null))
-    }
-
-    @Test
-    fun `credited artists are tried whole, then the first one`() {
-        assertEquals(listOf("Daft Punk"), AutoRequest.candidates("Daft Punk"))
-        assertEquals(listOf("Daft Punk, Pharrell Williams", "Daft Punk"), AutoRequest.candidates("Daft Punk, Pharrell Williams"))
-        assertEquals(listOf("Simon & Garfunkel", "Simon"), AutoRequest.candidates("Simon & Garfunkel"))
-        assertEquals(listOf("Calvin Harris feat. Rihanna", "Calvin Harris"), AutoRequest.candidates("Calvin Harris feat. Rihanna"))
     }
 }

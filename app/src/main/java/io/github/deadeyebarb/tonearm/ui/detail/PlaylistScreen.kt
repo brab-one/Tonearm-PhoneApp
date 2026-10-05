@@ -1,5 +1,9 @@
 package io.github.deadeyebarb.tonearm.ui.detail
 
+import androidx.compose.material.icons.rounded.FavoriteBorder
+import io.github.deadeyebarb.tonearm.weekly.WeeklyBatch
+import io.github.deadeyebarb.tonearm.weekly.WeeklyState
+import io.github.deadeyebarb.tonearm.weekly.WeeklyPicks
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -65,10 +69,15 @@ fun PlaylistScreen(id: String) {
     var menu by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
+    var keeping by remember { mutableStateOf(false) }
+    val weekly = playlist?.let { WeeklyPicks.parse(it) }
     DetailScaffold(
         title = playlist?.name.orEmpty(),
         actions = {
             if (playlist != null) {
+                if (weekly != null) {
+                    IconButton(onClick = { keeping = true }) { Icon(Icons.Rounded.FavoriteBorder, "Like and keep this playlist", tint = Hud.colors.accent2) }
+                }
                 DownloadAllButton(actions.entries(playlist.entry))
                 Box {
                     IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, "More") }
@@ -89,6 +98,23 @@ fun PlaylistScreen(id: String) {
             val context = serverId?.let { MediaIds.playlist(it, pl.id) }
             LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
                 item { PlaylistHeader(pl, onPlay = { shuffle -> actions.play(pl.entry, shuffle = shuffle, context = context) }) }
+                WeeklyPicks.parse(pl)?.let { state ->
+                    item {
+                        Text(
+                            "Brainarr's weekly picks. When next week's arrive, this playlist and its music are deleted, except albums with a song " +
+                                "you liked or put in another playlist. Tap the heart to keep all of it under a name of your own.",
+                            style = MaterialTheme.typography.bodySmall, color = Hud.colors.dim, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        )
+                    }
+                    if (state.status == WeeklyState.READY && pl.entry.size < state.albums.size) {
+                        item {
+                            Text(
+                                "Downloading: " + state.albums.joinToString { "${it.title} (${it.artist})" },
+                                style = MaterialTheme.typography.bodySmall, color = Hud.colors.accent, modifier = Modifier.padding(horizontal = 16.dp),
+                            )
+                        }
+                    }
+                }
                 if (pl.entry.isEmpty()) {
                     item {
                         EmptyState(Icons.AutoMirrored.Rounded.QueueMusic, "This playlist is empty", "Add songs from any song's menu.", Modifier.height(240.dp))
@@ -109,6 +135,24 @@ fun PlaylistScreen(id: String) {
                 }
             }
         }
+    }
+    if (keeping && playlist != null && weekly != null) {
+        TextInputDialog(
+            title = "Keep this playlist",
+            label = "Name",
+            initial = playlist.name.replace("Weekly picks", "Picks"),
+            confirmLabel = "Keep",
+            onConfirm = { name ->
+                keeping = false
+                actions.launch {
+                    val session = c.sessions.active.value ?: return@launch
+                    c.weekly.keep(session, WeeklyBatch(playlist, weekly), name)
+                    vm.reload(silent = true)
+                    actions.message("Kept as “${name.trim()}”")
+                }
+            },
+            onDismiss = { keeping = false },
+        )
     }
     if (renaming && playlist != null) {
         TextInputDialog(

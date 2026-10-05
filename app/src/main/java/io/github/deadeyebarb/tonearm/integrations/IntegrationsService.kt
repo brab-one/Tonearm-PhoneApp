@@ -23,6 +23,8 @@ class IntegrationsService(
     suspend fun requireMaloja(): MalojaConfig =
         repository.current().maloja ?: throw IntegrationNotConfiguredException("Connect Maloja in Settings → Integrations first")
 
+    suspend fun requireLidarrOrNull(): Pair<LidarrConfig, String>? = repository.current().lidarr?.let { it to lidarrKey(it) }
+
     suspend fun requireLidarr(): Pair<LidarrConfig, String> {
         val config = repository.current().lidarr ?: throw IntegrationNotConfiguredException("Connect Lidarr in Settings → Integrations first")
         return config to lidarrKey(config)

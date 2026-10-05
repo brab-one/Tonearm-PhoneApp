@@ -1,5 +1,6 @@
 package io.github.deadeyebarb.tonearm.ui.player
 
+import io.github.deadeyebarb.tonearm.ui.common.LikeButton
 import android.os.Build
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
@@ -252,7 +253,7 @@ private fun TrackInfo(entry: QueueSong?) {
                 },
             )
         }
-        if (!YouTubeMusic.isYouTube(entry.serverId)) StarButton(entry.serverId, StarKind.SONG, song.id, song.starred != null)
+        LikeButton(entry)
     }
 }
 

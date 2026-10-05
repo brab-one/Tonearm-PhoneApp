@@ -1,5 +1,8 @@
 package io.github.deadeyebarb.tonearm.ui.library
 
+import io.github.deadeyebarb.tonearm.subsonic.Song
+import io.github.deadeyebarb.tonearm.media.QueueSong
+import io.github.deadeyebarb.tonearm.youtube.YouTubeMusic
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -65,7 +68,7 @@ import io.github.deadeyebarb.tonearm.ui.common.TextInputDialog
 import io.github.deadeyebarb.tonearm.ui.common.rememberLoader
 import kotlinx.coroutines.launch
 
-private enum class LibraryTab(val label: String) { ARTISTS("Artists"), ALBUMS("Albums"), PLAYLISTS("Playlists"), GENRES("Genres"), FAVORITES("Favorites") }
+private enum class LibraryTab(val label: String) { ARTISTS("Artists"), ALBUMS("Albums"), PLAYLISTS("Playlists"), GENRES("Genres"), FAVORITES("Liked") }
 
 @Composable
 fun LibraryScreen() {
@@ -224,12 +227,30 @@ private fun FavoritesPage() {
     val c = LocalContext.current.container
     val actions = LocalActions.current
     val vm = rememberLoader("starred", serverKey()) { c.api.starred() }
+    val pending by c.likes.pending.items.collectAsStateWithLifecycle()
     LoadContent(vm) { starred ->
-        if (starred.song.isEmpty() && starred.album.isEmpty() && starred.artist.isEmpty()) {
-            EmptyState(Icons.Rounded.FavoriteBorder, "No favorites yet", "Tap the heart on songs, albums and artists to collect them here.")
+        if (starred.song.isEmpty() && starred.album.isEmpty() && starred.artist.isEmpty() && pending.isEmpty()) {
+            EmptyState(Icons.Rounded.FavoriteBorder, "Nothing liked yet", "Tap the heart on songs, albums and artists to collect them here.")
             return@LoadContent
         }
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+            if (pending.isNotEmpty()) {
+                val waiting = pending.mapNotNull { like ->
+                    like.ref.youtubeId?.let { id ->
+                        QueueSong(YouTubeMusic.SOURCE_ID, Song(id = id, title = like.ref.title, artist = like.ref.artist, duration = like.ref.duration, coverArt = like.ref.coverUrl))
+                    }
+                }
+                item { SectionHeader("Waiting for download") }
+                item {
+                    Text(
+                        "Liked on YouTube Music and requested in Lidarr. They play from YouTube Music until they're in your library.",
+                        style = MaterialTheme.typography.bodySmall, color = Hud.colors.dim, modifier = Modifier.padding(horizontal = 16.dp),
+                    )
+                }
+                itemsIndexed(waiting, key = { _, e -> "p:${e.song.id}" }) { i, entry ->
+                    SongRow(entry.song, serverId = YouTubeMusic.SOURCE_ID, onClick = { actions.playEntries(waiting, i) })
+                }
+            }
             if (starred.album.isNotEmpty()) {
                 item { SectionHeader("Albums") }
                 item { AlbumRow(starred.album) { actions.openAlbum(it.id) } }

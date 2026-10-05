@@ -25,8 +25,12 @@ data class BrainarrList(
             perRun?.let { "$it ${if (albumMode) "albums" else "artists"} per run" },
         ).joinToString(" · ")
 
+    /** Lists Tonearm made for itself (weekly picks, "more like this"); Ask Brainarr leaves them out. */
+    val managedByTonearm: Boolean get() = name.startsWith(TONEARM_PREFIX)
+
     companion object {
         const val IMPLEMENTATION = "Brainarr"
+        const val TONEARM_PREFIX = "Tonearm "
 
         fun from(list: LidarrImportList, raw: JsonObject) = BrainarrList(
             id = list.id,

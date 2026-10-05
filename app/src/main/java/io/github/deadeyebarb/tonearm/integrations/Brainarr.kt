@@ -61,7 +61,7 @@ class BrainarrService(
 
     suspend fun lists(config: LidarrConfig, key: String): List<BrainarrList> =
         lidarr.importLists(config, key)
-            .filter { (list, _) -> list.implementation.equals(BrainarrList.IMPLEMENTATION, true) }
+            .filter { (list, _) -> list.implementation.equals(BrainarrList.IMPLEMENTATION, true) && !list.name.startsWith(BrainarrList.TONEARM_PREFIX) }
             .map { (list, raw) -> BrainarrList.from(list, raw) }
 
     suspend fun load(): BrainarrData = coroutineScope {

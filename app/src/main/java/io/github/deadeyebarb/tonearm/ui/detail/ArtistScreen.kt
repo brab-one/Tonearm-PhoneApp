@@ -1,5 +1,10 @@
 package io.github.deadeyebarb.tonearm.ui.detail
 
+import androidx.compose.runtime.LaunchedEffect
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.github.deadeyebarb.tonearm.integrations.Names
+import io.github.deadeyebarb.tonearm.youtube.YtAlbum
+import io.github.deadeyebarb.tonearm.youtube.YtArtist
 import android.text.Html
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.clickable
@@ -113,6 +118,7 @@ fun ArtistScreen(id: String) {
                 }
                 item(span = full) { SectionHeader("Albums") }
                 items(albums, key = { it.id }) { album -> AlbumCard(album) { actions.openAlbum(album.id) } }
+                item(span = full) { MoreOnYouTube(data.artist) }
                 val bio = data.info?.biography?.let(::cleanBiography)
                 if (!bio.isNullOrBlank()) {
                     item(span = full) { SectionHeader("About") }
@@ -127,6 +133,27 @@ fun ArtistScreen(id: String) {
                 }
             }
         }
+    }
+}
+
+/** The artist's albums on YouTube Music that aren't in the library, and their YouTube Music page. */
+@Composable
+private fun MoreOnYouTube(artist: Artist) {
+    val c = LocalContext.current.container
+    val actions = LocalActions.current
+    val settings by c.settings.state.collectAsStateWithLifecycle()
+    if (!settings.youtubeCatalog) return
+    var found by remember(artist.id) { mutableStateOf<Pair<YtArtist, List<YtAlbum>>?>(null) }
+    LaunchedEffect(artist.id) {
+        val yt = runCatching { c.catalog.findArtist(artist.name) }.getOrNull() ?: return@LaunchedEffect
+        val have = artist.album.map { Names.normalize(it.name) }.toSet()
+        val missing = runCatching { c.catalog.artistPage(yt).albums }.getOrDefault(emptyList()).filter { Names.normalize(it.title) !in have }
+        found = yt to missing
+    }
+    val (yt, missing) = found ?: return
+    Column {
+        SectionHeader("More on YouTube Music", onSeeAll = { actions.openYouTubeArtist(yt) })
+        if (missing.isNotEmpty()) YouTubeAlbumRow(missing) { actions.openYouTubeAlbum(it) }
     }
 }
 

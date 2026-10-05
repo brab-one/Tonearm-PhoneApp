@@ -1,5 +1,11 @@
 package io.github.deadeyebarb.tonearm.ui.discover
 
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Switch
+import io.github.deadeyebarb.tonearm.weekly.WeeklyState
+import io.github.deadeyebarb.tonearm.weekly.WeeklyPicks
+import io.github.deadeyebarb.tonearm.integrations.WeeklyPicksWorker
+import io.github.deadeyebarb.tonearm.integrations.BrainarrList
 import android.text.format.DateUtils
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -119,6 +125,7 @@ fun BrainarrScreen() {
                         onPlay = { actions.playBrainarrMix() },
                     )
                 }
+                item { WeeklyCard(data.lists.first()) }
                 if (!data.labelled) {
                     item {
                         LabelCard(labelling) {
@@ -206,6 +213,76 @@ fun BrainarrProgress(asking: String?) {
     Spacer(Modifier.height(10.dp))
     LinearProgressIndicator(Modifier.fillMaxWidth(), color = hud.accent, trackColor = hud.line)
     Text(asking, style = MaterialTheme.typography.labelSmall, color = hud.dim, modifier = Modifier.padding(top = 4.dp))
+}
+
+/** Weekly picks: on/off, how many albums, and this week's playlist. */
+@Composable
+private fun WeeklyCard(main: BrainarrList) {
+    val c = LocalContext.current.container
+    val context = LocalContext.current
+    val actions = LocalActions.current
+    val hud = Hud.colors
+    val vm = rememberLoader("weekly", main.id) {
+        val (config, key) = c.integrations.requireLidarr()
+        val list = c.weekly.weeklyList(config, key)
+        val current = c.sessions.active.value?.let { s -> runCatching { c.weekly.batches(s) }.getOrDefault(emptyList()) }.orEmpty()
+            .maxByOrNull { it.state.created }
+        list to current
+    }
+    var busy by remember { mutableStateOf(false) }
+    val (list, current) = vm.value ?: (null to null)
+    fun set(on: Boolean, albums: Int = list?.perRun ?: WeeklyPicks.DEFAULT_ALBUMS) {
+        busy = true
+        actions.launch {
+            try {
+                val (config, key) = c.integrations.requireLidarr()
+                if (on) {
+                    if (c.weekly.enable(config, key, main, albums)) {
+                        actions.message("Enter your AI provider's API key once for “${WeeklyPicks.LIST_NAME}” in Lidarr → Settings → Import Lists")
+                    }
+                    WeeklyPicksWorker.runNow(context)
+                } else {
+                    c.weekly.disable(config, key)
+                }
+                vm.reload(silent = true)
+            } finally {
+                busy = false
+            }
+        }
+    }
+    Column(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
+            .border(1.dp, hud.accent.copy(alpha = 0.5f), MaterialTheme.shapes.medium)
+            .padding(16.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("WEEKLY PICKS", style = MaterialTheme.typography.labelMedium, color = hud.accent)
+                Text(
+                    "Every week Brainarr picks new albums, Lidarr downloads them, and they arrive as a playlist. " +
+                        "A week later it's deleted with its music, unless you like the playlist (or songs in it).",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+            Switch(checked = list != null, onCheckedChange = { set(it) }, enabled = !busy && vm.value != null)
+        }
+        if (list != null) {
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for (n in listOf(3, 5, 10)) {
+                    FilterChip(selected = list.perRun == n, onClick = { if (list.perRun != n) set(true, n) }, label = { Text("$n albums") }, enabled = !busy)
+                }
+            }
+        }
+        if (current != null) {
+            Spacer(Modifier.height(8.dp))
+            val status = when (current.state.status) {
+                WeeklyState.RUNNING -> "Brainarr is picking…"
+                else -> "${current.state.albums.size} albums · ${current.playlist.songCount} songs downloaded so far"
+            }
+            HudButton("${current.playlist.name}: $status", { actions.openPlaylist(current.playlist.id) }, Modifier.fillMaxWidth(), filled = false)
+        }
+    }
 }
 
 @Composable

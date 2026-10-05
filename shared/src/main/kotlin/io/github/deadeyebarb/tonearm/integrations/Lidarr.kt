@@ -8,6 +8,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
@@ -49,6 +50,8 @@ data class LidarrArtist(
 data class LidarrAlbum(
     val id: Int = 0,
     val title: String = "",
+    val artistId: Int = 0,
+    val monitored: Boolean = false,
     val foreignAlbumId: String? = null,
     val albumType: String? = null,
     val releaseDate: String? = null,
@@ -228,6 +231,71 @@ class LidarrClient(private val http: IntegrationHttp, private val json: Json) {
             (result["artist"] as? JsonObject)?.let { artistCandidate(it, existing) }
                 ?: (result["album"] as? JsonObject)?.let { albumCandidate(it, existing) }
         }
+    }
+
+    /** An album from Lidarr's album lookup ("artist album", or "lidarr:<release group id>"). */
+    class AlbumHit(val candidate: LidarrCandidate, val artistName: String?, val lidarrId: Int, val monitored: Boolean) {
+        val title get() = candidate.title
+        val foreignId get() = candidate.foreignId
+        val inLidarr get() = candidate.inLidarr
+    }
+
+    suspend fun lookupAlbum(config: LidarrConfig, key: String, term: String): List<AlbumHit> =
+        json.decodeFromString(ListSerializer(JsonObject.serializer()), get(config, key, "album/lookup", listOf("term" to term))).map { raw ->
+            val album = json.decodeFromJsonElement<LidarrAlbum>(raw)
+            AlbumHit(albumCandidate(raw, emptySet()), album.artist?.artistName, album.id, raw["monitored"]?.jsonPrimitive?.booleanOrNull == true)
+        }
+
+    /** Monitors an album already in Lidarr and optionally searches for it. */
+    suspend fun monitorAlbum(config: LidarrConfig, key: String, albumId: Int, search: Boolean) {
+        val body = buildJsonObject {
+            put("albumIds", JsonArray(listOf(JsonPrimitive(albumId))))
+            put("monitored", JsonPrimitive(true))
+        }
+        http.send("PUT", url(config, "album/monitor"), body.toString(), config.useServerTls, headers(key), service = "Lidarr")
+        if (search) {
+            val command = buildJsonObject {
+                put("name", JsonPrimitive("AlbumSearch"))
+                put("albumIds", JsonArray(listOf(JsonPrimitive(albumId))))
+            }
+            http.postJson(url(config, "command"), command.toString(), config.useServerTls, headers(key), service = "Lidarr")
+        }
+    }
+
+    /** Every album Lidarr knows (monitored or not), or one artist's. */
+    suspend fun albums(config: LidarrConfig, key: String, artistId: Int? = null): List<LidarrAlbum> =
+        json.decodeFromString(ListSerializer(LidarrAlbum.serializer()), get(config, key, "album", listOfNotNull(artistId?.let { "artistId" to it })))
+
+    /** Removes an artist with its files; the exclusion keeps import lists (Brainarr) from adding it again. */
+    suspend fun deleteArtist(config: LidarrConfig, key: String, artistId: Int, deleteFiles: Boolean = true, exclude: Boolean = true) {
+        val url = url(config, "artist/$artistId", listOf("deleteFiles" to deleteFiles, "addImportListExclusion" to exclude))
+        http.send("DELETE", url, "", config.useServerTls, headers(key), service = "Lidarr")
+    }
+
+    suspend fun deleteAlbum(config: LidarrConfig, key: String, albumId: Int, deleteFiles: Boolean = true, exclude: Boolean = true) {
+        val url = url(config, "album/$albumId", listOf("deleteFiles" to deleteFiles, "addImportListExclusion" to exclude))
+        http.send("DELETE", url, "", config.useServerTls, headers(key), service = "Lidarr")
+    }
+
+    /**
+     * Lidarr only fetches an import list whose automatic add is on, even when a run is started by hand.
+     * Tonearm's own lists stay off (so Lidarr's schedule leaves them alone) and are switched on for a run.
+     */
+    suspend fun setImportListAutomaticAdd(config: LidarrConfig, key: String, id: Int, enabled: Boolean) {
+        val raw = json.decodeFromString(JsonObject.serializer(), get(config, key, "importlist/$id"))
+        if ((raw["enableAutomaticAdd"] as? JsonPrimitive)?.booleanOrNull == enabled) return
+        updateImportList(config, key, id, JsonObject(raw + ("enableAutomaticAdd" to JsonPrimitive(enabled))))
+    }
+
+    /** Creates an import list (Lidarr skips its connection test with forceSave). */
+    suspend fun createImportList(config: LidarrConfig, key: String, raw: JsonObject): JsonObject =
+        json.decodeFromString(
+            JsonObject.serializer(),
+            http.postJson(url(config, "importlist", listOf("forceSave" to true)), raw.toString(), config.useServerTls, headers(key), service = "Lidarr"),
+        )
+
+    suspend fun deleteImportList(config: LidarrConfig, key: String, id: Int) {
+        http.send("DELETE", url(config, "importlist/$id"), "", config.useServerTls, headers(key), service = "Lidarr")
     }
 
     /** Artist-only lookup, for requesting a recommended artist by name. */

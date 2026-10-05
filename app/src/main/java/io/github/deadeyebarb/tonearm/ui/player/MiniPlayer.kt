@@ -1,5 +1,7 @@
 package io.github.deadeyebarb.tonearm.ui.player
 
+import io.github.deadeyebarb.tonearm.media.toQueueSong
+import io.github.deadeyebarb.tonearm.ui.common.LikeButton
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
@@ -103,7 +105,7 @@ fun MiniPlayer(state: PlayerUiState, onOpen: () -> Unit) {
                 )
             }
             MiniSpectrum(visualizer)
-            Spacer(Modifier.width(6.dp))
+            item.toQueueSong()?.let { LikeButton(it) }
             IconButton(onClick = player::togglePlayPause) {
                 Box(
                     Modifier.size(38.dp).border(1.5.dp, hud.accent, CircleShape).background(hud.accent.copy(alpha = 0.12f), CircleShape),

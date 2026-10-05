@@ -236,7 +236,12 @@ private fun RemoteControl(devices: List<ConnectDevice>, device: ConnectDevice, o
                     "Continue on this phone", {
                         val serverId = session?.id
                         if (playback?.current == null || serverId == null) return@HudButton
-                        actions.player.play(playback.queue.map { it.toQueueSong(serverId) }, playback.index, startPositionMs = playback.positionAt())
+                        // Files from the computer's own folders can't come along.
+                        val movable = playback.queue.withIndex().filter { it.value.source != ConnectSong.LOCAL }
+                        if (movable.isEmpty()) return@HudButton actions.message("That's playing from the computer's own folders")
+                        val start = movable.indexOfFirst { it.index >= playback.index }.takeIf { it >= 0 } ?: 0
+                        val resume = if (movable[start].index == playback.index) playback.positionAt() else 0L
+                        actions.player.play(movable.map { it.value.toQueueSong(serverId) }, start, startPositionMs = resume)
                         send(ConnectCommand(ConnectCommand.PAUSE))
                     },
                     Modifier.fillMaxWidth(), filled = false, enabled = playback?.current != null && sameServer,
@@ -276,6 +281,7 @@ private fun NowPlayingPanel(song: ConnectSong, playback: io.github.deadeyebarb.t
         Text(song.title, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text(listOfNotNull(song.artist, song.album).joinToString(" · "), style = MaterialTheme.typography.bodyMedium, color = hud.accent2, maxLines = 1, overflow = TextOverflow.Ellipsis)
         if (song.source == ConnectSong.YOUTUBE) HudTag("YOUTUBE MUSIC", color = hud.accent2, modifier = Modifier.padding(top = 6.dp))
+        if (song.source == ConnectSong.LOCAL) HudTag("ON THE COMPUTER", color = hud.accent2, modifier = Modifier.padding(top = 6.dp))
         Slider(
             value = dragging ?: if (duration > 0) position.toFloat() / duration else 0f,
             onValueChange = { dragging = it },

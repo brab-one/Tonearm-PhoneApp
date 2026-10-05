@@ -1,5 +1,10 @@
 package io.github.deadeyebarb.tonearm.ui.common
 
+import io.github.deadeyebarb.tonearm.integrations.IntegrationsService
+import io.github.deadeyebarb.tonearm.ui.YtAlbumRoute
+import io.github.deadeyebarb.tonearm.ui.YtArtistRoute
+import io.github.deadeyebarb.tonearm.youtube.YtAlbum
+import io.github.deadeyebarb.tonearm.youtube.YtArtist
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -48,6 +53,38 @@ class AppActions(
     fun openPlaylist(id: String) = navigate(PlaylistRoute(id))
     fun openGenre(name: String) = navigate(GenreRoute(name))
     fun openNowPlaying() = navigate(NowPlayingRoute)
+    fun openYouTubeArtist(artist: YtArtist) = navigate(YtArtistRoute(artist.url, artist.name, artist.imageUrl, artist.subscribers))
+    fun openYouTubeAlbum(album: YtAlbum) = navigate(YtAlbumRoute(album.url, album.title, album.artist, album.imageUrl))
+
+    /** Opens an artist's YouTube Music page by name. */
+    fun findOnYouTube(artist: String) = launch {
+        val found = container.catalog.findArtist(artist)
+        if (found == null) message("$artist isn't on YouTube Music") else openYouTubeArtist(found)
+    }
+
+    /** Plays [first] and then YouTube Music's radio for it. */
+    fun playRadio(first: QueueSong) = launch {
+        val radio = container.youtube.radio(first.song.id, first.song.artist).map { QueueSong(YouTubeMusic.SOURCE_ID, it) }
+        player.play(listOf(first) + radio)
+    }
+
+    /** An explicit request for an artist by name (exact matches only). */
+    fun requestArtistByName(name: String) = launch {
+        val result = container.integrations.requestArtistByName(name, exactOnly = true)
+        message(
+            when (result) {
+                IntegrationsService.ArtistRequestResult.REQUESTED -> "Requested $name in Lidarr"
+                IntegrationsService.ArtistRequestResult.ALREADY_IN_LIDARR -> "Lidarr already has $name"
+                IntegrationsService.ArtistRequestResult.NOT_FOUND -> "Lidarr has no exact match for $name"
+            },
+        )
+    }
+
+    /** An explicit request for one album. */
+    fun requestAlbum(title: String, artist: String) = launch {
+        val (config, key) = container.integrations.requireLidarr()
+        message(container.songRequests.requestAlbum(config, key, title, artist).message)
+    }
 
     fun entries(songs: List<Song>, serverId: String? = activeServerId): List<QueueSong> =
         serverId?.let { s -> songs.map { QueueSong(s, it) } }.orEmpty()
@@ -151,6 +188,11 @@ class AppActions(
         container.starred.set(serverId, kind, id, starred)
     }
 
+    /** The like button: stars a library song, or requests a YouTube Music one and likes it when it arrives. */
+    fun setLiked(entry: QueueSong, liked: Boolean) = launch {
+        container.likes.set(entry, liked)
+    }
+
     fun addToPlaylist(items: List<QueueSong>) {
         playlistPicker = items
     }
@@ -176,6 +218,9 @@ val LocalDownloads = staticCompositionLocalOf<Map<String, DownloadEntry>> { empt
 
 /** Favorites toggled this session, keyed by "serverId/id". */
 val LocalStarOverrides = staticCompositionLocalOf<Map<String, Boolean>> { emptyMap() }
+
+/** Video ids of YouTube Music songs liked before they're in the library. */
+val LocalPendingLikes = staticCompositionLocalOf<Set<String>> { emptySet() }
 
 /** Whether playback is running (for "now playing" indicators). */
 val LocalPlaying = staticCompositionLocalOf { false }

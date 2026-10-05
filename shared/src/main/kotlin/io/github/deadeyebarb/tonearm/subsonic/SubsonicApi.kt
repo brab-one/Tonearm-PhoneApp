@@ -135,12 +135,12 @@ class SubsonicApi(private val sessions: ActiveServer, private val json: Json) {
         call(active(), "updatePlaylist", listOf("playlistId" to playlistId) + indexes.map { "songIndexToRemove" to it })
     }
 
-    suspend fun renamePlaylist(playlistId: String, name: String) {
-        call("updatePlaylist", "playlistId" to playlistId, "name" to name)
+    suspend fun renamePlaylist(playlistId: String, name: String, session: ServerSession? = null) {
+        call(session ?: active(), "updatePlaylist", listOf("playlistId" to playlistId, "name" to name))
     }
 
-    suspend fun deletePlaylist(playlistId: String) {
-        call("deletePlaylist", "id" to playlistId)
+    suspend fun deletePlaylist(playlistId: String, session: ServerSession? = null) {
+        call(session ?: active(), "deletePlaylist", listOf("id" to playlistId))
     }
 
     suspend fun genres(session: ServerSession? = null): List<Genre> = call(session ?: active(), "getGenres").genres?.genre.orEmpty()

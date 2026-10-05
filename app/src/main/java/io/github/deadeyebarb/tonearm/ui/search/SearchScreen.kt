@@ -1,5 +1,9 @@
 package io.github.deadeyebarb.tonearm.ui.search
 
+import io.github.deadeyebarb.tonearm.ui.detail.YouTubeAlbumRow
+import io.github.deadeyebarb.tonearm.ui.detail.YouTubeArtistRow
+import io.github.deadeyebarb.tonearm.youtube.YtAlbum
+import io.github.deadeyebarb.tonearm.youtube.YtArtist
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -99,7 +103,7 @@ private fun LazyListScope.youtubeResults(state: Load<List<Song>>?, onPlay: (List
                 Column {
                     SectionHeader("On YouTube Music")
                     Text(
-                        "Not on your server. These play from YouTube Music, and with Lidarr connected their artist gets requested.",
+                        "Not on your server. These play from YouTube Music; like one to request it in Lidarr.",
                         style = MaterialTheme.typography.bodySmall, color = Hud.colors.dim, modifier = Modifier.padding(horizontal = 16.dp),
                     )
                 }
@@ -128,6 +132,10 @@ class SearchViewModel(private val c: AppContainer) : ViewModel() {
     /** Songs on YouTube Music that aren't in the library; null when that's turned off. */
     var youtube by mutableStateOf<Load<List<Song>>?>(null)
         private set
+    var ytArtists by mutableStateOf<List<YtArtist>>(emptyList())
+        private set
+    var ytAlbums by mutableStateOf<List<YtAlbum>>(emptyList())
+        private set
     private var job: Job? = null
     private var lastQuery = ""
 
@@ -139,12 +147,18 @@ class SearchViewModel(private val c: AppContainer) : ViewModel() {
         if (q.isEmpty()) {
             state = null
             youtube = null
+            ytArtists = emptyList()
+            ytAlbums = emptyList()
             return
         }
         job = viewModelScope.launch {
             if (debounce) delay(300)
             if (state == null) state = Load.Loading
             val yt = if (c.settings.state.value.youtubeFallback) async { runCatching { c.youtube.searchSongs(q, 15) } } else null
+            if (c.settings.state.value.youtubeCatalog) {
+                launch { ytArtists = runCatching { c.catalog.searchArtists(q, 8) }.getOrDefault(emptyList()) }
+                launch { ytAlbums = runCatching { c.catalog.searchAlbums(q, 12) }.getOrDefault(emptyList()) }
+            }
             youtube = if (yt != null) Load.Loading else null
             val library = try {
                 Load.Ready(c.api.search(q, artistCount = 12, albumCount = 20, songCount = 60))
@@ -244,6 +258,22 @@ fun SearchScreen() {
                                 item { SectionHeader("Songs") }
                                 itemsIndexed(result.song, key = { _, s -> s.id }) { i, song ->
                                     SongRow(song, onClick = { actions.play(result.song, i) })
+                                }
+                            }
+                            if (vm.ytArtists.isNotEmpty()) {
+                                item {
+                                    Column {
+                                        SectionHeader("Artists on YouTube Music")
+                                        YouTubeArtistRow(vm.ytArtists) { actions.openYouTubeArtist(it) }
+                                    }
+                                }
+                            }
+                            if (vm.ytAlbums.isNotEmpty()) {
+                                item {
+                                    Column {
+                                        SectionHeader("Albums on YouTube Music")
+                                        YouTubeAlbumRow(vm.ytAlbums) { actions.openYouTubeAlbum(it) }
+                                    }
                                 }
                             }
                             youtubeResults(youtube) { queue, index -> actions.playEntries(queue, index) }

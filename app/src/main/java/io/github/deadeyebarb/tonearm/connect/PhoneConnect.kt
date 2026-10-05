@@ -68,4 +68,9 @@ fun ConnectSong.toQueueSong(serverId: String): QueueSong = QueueSong(
 )
 
 /** The cover's server for a Connect song: YouTube covers are URLs, the rest come from the music server. */
-fun ConnectSong.coverServer(serverId: String?): String? = if (source == ConnectSong.YOUTUBE) YouTubeMusic.SOURCE_ID else serverId
+fun ConnectSong.coverServer(serverId: String?): String? = when (source) {
+    ConnectSong.YOUTUBE -> YouTubeMusic.SOURCE_ID
+    // A file on the computer: its cover is a path there.
+    ConnectSong.LOCAL -> null
+    else -> serverId
+}

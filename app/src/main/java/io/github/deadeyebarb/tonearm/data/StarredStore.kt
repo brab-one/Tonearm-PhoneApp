@@ -21,6 +21,11 @@ class StarredStore(private val api: SubsonicApi, private val sessions: SessionMa
     fun isStarred(serverId: String, id: String, fromServer: Boolean): Boolean =
         _overrides.value[key(serverId, id)] ?: fromServer
 
+    /** Records a star made elsewhere (e.g. a pending like that arrived). */
+    fun remember(serverId: String, id: String, starred: Boolean) {
+        _overrides.update { it + (key(serverId, id) to starred) }
+    }
+
     suspend fun set(serverId: String, kind: StarKind, id: String, starred: Boolean) {
         val k = key(serverId, id)
         val previous = _overrides.value[k]

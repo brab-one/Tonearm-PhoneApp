@@ -83,7 +83,8 @@ enum class SongLeading { Cover, TrackNumber, None }
 
 @Composable
 fun isStarred(serverId: String?, id: String, fromServer: Boolean): Boolean =
-    serverId?.let { LocalStarOverrides.current["$it/$id"] } ?: fromServer
+    if (YouTubeMusic.isYouTube(serverId)) id in LocalPendingLikes.current
+    else serverId?.let { LocalStarOverrides.current["$it/$id"] } ?: fromServer
 
 @Composable
 fun downloadOf(serverId: String?, songId: String): DownloadEntry? = serverId?.let { LocalDownloads.current["$it/$songId"] }
@@ -194,13 +195,9 @@ fun SongMenuButton(song: Song, serverId: String?, extraActions: List<MenuAction>
         add(MenuAction("Play next", Icons.AutoMirrored.Rounded.PlaylistPlay) { actions.playNext(listOf(entry)) })
         add(MenuAction("Add to queue", Icons.AutoMirrored.Rounded.QueueMusic) { actions.enqueue(listOf(entry)) })
         if (sameServer) add(MenuAction("Add to playlist", Icons.AutoMirrored.Rounded.PlaylistAdd) { actions.addToPlaylist(listOf(entry)) })
-        // A YouTube Music song isn't on any server: nothing to favorite or download.
+        add(MenuAction(if (starred) "Unlike" else "Like", if (starred) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder) { actions.setLiked(entry, !starred) })
+        // A YouTube Music song isn't on any server: nothing to download.
         if (!YouTubeMusic.isYouTube(serverId)) {
-            add(
-                MenuAction(if (starred) "Remove from favorites" else "Add to favorites", if (starred) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder) {
-                    actions.setStarred(serverId, StarKind.SONG, song.id, !starred)
-                },
-            )
             if (download == null || download.failed) {
                 add(MenuAction("Download", Icons.Rounded.Download) { actions.download(listOf(entry)) })
             } else {
@@ -387,8 +384,23 @@ fun StarButton(serverId: String?, kind: StarKind, id: String, fromServer: Boolea
     IconButton(onClick = { serverId?.let { actions.setStarred(it, kind, id, !starred) } }) {
         Icon(
             if (starred) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-            if (starred) "Remove from favorites" else "Add to favorites",
+            if (starred) "Unlike" else "Like",
             tint = if (starred) hud.accent2 else hud.dim,
+        )
+    }
+}
+
+/** The like button for a song, library or YouTube Music. */
+@Composable
+fun LikeButton(entry: QueueSong, modifier: Modifier = Modifier) {
+    val actions = LocalActions.current
+    val hud = Hud.colors
+    val liked = isStarred(entry.serverId, entry.song.id, entry.song.starred != null)
+    IconButton(onClick = { actions.setLiked(entry, !liked) }, modifier = modifier) {
+        Icon(
+            if (liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+            if (liked) "Unlike" else "Like",
+            tint = if (liked) hud.accent2 else hud.dim,
         )
     }
 }

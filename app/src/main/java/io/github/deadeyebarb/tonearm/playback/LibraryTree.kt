@@ -59,7 +59,7 @@ class LibraryTree(private val c: AppContainer) {
             MediaIds.ROOT -> listOf(
                 tab(MediaIds.HOME, "Home", R.drawable.ic_car_home, MediaMetadata.MEDIA_TYPE_FOLDER_MIXED),
                 tab(MediaIds.LIBRARY, "Library", R.drawable.ic_car_library, MediaMetadata.MEDIA_TYPE_FOLDER_MIXED),
-                tab(MediaIds.STARRED, "Favorites", R.drawable.ic_car_favorite, MediaMetadata.MEDIA_TYPE_PLAYLIST),
+                tab(MediaIds.STARRED, "Liked", R.drawable.ic_car_favorite, MediaMetadata.MEDIA_TYPE_PLAYLIST),
                 tab(MediaIds.DOWNLOADS, "Downloads", R.drawable.ic_car_download, MediaMetadata.MEDIA_TYPE_PLAYLIST),
             )
             MediaIds.HOME -> listOf(

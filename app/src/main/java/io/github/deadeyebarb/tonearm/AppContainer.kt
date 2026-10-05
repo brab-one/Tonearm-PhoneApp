@@ -1,5 +1,11 @@
 package io.github.deadeyebarb.tonearm
 
+import io.github.deadeyebarb.tonearm.youtube.YouTubeCatalog
+import io.github.deadeyebarb.tonearm.data.Likes
+import io.github.deadeyebarb.tonearm.integrations.MusicBrainz
+import io.github.deadeyebarb.tonearm.integrations.SongRequests
+import io.github.deadeyebarb.tonearm.playback.QueueContinuation
+import io.github.deadeyebarb.tonearm.weekly.WeeklyPicks
 import android.app.Application
 import coil3.ImageLoader
 import coil3.disk.DiskCache
@@ -15,7 +21,6 @@ import io.github.deadeyebarb.tonearm.data.ServerRepository
 import io.github.deadeyebarb.tonearm.data.SettingsRepository
 import io.github.deadeyebarb.tonearm.data.StarredStore
 import io.github.deadeyebarb.tonearm.download.DownloadRepository
-import io.github.deadeyebarb.tonearm.integrations.AutoRequest
 import io.github.deadeyebarb.tonearm.integrations.BrainarrService
 import io.github.deadeyebarb.tonearm.integrations.DailyDiscovery
 import io.github.deadeyebarb.tonearm.integrations.IntegrationHttp
@@ -83,7 +88,6 @@ class AppContainer(val app: Application) {
     )
     val recommender = Recommender(api, sessions, integrations)
     val brainarr = BrainarrService(app, json, scope, api, sessions, integrations)
-    val autoRequest = AutoRequest(app, json, scope, integrations, settings, messages)
     val connect = PhoneConnect(app, integrations, ConnectClient(integrationHttp, json))
     val daily = DailyDiscovery(app, json, scope, api, sessions, integrations, recommender, brainarr)
     val mediaItems = MediaItemFactory(app)
@@ -92,6 +96,11 @@ class AppContainer(val app: Application) {
     /** YouTube checks the User-Agent its URLs were issued for; the shared client would stamp Tonearm's on everything. */
     private val youtubeHttpClient = baseHttpClient.newBuilder().apply { interceptors().remove(UserAgentInterceptor) }.build()
     val youtube = YouTubeMusic(youtubeHttpClient)
+    val catalog = YouTubeCatalog(youtube)
+    val songRequests = SongRequests(LidarrClient(integrationHttp, json), MusicBrainz(baseHttpClient, json))
+    val likes = Likes(app, json, scope, api, sessions, starred, integrations, songRequests, settings, messages)
+    val weekly = WeeklyPicks(api, LidarrClient(integrationHttp, json), json, connect.deviceId, java.io.File(app.filesDir, "weekly-run.json"))
+    val continuation = QueueContinuation(api, sessions, youtube, settings)
     val media by lazy { MediaEngine(app, sessions, settings, network, youtube, youtubeHttpClient) }
 
     /** Touch first on the main thread: DownloadManager binds to the creating thread's looper. */

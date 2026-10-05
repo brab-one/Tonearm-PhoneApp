@@ -23,6 +23,13 @@ enum class TranscodeFormat(val param: String, val label: String) {
 }
 
 @Serializable
+enum class QueueEnd(val label: String, val description: String) {
+    STOP("Stop", "Playback stops after the last song"),
+    SIMILAR("Similar music", "Songs like the last one: from your library when you have them, otherwise from YouTube Music"),
+    PLAYLIST("Another playlist", "One of your other playlists, picked at random"),
+}
+
+@Serializable
 enum class ReplayGainMode(val label: String) {
     OFF("Off"), TRACK("Track"), ALBUM("Album"),
 }
@@ -57,8 +64,12 @@ data class AppSettings(
     val cacheAhead: Int = 3,
     /** Songs that aren't on your server play from YouTube Music. */
     val youtubeFallback: Boolean = true,
-    /** Artists you play from YouTube Music are requested in Lidarr, so the server gets the lossless version. */
-    val requestWhatYouPlay: Boolean = true,
+    /** Search and artist pages show YouTube Music's artists and albums too. */
+    val youtubeCatalog: Boolean = true,
+    /** A like on a YouTube Music song requests its album in Lidarr. Playing alone requests nothing. */
+    val requestLikes: Boolean = true,
+    /** What plays when the queue runs out. */
+    val whenQueueEnds: QueueEnd = QueueEnd.SIMILAR,
     val downloadOnWifiOnly: Boolean = true,
     val hiResOutput: Boolean = true,
     val audioOffload: Boolean = false,
@@ -69,7 +80,12 @@ data class AppSettings(
     val pureBlack: Boolean = false,
     val visualizer: Boolean = true,
     val equalizer: EqualizerSettings = EqualizerSettings(),
-)
+) {
+    companion object {
+        /** "Cache ahead" setting for the whole rest of the queue. */
+        const val CACHE_WHOLE_QUEUE = 1000
+    }
+}
 
 class SettingsRepository(context: Context, json: Json, private val scope: CoroutineScope) {
     private val store = jsonDataStore(context, "settings", AppSettings.serializer(), AppSettings(), json)

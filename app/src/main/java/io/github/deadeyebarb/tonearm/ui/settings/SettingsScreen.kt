@@ -54,6 +54,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.deadeyebarb.tonearm.BuildConfig
 import io.github.deadeyebarb.tonearm.container
 import io.github.deadeyebarb.tonearm.data.AppSettings
+import io.github.deadeyebarb.tonearm.data.QueueEnd
 import io.github.deadeyebarb.tonearm.data.ReplayGainMode
 import io.github.deadeyebarb.tonearm.data.StreamQuality
 import io.github.deadeyebarb.tonearm.data.AccentColor
@@ -132,12 +133,22 @@ fun SettingsScreen() {
                 }
             }
             item {
-                val counts = listOf(0, 1, 3, 5, 10)
+                val counts = listOf(0, 1, 3, 5, 10, 25, AppSettings.CACHE_WHOLE_QUEUE)
+                fun label(n: Int) = when (n) {
+                    0 -> "Off"
+                    1 -> "1 song"
+                    AppSettings.CACHE_WHOLE_QUEUE -> "The whole queue"
+                    else -> "$n songs"
+                }
                 Item(
                     "Cache ahead",
-                    if (settings.cacheAhead == 0) "Off" else "The next ${settings.cacheAhead} songs in the queue are cached while one plays",
+                    when (settings.cacheAhead) {
+                        0 -> "Off"
+                        AppSettings.CACHE_WHOLE_QUEUE -> "The rest of the queue (the album or playlist playing) is cached while you listen"
+                        else -> "The next ${settings.cacheAhead} songs in the queue are cached while one plays"
+                    },
                 ) {
-                    choose("Cache ahead", counts, settings.cacheAhead, { if (it == 0) "Off" else if (it == 1) "1 song" else "$it songs" }) { n ->
+                    choose("Cache ahead", counts, settings.cacheAhead, ::label) { n ->
                         update { it.copy(cacheAhead = n) }
                     }
                 }
@@ -161,14 +172,27 @@ fun SettingsScreen() {
             }
             item {
                 Toggle(
-                    "Request what you play",
+                    "YouTube Music artists and albums",
+                    "Search and artist pages also show artists and albums from YouTube Music: bios, popular songs and albums you don't have, playable and requestable.",
+                    settings.youtubeCatalog,
+                ) { v -> update { it.copy(youtubeCatalog = v) } }
+            }
+            item {
+                Toggle(
+                    "Request songs you like",
                     if (integrations.lidarr != null) {
-                        "Artists you play from YouTube Music are requested in Lidarr, so your server gets the lossless version."
+                        "Liking a YouTube Music song asks Lidarr for its album, so your server gets the lossless version. Just playing requests nothing."
                     } else {
-                        "Needs Lidarr: artists you play from YouTube Music get requested, so your server gets the lossless version."
+                        "Needs Lidarr: liking a YouTube Music song asks Lidarr for its album. Just playing requests nothing."
                     },
-                    settings.requestWhatYouPlay,
-                ) { v -> update { it.copy(requestWhatYouPlay = v) } }
+                    settings.requestLikes,
+                ) { v -> update { it.copy(requestLikes = v) } }
+            }
+
+            item {
+                Item("When the queue ends", "${settings.whenQueueEnds.label}: ${settings.whenQueueEnds.description}") {
+                    choose("When the queue ends", QueueEnd.entries, settings.whenQueueEnds, { it.label }) { v -> update { it.copy(whenQueueEnds = v) } }
+                }
             }
 
             item { Group("Playback") }

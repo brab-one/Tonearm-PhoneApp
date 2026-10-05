@@ -1,6 +1,7 @@
 package io.github.deadeyebarb.tonearm.youtube
 
 import io.github.deadeyebarb.tonearm.integrations.Names
+import io.github.deadeyebarb.tonearm.integrations.SongMatch
 import io.github.deadeyebarb.tonearm.subsonic.Song
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -10,6 +11,7 @@ import org.schabi.newpipe.extractor.Image
 import org.schabi.newpipe.extractor.MediaFormat
 import org.schabi.newpipe.extractor.NewPipe
 import org.schabi.newpipe.extractor.ServiceList
+import org.schabi.newpipe.extractor.playlist.PlaylistInfo
 import org.schabi.newpipe.extractor.services.youtube.YoutubeParsingHelper
 import org.schabi.newpipe.extractor.services.youtube.linkHandler.YoutubeSearchQueryHandlerFactory
 import org.schabi.newpipe.extractor.stream.AudioStream
@@ -30,7 +32,8 @@ class YouTubeMusic(private val client: OkHttpClient) {
     @Volatile private var initialized = false
     private val sources = ConcurrentHashMap<String, AudioSource>()
 
-    private fun init() {
+    /** Sets up NewPipeExtractor on first use; blocking callers of the extractor call this first. */
+    fun ensureInitialized() {
         if (initialized) return
         synchronized(this) {
             if (!initialized) NewPipe.init(NewPipeDownloader(client))
@@ -40,7 +43,7 @@ class YouTubeMusic(private val client: OkHttpClient) {
 
     /** YouTube Music's "Songs" results for [query]. */
     suspend fun searchSongs(query: String, limit: Int = 20): List<Song> = withContext(Dispatchers.IO) {
-        init()
+        ensureInitialized()
         val search = ServiceList.YouTube.getSearchExtractor(query, listOf(YoutubeSearchQueryHandlerFactory.MUSIC_SONGS), "")
         search.fetchPage()
         search.initialPage.items.filterIsInstance<StreamInfoItem>().mapNotNull(::toSong).distinctBy { it.id }.take(limit)
@@ -53,10 +56,30 @@ class YouTubeMusic(private val client: OkHttpClient) {
         return hits.filter { Names.normalize(it.artist.orEmpty()).contains(key) }.ifEmpty { hits }.take(limit)
     }
 
+    /**
+     * YouTube Music's radio for a song (its "RDAMVM" mix): what YouTube Music itself would play next.
+     * Falls back to more songs by the same artist.
+     */
+    suspend fun radio(videoId: String, artist: String?, limit: Int = 25): List<Song> = withContext(Dispatchers.IO) {
+        ensureInitialized()
+        val mix = runCatching {
+            PlaylistInfo.getInfo(ServiceList.YouTube, "https://www.youtube.com/watch?v=$videoId&list=RDAMVM$videoId")
+                .relatedItems.filterIsInstance<StreamInfoItem>().mapNotNull { item ->
+                    // Mixes include music videos: "Artist - Title (Official Video)" becomes the song's own name.
+                    toSong(item)?.let { song ->
+                        val ref = SongMatch.fromYouTube(item.name, item.uploaderName, song.duration, song.id, song.coverArt)
+                        song.copy(title = ref.title, artist = ref.artist.ifBlank { song.artist.orEmpty() })
+                    }
+                }
+        }.getOrDefault(emptyList())
+        mix.filter { it.id != videoId }.distinctBy { it.id }.take(limit)
+            .ifEmpty { artist?.let { artistSongs(it, limit) }.orEmpty().filter { it.id != videoId } }
+    }
+
     /** The audio for a song, resolved on first use and reused until shortly before it expires. Blocking. */
     fun audio(videoId: String): AudioSource {
         sources[videoId]?.takeIf { System.currentTimeMillis() < it.expiresAt }?.let { return it }
-        init()
+        ensureInitialized()
         val info = StreamInfo.getInfo(ServiceList.YouTube, "https://music.youtube.com/watch?v=$videoId")
         val stream = pickAudio(info.audioStreams) ?: throw IOException("YouTube Music has no playable audio for this song")
         return AudioSource(stream.content, userAgentFor(stream.content), expiryOf(stream.content)).also { sources[videoId] = it }

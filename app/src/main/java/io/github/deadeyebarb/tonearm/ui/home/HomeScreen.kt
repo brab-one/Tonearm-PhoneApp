@@ -103,7 +103,7 @@ fun HomeScreen() {
                 item {
                     Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         HudButton("Shuffle all", { actions.shuffleAll() }, Modifier.weight(1f), icon = Icons.Rounded.Shuffle)
-                        HudButton("Favorites", { actions.launch { playStarred(actions) } }, Modifier.weight(1f), icon = Icons.Rounded.Favorite, filled = false)
+                        HudButton("Liked", { actions.launch { playStarred(actions) } }, Modifier.weight(1f), icon = Icons.Rounded.Favorite, filled = false)
                     }
                 }
                 albumSection(actions, AlbumListType.NEWEST, data.newest)
@@ -148,7 +148,7 @@ private fun HomeHeader(serverName: String?, mtls: Boolean, online: Boolean, onSe
 
 private suspend fun playStarred(actions: AppActions) {
     val songs = actions.container.api.starred().song
-    if (songs.isEmpty()) actions.message("No favorite songs yet") else actions.play(songs, shuffle = true, context = MediaIds.STARRED)
+    if (songs.isEmpty()) actions.message("No liked songs yet") else actions.play(songs, shuffle = true, context = MediaIds.STARRED)
 }
 
 private fun LazyListScope.albumSection(actions: AppActions, type: AlbumListType, albums: List<Album>) {
