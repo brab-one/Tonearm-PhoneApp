@@ -49,7 +49,9 @@ Related repositories:
 - Album, artist (bio, popular songs, similar artists), playlist and genre pages; search
 - **Like** button everywhere (mini player, Now Playing, song menus, the notification and the car). Liking a
   YouTube Music song requests its album in Lidarr (never the whole discography) and likes it on the server
-  once it's downloaded; until then it waits under Library → Liked
+  once it's downloaded; until then it waits under Library → Liked. These likes are shared with the desktop app
+  through the Tonearm Connect plugin (1.1+), and songs from outside the library show whether they're in your
+  library already, downloading in Lidarr or requested there
 - **YouTube Music artists and albums**: search and artist pages show artists' bios, popular songs and the albums
   you don't have, playable from YouTube Music, with "Request album"
 - Playlist management: create, rename, delete, add and remove songs
