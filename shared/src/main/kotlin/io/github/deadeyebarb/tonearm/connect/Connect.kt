@@ -151,8 +151,9 @@ data class DiscoveryPick(
     val because: List<String> = emptyList(),
 )
 
+/** [running] while the server makes new ones (ask again in a few seconds). */
 @Serializable
-data class DiscoveryPicks(val picks: List<DiscoveryPick> = emptyList(), val madeAt: Long = 0, val problem: String? = null)
+data class DiscoveryPicks(val picks: List<DiscoveryPick> = emptyList(), val madeAt: Long = 0, val running: Boolean = false, val problem: String? = null)
 
 /** What Deezer finds for a search. */
 @Serializable

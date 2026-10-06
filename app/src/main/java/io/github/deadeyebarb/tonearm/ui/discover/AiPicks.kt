@@ -129,8 +129,15 @@ fun DiscoveryPicksPanel(actions: AppActions, modifier: Modifier = Modifier) {
     var asks by remember { mutableIntStateOf(0) }
     LaunchedEffect(server?.baseUrl, asks) {
         try {
-            picks = c.connect.discover(refresh = asks > 0)
             failed = null
+            var next = c.connect.discover(refresh = asks > 0)
+            picks = next
+            // The server makes them in the background: ask again until they're there.
+            while (next.running) {
+                delay(3_000)
+                next = c.connect.discover()
+                picks = next
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -146,16 +153,17 @@ fun DiscoveryPicksPanel(actions: AppActions, modifier: Modifier = Modifier) {
                     Text("DISCOVERY PICKS", style = MaterialTheme.typography.titleLarge.copy(fontSize = 15.sp))
                     Text(
                         when {
-                            current == null && failed == null -> "LOOKING AT WHAT YOU PLAY…"
+                            failed == null && (current == null || current.running && current.picks.isEmpty()) -> "LOOKING AT WHAT YOU PLAY…"
+                            current?.running == true -> "LOOKING FOR NEW ONES…"
                             current?.picks.isNullOrEmpty() -> "NOTHING YET: PLAY AND LIKE SOME MUSIC"
                             else -> "${current!!.picks.size} ARTISTS YOU DON'T HAVE"
                         },
                         style = MaterialTheme.typography.labelSmall, color = hud.accent,
                     )
                 }
-                if (current != null) HudButton("Refresh", { asks++ }, filled = false)
+                if ((current != null || failed != null) && current?.running != true) HudButton(if (failed != null) "Try again" else "Refresh", { asks++ }, filled = false)
             }
-            (failed ?: current?.problem)?.let {
+            (failed ?: current?.problem?.takeUnless { current.running })?.let {
                 Text(it, style = MaterialTheme.typography.bodySmall, color = hud.danger, modifier = Modifier.padding(top = 6.dp))
             }
             current?.picks?.forEach { pick -> DiscoveryRow(pick, canRequest = integrations.lidarr != null, actions = actions) }

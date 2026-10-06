@@ -85,6 +85,8 @@ class IntegrationHttp(
             messages.isNotEmpty() -> messages.distinct().joinToString("; ")
             code == 401 || code == 403 -> "The API key was rejected (HTTP $code)"
             code == 404 -> "Nothing at this address (HTTP 404). Check the URL."
+            // From a reverse proxy: it got no answer from what's behind it.
+            code == 502 || code == 504 -> "No answer through the proxy (HTTP $code); try again in a moment"
             else -> "HTTP $code"
         }
     }
