@@ -66,6 +66,8 @@ class DownloadRepository(
     val entries: StateFlow<Map<String, DownloadEntry>> = _entries
 
     private val completed = ConcurrentHashMap.newKeySet<String>()
+    /** Downloads to start again once their old copy is gone (the same song id with a better file). */
+    private val readd = ConcurrentHashMap<String, QueueSong>()
     private val loaded = CountDownLatch(1)
     private var progressJob: Job? = null
 
@@ -83,6 +85,7 @@ class DownloadRepository(
             override fun onDownloadRemoved(manager: DownloadManager, download: Download) {
                 completed -= download.request.id
                 _entries.value -= download.request.id
+                readd.remove(download.request.id)?.let { download(listOf(it)) }
             }
         })
         scope.launch(Dispatchers.IO) {
@@ -116,6 +119,21 @@ class DownloadRepository(
                 .setData(json.encodeToString(DownloadMeta.serializer(), DownloadMeta(item.serverId, item.song)).encodeToByteArray())
                 .build()
             DownloadService.sendAddDownload(context, TonearmDownloadService::class.java, request, false)
+        }
+    }
+
+    /**
+     * Swaps a downloaded song for [newer], the server's better file. Under a new id the new download
+     * starts right away; under the same id the old copy has to be removed first (its bytes share the key).
+     */
+    fun replace(old: DownloadEntry, newer: QueueSong) {
+        val newId = key(newer.serverId, newer.song.id)
+        if (newId == old.id) {
+            readd[old.id] = newer
+            remove(listOf(old.id))
+        } else {
+            download(listOf(newer))
+            remove(listOf(old.id))
         }
     }
 

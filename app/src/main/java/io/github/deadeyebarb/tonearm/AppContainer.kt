@@ -1,5 +1,6 @@
 package io.github.deadeyebarb.tonearm
 
+import io.github.deadeyebarb.tonearm.media.LibraryVersions
 import io.github.deadeyebarb.tonearm.integrations.FetchTracker
 import io.github.deadeyebarb.tonearm.likes.LikesSync
 import io.github.deadeyebarb.tonearm.local.LocalMusic
@@ -100,6 +101,7 @@ class AppContainer(val app: Application) {
     private val youtubeHttpClient = baseHttpClient.newBuilder().apply { interceptors().remove(UserAgentInterceptor) }.build()
     val youtube = YouTubeMusic(youtubeHttpClient)
     val catalog = YouTubeCatalog(youtube)
+    val versions = LibraryVersions(api)
     val fetches = FetchTracker(LidarrClient(integrationHttp, json), api)
     val local = LocalMusic(app)
     val songRequests = SongRequests(LidarrClient(integrationHttp, json), MusicBrainz(baseHttpClient, json))

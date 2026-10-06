@@ -227,7 +227,7 @@ private fun Header(entry: QueueSong?, onBack: () -> Unit, onSleep: () -> Unit) {
                         add(MenuAction("Add to playlist", Icons.AutoMirrored.Rounded.PlaylistAdd) { actions.addToPlaylist(listOf(entry)) })
                         add(MenuAction("Instant mix", Icons.Rounded.AutoAwesome) { actions.instantMix(entry) })
                     }
-                    if (!YouTubeMusic.isYouTube(entry.serverId) && !LocalMusic.isLocal(entry.serverId)) add(MenuAction("Download", Icons.Rounded.Download) { actions.download(listOf(entry)) })
+                    if (!LocalMusic.isLocal(entry.serverId)) add(MenuAction("Download", Icons.Rounded.Download) { actions.download(listOf(entry)) })
                 }
                 add(MenuAction("Equalizer", Icons.Rounded.Equalizer) { actions.navigate(EqualizerRoute) })
                 add(MenuAction("Sleep timer", Icons.Rounded.Bedtime, onSleep))

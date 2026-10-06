@@ -153,9 +153,23 @@ class AppActions(
     }
 
     fun download(items: List<QueueSong>) {
-        // YouTube Music songs can't be downloaded; Lidarr gets the real thing instead.
+        // Songs on the phone are there already. A YouTube Music song is downloaded as your library's own
+        // file (the FLAC Lidarr got) when the library has it; YouTube itself isn't downloaded.
+        val youtube = items.filter { YouTubeMusic.isYouTube(it.serverId) }
         @Suppress("NAME_SHADOWING") val items = items.filterNot { YouTubeMusic.isYouTube(it.serverId) || LocalMusic.isLocal(it.serverId) }
-        if (items.isEmpty()) return
+        if (youtube.isNotEmpty()) {
+            launch {
+                val session = container.sessions.awaitActive()
+                val found = youtube.mapNotNull { container.versions.better(it, session, force = true) }
+                if (found.isNotEmpty()) downloadNow(found)
+                val missing = youtube.size - found.size
+                if (missing > 0) message(if (missing == 1) "That song isn't in your library yet; like it to request it in Lidarr" else "$missing songs aren't in your library yet; like them to request them")
+            }
+        }
+        if (items.isNotEmpty()) downloadNow(items)
+    }
+
+    private fun downloadNow(items: List<QueueSong>) {
         requestNotificationPermission()
         container.downloads.download(items)
         saveArtwork(items)

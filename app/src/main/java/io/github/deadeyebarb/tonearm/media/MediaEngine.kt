@@ -94,7 +94,7 @@ class MediaEngine(
                 if (q == StreamQuality.ORIGINAL) SongUri.RAW else "${settings.state.value.transcodeFormat.param}_${q.maxBitRate}"
             }
         }
-        return spec.withUri(SongUri.build(parts.serverId, parts.songId, quality))
+        return spec.withUri(SongUri.build(parts.serverId, parts.songId, quality, parts.version))
     }
 
     private fun downloadCacheKey(spec: DataSpec): String {
@@ -109,7 +109,8 @@ class MediaEngine(
     private fun streamCacheKey(spec: DataSpec): String {
         val parts = SongUri.parse(spec.uri) ?: return spec.key ?: spec.uri.toString()
         val quality = parts.quality.takeUnless { it == SongUri.DOWNLOADED } ?: SongUri.RAW
-        return "stream/${parts.serverId}/${parts.songId}/$quality"
+        // A file upgraded on the server (say MP3 to FLAC under the same id) gets a fresh cache entry.
+        return "stream/${parts.serverId}/${parts.songId}/$quality" + (parts.version?.let { "/$it" } ?: "")
     }
 
     fun downloadKey(serverId: String, songId: String) = "dl/$serverId/$songId"

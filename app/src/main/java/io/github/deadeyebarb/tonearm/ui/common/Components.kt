@@ -203,7 +203,7 @@ fun SongMenuButton(song: Song, serverId: String?, extraActions: List<MenuAction>
         if (sameServer) add(MenuAction("Add to playlist", Icons.AutoMirrored.Rounded.PlaylistAdd) { actions.addToPlaylist(listOf(entry)) })
         add(MenuAction(if (starred) "Unlike" else "Like", if (starred) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder) { actions.setLiked(entry, !starred) })
         // A YouTube Music song or one stored on the phone isn't on any server: nothing to download.
-        if (!YouTubeMusic.isYouTube(serverId) && !LocalMusic.isLocal(serverId)) {
+        if (!LocalMusic.isLocal(serverId)) {
             if (download == null || download.failed) {
                 add(MenuAction("Download", Icons.Rounded.Download) { actions.download(listOf(entry)) })
             } else {

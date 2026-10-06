@@ -281,6 +281,17 @@ class Handler(BaseHTTPRequestHandler):
                 song = self.lib.arrive(one("title", "Untitled"), one("artist", "Unknown"), one("album") or one("title", "Untitled"))
             print(f"    arrived: {song['artist']} - {song['title']} ({song['id']})", flush=True)
             return self.send_raw(song, 200)
+        if url.path == "/mock/replace":
+            # Test hook: a song's file is replaced by a better one under the same id, like a Lidarr upgrade.
+            with self.lib.lock:
+                song = self.lib.songs[one("id")]
+                source = self.lib.songs[one("from", "al1-1")]
+                shutil.copy(self.lib.media / f"{source['id']}.flac", self.lib.media / f"{song['id']}.flac")
+                size = (self.lib.media / f"{song['id']}.flac").stat().st_size
+                song.update({"size": size, "suffix": "flac", "bitDepth": source["bitDepth"], "samplingRate": source["samplingRate"],
+                             "duration": source["duration"], "bitRate": source["bitRate"], "contentType": "audio/flac"})
+            print(f"    replaced: {song['id']} now {song['bitDepth']}-bit/{song['samplingRate']} Hz, {size} bytes", flush=True)
+            return self.send_raw(song, 200)
         if url.path.startswith("/mock-images/"):
             name = Path(url.path).name
             return self.send_file(self.lib.media / name, "image/jpeg")

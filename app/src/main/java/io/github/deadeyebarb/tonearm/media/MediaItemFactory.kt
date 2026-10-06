@@ -134,7 +134,7 @@ class MediaItemFactory(context: Context) {
             .build()
         return MediaItem.Builder()
             .setMediaId(MediaIds.song(serverId, song.id, context))
-            .setUri(SongUri.build(serverId, song.id))
+            .setUri(SongUri.build(serverId, song.id, version = SongUri.versionOf(song.suffix, song.size)))
             .setMediaMetadata(metadata)
             .build()
     }

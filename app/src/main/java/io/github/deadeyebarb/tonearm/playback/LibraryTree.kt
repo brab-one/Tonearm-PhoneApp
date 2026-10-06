@@ -185,7 +185,9 @@ class LibraryTree(private val c: AppContainer) {
         val parsed = MediaIds.parse(item.mediaId)
         if (parsed.type != MediaIds.SONG || parsed.serverId == null || parsed.id == null) return@mapNotNull null
         if (item.mediaMetadata.extras?.getString(SongExtras.ID) != null) {
-            item.buildUpon().setUri(SongUri.build(parsed.serverId, parsed.id)).build()
+            val extras = item.mediaMetadata.extras
+            val version = SongUri.versionOf(extras?.getString(SongExtras.SUFFIX), extras?.getLong(SongExtras.SIZE, -1)?.takeIf { it > 0 })
+            item.buildUpon().setUri(SongUri.build(parsed.serverId, parsed.id, version = version)).build()
         } else {
             runCatching { item(item.mediaId) }.getOrNull()
         }

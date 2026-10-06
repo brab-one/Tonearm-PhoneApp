@@ -64,6 +64,8 @@ class PlaybackService : MediaLibraryService() {
     private lateinit var scrobbler: Scrobbler
     private lateinit var cacheAhead: CacheAhead
     /** The YouTube Music item auto-request last ran for, so pausing and resuming doesn't repeat it. */
+    private var swapJob: Job? = null
+
     /** The last song the queue was extended after ("When the queue ends"). */
     private var continuedAfter: String? = null
     private val searchResults = mutableMapOf<String, List<MediaItem>>()
@@ -174,6 +176,7 @@ class PlaybackService : MediaLibraryService() {
             if (events.containsAny(Player.EVENT_MEDIA_ITEM_TRANSITION, Player.EVENT_TIMELINE_CHANGED, Player.EVENT_REPEAT_MODE_CHANGED)) {
                 continueIfLast()
                 updateButtons()
+                useLibraryFiles()
             }
             if (events.containsAny(
                     Player.EVENT_TIMELINE_CHANGED, Player.EVENT_MEDIA_ITEM_TRANSITION, Player.EVENT_IS_PLAYING_CHANGED,
@@ -239,6 +242,30 @@ class PlaybackService : MediaLibraryService() {
             .build()
         // Phone notification, lock screen, Android Auto and Automotive all pick these up.
         session.setMediaButtonPreferences(listOf(star, shuffle, repeat))
+    }
+
+    /**
+     * The next songs in the queue play from the library's own file when it has one: a YouTube Music song
+     * once Lidarr has downloaded it (usually as FLAC), a library song whose file was upgraded since.
+     */
+    private fun useLibraryFiles() {
+        val session = c.sessions.active.value ?: return
+        val current = player.currentMediaItemIndex
+        if (current == C.INDEX_UNSET) return
+        val upcoming = CacheAhead.upcoming(player.currentTimeline, current, player.repeatMode, player.shuffleModeEnabled, UPGRADE_AHEAD)
+            .map { player.getMediaItemAt(it) }
+        swapJob?.cancel()
+        swapJob = scope.launch {
+            for (item in upcoming) {
+                val entry = item.toQueueSong() ?: continue
+                val better = c.versions.better(entry, session) ?: continue
+                // The queue may have moved on while the server answered.
+                val index = (0 until player.mediaItemCount).firstOrNull { player.getMediaItemAt(it).mediaId == item.mediaId } ?: continue
+                if (index == player.currentMediaItemIndex) continue
+                val context = MediaIds.parse(item.mediaId).context
+                player.replaceMediaItem(index, c.mediaItems.song(better, context))
+            }
+        }
     }
 
     /** On the last song, appends what "When the queue ends" asks for, so playback carries on gaplessly. */
@@ -434,6 +461,8 @@ class PlaybackService : MediaLibraryService() {
 
     companion object {
         private const val TAG = "PlaybackService"
+        /** How many of the next songs are checked for a library file to play instead. */
+        private const val UPGRADE_AHEAD = 3
         const val CMD_TOGGLE_STAR = "io.github.deadeyebarb.tonearm.TOGGLE_STAR"
         /** Subsonic codes meaning the login is wrong or not accepted. */
         private val AUTH_ERRORS = setOf(40, 41, 42, 43, 44)
