@@ -6,7 +6,6 @@ import io.github.deadeyebarb.tonearm.likes.LikesSync
 import io.github.deadeyebarb.tonearm.local.LocalMusic
 import io.github.deadeyebarb.tonearm.youtube.YouTubeCatalog
 import io.github.deadeyebarb.tonearm.data.Likes
-import io.github.deadeyebarb.tonearm.integrations.MusicBrainz
 import io.github.deadeyebarb.tonearm.integrations.SongRequests
 import io.github.deadeyebarb.tonearm.playback.QueueContinuation
 import io.github.deadeyebarb.tonearm.weekly.WeeklyPicks
@@ -17,6 +16,7 @@ import coil3.memory.MemoryCache
 import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import coil3.request.crossfade
 import io.github.deadeyebarb.tonearm.connect.ConnectClient
+import io.github.deadeyebarb.tonearm.connect.ConnectRouter
 import io.github.deadeyebarb.tonearm.connect.PhoneConnect
 import io.github.deadeyebarb.tonearm.data.IntegrationsRepository
 import io.github.deadeyebarb.tonearm.data.Messages
@@ -84,16 +84,21 @@ class AppContainer(val app: Application) {
     val starred = StarredStore(api, sessions)
 
     private val integrationHttp = IntegrationHttp(baseHttpClient) { sessions.awaitActiveClient() }
+    private val connectClient = ConnectClient(integrationHttp, json)
+    /** The Tonearm server at the music server's address: Connect, and Lidarr and Maloja with its keys. */
+    val tonearmServer = ConnectRouter(connectClient)
     val integrations = IntegrationsService(
         IntegrationsRepository(app, json, scope),
         MalojaClient(integrationHttp, json),
         LidarrClient(integrationHttp, json),
         secrets,
+        tonearmServer,
+        sessions,
+        scope,
     )
     val recommender = Recommender(api, sessions, integrations)
     val brainarr = BrainarrService(app, json, scope, api, sessions, integrations)
-    private val connectClient = ConnectClient(integrationHttp, json)
-    val connect = PhoneConnect(app, sessions, integrations, connectClient)
+    val connect = PhoneConnect(app, sessions, integrations, connectClient, tonearmServer)
     val daily = DailyDiscovery(app, json, scope, api, sessions, integrations, recommender, brainarr)
     val mediaItems = MediaItemFactory(app)
     val queueStore = QueueStore(app, json, mediaItems)
@@ -105,7 +110,7 @@ class AppContainer(val app: Application) {
     val versions = LibraryVersions(api)
     val fetches = FetchTracker(LidarrClient(integrationHttp, json), api)
     val local = LocalMusic(app)
-    val songRequests = SongRequests(LidarrClient(integrationHttp, json), MusicBrainz(baseHttpClient, json))
+    val songRequests = SongRequests(LidarrClient(integrationHttp, json))
     val likes = Likes(app, json, scope, api, sessions, starred, integrations, songRequests, LikesSync(connectClient, json), connect, settings, messages)
     val weekly = WeeklyPicks(api, LidarrClient(integrationHttp, json), json, connect.deviceId, java.io.File(app.filesDir, "weekly-run.json"))
     val continuation = QueueContinuation(api, sessions, youtube, settings)

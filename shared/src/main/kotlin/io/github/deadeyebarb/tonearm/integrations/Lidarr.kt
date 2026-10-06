@@ -54,12 +54,17 @@ data class LidarrAlbum(
     val monitored: Boolean = false,
     val foreignAlbumId: String? = null,
     val albumType: String? = null,
+    /** Compilation, Live, Soundtrack… (Lidarr sends names or objects with a name). */
+    val secondaryTypes: List<JsonElement> = emptyList(),
     val releaseDate: String? = null,
     val overview: String? = null,
     val images: List<LidarrImage> = emptyList(),
     val remoteCover: String? = null,
     val artist: LidarrArtist? = null,
 )
+
+@Serializable
+data class LidarrTrack(val id: Int = 0, val title: String = "", val albumId: Int = 0, val artistId: Int = 0)
 
 @Serializable
 data class LidarrRootFolder(
@@ -268,6 +273,10 @@ class LidarrClient(private val http: IntegrationHttp, private val json: Json) {
     /** Every album Lidarr knows (monitored or not), or one artist's. */
     suspend fun albums(config: LidarrConfig, key: String, artistId: Int? = null): List<LidarrAlbum> =
         json.decodeFromString(ListSerializer(LidarrAlbum.serializer()), get(config, key, "album", listOfNotNull(artistId?.let { "artistId" to it })))
+
+    /** The tracks Lidarr knows for an artist's albums (from its metadata, whether or not they're monitored). */
+    suspend fun tracks(config: LidarrConfig, key: String, artistId: Int): List<LidarrTrack> =
+        json.decodeFromString(ListSerializer(LidarrTrack.serializer()), get(config, key, "track", listOf("artistId" to artistId)))
 
     /** Removes an artist with its files; the exclusion keeps import lists (Brainarr) from adding it again. */
     suspend fun deleteArtist(config: LidarrConfig, key: String, artistId: Int, deleteFiles: Boolean = true, exclude: Boolean = true) {

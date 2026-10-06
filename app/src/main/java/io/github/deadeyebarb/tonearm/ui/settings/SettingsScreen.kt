@@ -99,13 +99,15 @@ fun SettingsScreen() {
             item {
                 val maloja = integrations.maloja
                 Item(
-                    "Maloja", maloja?.let { "Recommendations from ${it.url}" + if (it.scrobble) " · sending plays" else "" } ?: "Not connected: recommendations from your scrobbles",
+                    "Maloja",
+                    maloja?.let { (if (it.viaServer) "Through the Tonearm server" else "Recommendations from ${it.url}") + if (it.scrobble) " · sending plays" else "" }
+                        ?: "Not connected: recommendations from your scrobbles",
                     icon = { Icon(Icons.Rounded.AutoAwesome, null) },
                 ) { actions.navigate(MalojaSettingsRoute) }
             }
             item {
                 Item(
-                    "Lidarr", integrations.lidarr?.let { "Requests go to ${it.url}" } ?: "Not connected: request music you don't have",
+                    "Lidarr", integrations.lidarr?.let { if (it.viaServer) "Through the Tonearm server" else "Requests go to ${it.url}" } ?: "Not connected: request music you don't have",
                     icon = { Icon(Icons.Rounded.CloudDownload, null) },
                 ) { actions.navigate(LidarrSettingsRoute) }
             }

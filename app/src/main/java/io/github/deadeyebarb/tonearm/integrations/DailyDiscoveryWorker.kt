@@ -20,7 +20,7 @@ import java.util.concurrent.TimeUnit
 class DailyDiscoveryWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
         val c = applicationContext.container
-        val integrations = c.integrations.repository.current()
+        val integrations = c.integrations.current()
         if (integrations.lidarr != null) {
             try {
                 c.brainarr.load()

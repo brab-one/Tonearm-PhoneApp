@@ -20,8 +20,8 @@ class PhoneConnect(
     private val sessions: SessionManager,
     private val integrations: IntegrationsService,
     private val client: ConnectClient,
+    private val router: ConnectRouter,
 ) {
-    private val router = ConnectRouter(client)
     private val prefs = context.getSharedPreferences("connect", Context.MODE_PRIVATE)
 
     /** Stable per install, so the desktop sees commands come from the same device. */
@@ -34,6 +34,12 @@ class PhoneConnect(
 
     suspend fun send(target: String, command: ConnectCommand) {
         client.send(route(), deviceId, target, command)
+    }
+
+    /** Album suggestions from the Tonearm server's AI; [refresh] asks for new ones. */
+    suspend fun aiPicks(refresh: Boolean = false): AiPicks {
+        val session = sessions.active.value ?: sessions.awaitActive()
+        return client.aiPicks(session, refresh)
     }
 
     /** The Tonearm server when the music server has one, else the plugin in Lidarr. */

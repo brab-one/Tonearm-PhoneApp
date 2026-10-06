@@ -38,6 +38,8 @@ import urllib.request
 from urllib.parse import parse_qs, urlparse
 
 USER, PASSWORD = "demo", "demo"
+# Everyone who can log in; only USER is an admin (as getUser reports it).
+USERS = {USER: PASSWORD, "guest": "guest"}
 P12_PASSWORD = "tonearm"
 
 ALBUMS = [
@@ -61,7 +63,8 @@ SIMILAR = {"ar1": [("ar2", "Signal Garden"), (None, "Neon Cascade"), (None, "Kos
 LIDARR_KEY = "lidarr-key"
 LIDARR_CATALOG = [
     {"artistName": "Neon Cascade", "foreignArtistId": "mb-neon-cascade", "artistType": "Group", "disambiguation": "synthwave duo",
-     "overview": "Neon Cascade make shimmering analogue synthwave.", "albums": [("Afterglow", "mb-afterglow", "2023-03-03"), ("Night Drive", "mb-night-drive", "2021-06-01")]},
+     "overview": "Neon Cascade make shimmering analogue synthwave.",
+     "albums": [("Afterglow", "mb-afterglow", "2023-03-03"), ("Night Drive", "mb-night-drive", "2021-06-01"), ("Midnight Signal", "mb-midnight-signal", "2022-11-11")]},
     {"artistName": "Vector Choir", "foreignArtistId": "mb-vector-choir", "artistType": "Group", "disambiguation": "",
      "overview": "Vector Choir layer vocoded voices over ambient drones.", "albums": [("Choral Static", "mb-choral-static", "2024-10-10")]},
     {"artistName": "Kosmische Drift", "foreignArtistId": "mb-kosmische", "artistType": "Person", "disambiguation": "German producer",
@@ -71,6 +74,10 @@ LIDARR_CATALOG = [
     {"artistName": "Aurora Lattice", "foreignArtistId": "mb-aurora-lattice", "artistType": "Group", "disambiguation": "",
      "overview": "Crystalline ambient.", "albums": [("Prism Fields", "mb-prism-fields", "2025-05-05")]},
 ]
+# Track lists Lidarr's metadata has for these albums (others list just their title track), and album types besides "Album".
+LIDARR_TRACKS = {"mb-afterglow": ["Afterglow", "Midnight Signal", "Chrome Rain"], "mb-night-drive": ["Night Drive", "Tail Lights"],
+                 "mb-midnight-signal": ["Midnight Signal"]}
+LIDARR_ALBUM_TYPES = {"mb-midnight-signal": "Single"}
 # Brainarr (an AI import list plugin) as Lidarr reports it; its runs add these artists.
 BRAINARR_LIST_ID = 7
 BRAINARR_TAG = {"id": 1, "label": "brainarr"}
@@ -280,6 +287,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_PUT(self):
         url = urlparse(self.path)
+        if self.connect_url and url.path.startswith("/connect-tonearm"):
+            return self.forward_connect("PUT")
         length = int(self.headers.get("Content-Length") or 0)
         body = json.loads(self.rfile.read(length) or b"{}")
         with self.lib.lock:
@@ -287,6 +296,23 @@ class Handler(BaseHTTPRequestHandler):
                 if self.headers.get("X-Api-Key") != LIDARR_KEY:
                     return self.send_raw({"message": "Unauthorized"}, 401)
                 return self.lidarr_put(url.path[len("/api/v1/"):], body)
+        self.send_response(404)
+        self.end_headers()
+
+    def do_DELETE(self):
+        url = urlparse(self.path)
+        if self.connect_url and url.path.startswith("/connect-tonearm"):
+            return self.forward_connect("DELETE")
+        with self.lib.lock:
+            m = re.match(r"^/api/v1/artist/(\d+)$", url.path)
+            if m and self.headers.get("X-Api-Key") == LIDARR_KEY:
+                entry = self.lidarr_entry(int(m.group(1)))
+                if entry:
+                    del self.lib.lidarr_artists[entry["foreignArtistId"]]
+                    for _, mbid, _ in entry["albums"]:
+                        self.lib.lidarr_albums.pop(mbid, None)
+                    print(f"    lidarr: removed artist {entry['artistName']} ({url.query})", flush=True)
+                    return self.send_raw({})
         self.send_response(404)
         self.end_headers()
 
@@ -350,14 +376,15 @@ class Handler(BaseHTTPRequestHandler):
             handler(q, one)
 
     def authenticate(self, one):
-        if one("u") != USER:
+        password = USERS.get(one("u"))
+        if password is None:
             self.error(40, "Wrong username or password")
             return False
         if one("t") and one("s"):
-            ok = hashlib.md5((PASSWORD + one("s")).encode()).hexdigest() == one("t")
+            ok = hashlib.md5((password + one("s")).encode()).hexdigest() == one("t")
         elif one("p"):
             p = one("p")
-            ok = (bytes.fromhex(p[4:]).decode() if p.startswith("enc:") else p) == PASSWORD
+            ok = (bytes.fromhex(p[4:]).decode() if p.startswith("enc:") else p) == password
         else:
             ok = False
         if not ok:
@@ -367,6 +394,12 @@ class Handler(BaseHTTPRequestHandler):
     # --- API -----------------------------------------------------------------
     def api_ping(self, q, one):
         self.send_json({})
+
+    def api_getUser(self, q, one):
+        name = one("username") or one("u")
+        if name != one("u") and one("u") != USER:
+            return self.error(50, "Only admins can look up other users")
+        self.send_json({"user": {"username": name, "adminRole": name == USER, "streamRole": True}})
 
     def api_getOpenSubsonicExtensions(self, q, one):
         self.send_json({"openSubsonicExtensions": [{"name": "songLyrics", "versions": [1]}, {"name": "formPost", "versions": [1]}]})
@@ -490,6 +523,14 @@ class Handler(BaseHTTPRequestHandler):
                                           "artistMbid": entry["foreignArtistId"], "album": title, "started": time.time()})
 
     def lidarr_put(self, endpoint, body):
+        if endpoint == "album/monitor":
+            changed = []
+            for state in self.lib.lidarr_albums.values():
+                if state["id"] in body.get("albumIds", []):
+                    state["monitored"] = bool(body.get("monitored"))
+                    changed.append(state["id"])
+            print(f"    lidarr: albums {changed} monitored={body.get('monitored')}", flush=True)
+            return self.send_raw([], 202)
         if endpoint == f"importlist/{BRAINARR_LIST_ID}":
             self.lib.brainarr_tags = [int(t) for t in body.get("tags", [])]
             print(f"    lidarr: Brainarr list tags = {self.lib.brainarr_tags}", flush=True)
@@ -499,9 +540,20 @@ class Handler(BaseHTTPRequestHandler):
     def lidarr_album(self, entry, album):
         title, mbid, date = album
         image = f"https://{self.headers.get('Host')}/mock-images/al{1 + LIDARR_CATALOG.index(entry) % 3}.jpg"
-        return {"id": self.lib.lidarr_albums.get(mbid, {}).get("id", 0), "title": title, "foreignAlbumId": mbid,
-                "albumType": "Album", "releaseDate": date + "T00:00:00Z", "remoteCover": image,
+        state = self.lib.lidarr_albums.get(mbid, {})
+        return {"id": state.get("id", 0), "title": title, "foreignAlbumId": mbid, "monitored": state.get("monitored", False),
+                "artistId": self.lib.lidarr_artists.get(entry["foreignArtistId"], {}).get("id", 0),
+                "albumType": LIDARR_ALBUM_TYPES.get(mbid, "Album"), "secondaryTypes": [], "releaseDate": date + "T00:00:00Z", "remoteCover": image,
                 "images": [{"coverType": "cover", "remoteUrl": image}], "artist": self.lidarr_artist(entry)}
+
+    def register_albums(self, entry, monitored=False):
+        """Lidarr knows every album of an artist it has, monitored or not."""
+        for _, mbid, _ in entry["albums"]:
+            state = self.lib.lidarr_albums.setdefault(mbid, {"id": 1 + max([a["id"] for a in self.lib.lidarr_albums.values()] or [0])})
+            state.setdefault("monitored", monitored)
+
+    def lidarr_entry(self, artist_id):
+        return next((e for e in LIDARR_CATALOG if self.lib.lidarr_artists.get(e["foreignArtistId"], {}).get("id") == artist_id), None)
 
     def lidarr_get(self, endpoint, one):
         term = (one("term") or "").lower()
@@ -516,6 +568,21 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_raw([{"id": 1, "name": "Standard"}])
         if endpoint == "artist":
             return self.send_raw([self.lidarr_artist(e) for e in LIDARR_CATALOG if e["foreignArtistId"] in self.lib.lidarr_artists])
+        if endpoint == "album" and one("artistId"):
+            entry = self.lidarr_entry(int(one("artistId")))
+            if entry:
+                self.register_albums(entry)
+            return self.send_raw([self.lidarr_album(entry, a) for a in entry["albums"]] if entry else [])
+        if endpoint == "track":
+            entry = self.lidarr_entry(int(one("artistId") or 0))
+            if not entry:
+                return self.send_raw([])
+            self.register_albums(entry)
+            tracks = []
+            for title, mbid, _ in entry["albums"]:
+                for name in LIDARR_TRACKS.get(mbid, [title]):
+                    tracks.append({"id": len(tracks) + 1, "title": name, "albumId": self.lib.lidarr_albums[mbid]["id"], "artistId": int(one("artistId"))})
+            return self.send_raw(tracks)
         if endpoint == "importlist":
             return self.send_raw([self.brainarr_list()])
         if endpoint == "tag":
@@ -572,6 +639,13 @@ class Handler(BaseHTTPRequestHandler):
                        "started": now(), "body": body}
             self.lib.lidarr_commands[command["id"]] = command
             print(f"    lidarr: command {body}", flush=True)
+            if body.get("name") == "AlbumSearch":
+                for e in LIDARR_CATALOG:
+                    for title, mbid, _ in e["albums"]:
+                        if self.lib.lidarr_albums.get(mbid, {}).get("id") in body.get("albumIds", []):
+                            self.lib.lidarr_queue.append({"title": f"{e['artistName']} - {title}", "artist": e["artistName"],
+                                                          "artistMbid": e["foreignArtistId"], "album": title, "started": time.time()})
+                command["_started"] = 0
             if body.get("name") == "ArtistSearch":
                 entry = next((e for e in LIDARR_CATALOG if self.lib.lidarr_artists.get(e["foreignArtistId"], {}).get("id") == body.get("artistId")), None)
                 if entry:
@@ -596,8 +670,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_raw([{"propertyName": "ForeignArtistId", "errorMessage": "Artist not found"}], 400)
             if mbid in self.lib.lidarr_artists:
                 return self.send_raw([{"propertyName": "ForeignArtistId", "errorMessage": "This artist has already been added."}], 400)
-            self.lib.lidarr_artists[mbid] = {"id": len(self.lib.lidarr_artists) + 1}
+            self.lib.lidarr_artists[mbid] = {"id": 1 + max([a["id"] for a in self.lib.lidarr_artists.values()] or [0]),
+                                             "monitored": body.get("addOptions", {}).get("monitor") != "none"}
             opts = body.get("addOptions", {})
+            self.register_albums(entry, monitored=opts.get("monitor") not in (None, "none"))
             print(f"    lidarr: added artist {entry['artistName']} monitor={opts.get('monitor')} search={opts.get('searchForMissingAlbums')} "
                   f"quality={body.get('qualityProfileId')} root={body.get('rootFolderPath')}", flush=True)
             if opts.get("searchForMissingAlbums") and opts.get("monitor") != "none":
@@ -609,8 +685,9 @@ class Handler(BaseHTTPRequestHandler):
             for e in LIDARR_CATALOG:
                 for album in e["albums"]:
                     if album[1] == mbid:
-                        self.lib.lidarr_albums[mbid] = {"id": len(self.lib.lidarr_albums) + 1}
-                        self.lib.lidarr_artists.setdefault(e["foreignArtistId"], {"id": len(self.lib.lidarr_artists) + 1})
+                        self.lib.lidarr_artists.setdefault(e["foreignArtistId"], {"id": 1 + max([a["id"] for a in self.lib.lidarr_artists.values()] or [0])})
+                        self.register_albums(e)
+                        self.lib.lidarr_albums[mbid]["monitored"] = True
                         print(f"    lidarr: added album {album[0]} by {e['artistName']} search={body.get('addOptions', {}).get('searchForNewAlbum')}", flush=True)
                         self.lib.lidarr_queue.append({"title": f"{e['artistName']} - {album[0]}", "artist": e["artistName"], "album": album[0], "started": time.time()})
                         return self.send_raw(self.lidarr_album(e, album), 201)

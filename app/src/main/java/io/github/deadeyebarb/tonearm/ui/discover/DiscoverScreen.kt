@@ -1,5 +1,8 @@
 package io.github.deadeyebarb.tonearm.ui.discover
 
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -123,6 +126,7 @@ fun DiscoverScreen() {
                 if (data.libraryEmpty) item { EmptyLibraryBanner(lidarrReady, actions) }
                 item { DailyCard(actions) }
                 item { BrainarrCard(actions) }
+                item { AiPicksPanel(actions) }
                 if (data.rotation.isNotEmpty()) {
                     item { HudSectionHeader("Heavy rotation") }
                     item {
@@ -193,14 +197,15 @@ private fun EmptyLibraryBanner(lidarrReady: Boolean, actions: AppActions) {
 
 @Composable
 private fun NotConnected(actions: AppActions, lidarrReady: Boolean, modifier: Modifier) {
-    Column(modifier.fillMaxSize().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         BrainarrCard(actions, Modifier.padding(bottom = 8.dp))
+        AiPicksPanel(actions, Modifier.padding(bottom = 8.dp))
         EmptyState(
             Icons.Rounded.AutoAwesome, "Recommendations from Maloja",
             "Connect your Maloja scrobble server and Tonearm turns your listening history into picks: " +
                 "what's in heavy rotation, favourites you haven't played in a while, similar artists in your library, " +
                 "and artists you don't have yet, ready to request through Lidarr.",
-            Modifier.weight(1f),
+            Modifier.heightIn(min = 280.dp),
         )
         HudButton("Connect Maloja", { actions.navigate(MalojaSettingsRoute) }, Modifier.fillMaxWidth())
         Spacer(Modifier.height(12.dp))

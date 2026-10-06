@@ -1,32 +1,74 @@
 package io.github.deadeyebarb.tonearm.integrations
 
+import io.github.deadeyebarb.tonearm.connect.ConnectRouter
+import io.github.deadeyebarb.tonearm.data.Integrations
 import io.github.deadeyebarb.tonearm.data.IntegrationsRepository
 import io.github.deadeyebarb.tonearm.data.LidarrConfig
 import io.github.deadeyebarb.tonearm.data.MalojaConfig
 import io.github.deadeyebarb.tonearm.data.SecretBox
+import io.github.deadeyebarb.tonearm.subsonic.NoServerException
+import io.github.deadeyebarb.tonearm.subsonic.SessionManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 import java.io.IOException
 
 class IntegrationNotConfiguredException(message: String) : IOException(message)
 
-/** Maloja and Lidarr settings plus their clients, with API keys decrypted on demand. */
+/**
+ * Maloja and Lidarr plus their clients, with API keys decrypted on demand. When the Tonearm server at the
+ * music server's address offers them, they go through it (it holds the keys); otherwise the settings here.
+ */
 class IntegrationsService(
     val repository: IntegrationsRepository,
     val maloja: MalojaClient,
     val lidarr: LidarrClient,
     private val secrets: SecretBox,
+    private val server: ConnectRouter,
+    private val sessions: SessionManager,
+    scope: CoroutineScope,
 ) {
-    val state get() = repository.state
+    /** What the app uses; the settings screens edit [repository] itself. */
+    val state: StateFlow<Integrations> = combine(repository.state, server.server) { stored, offer -> stored.through(offer) }
+        .stateIn(scope, SharingStarted.Eagerly, repository.state.value.through(server.server.value))
+
+    init {
+        // Notice when the Tonearm server appears, goes, or the music server changes.
+        scope.launch {
+            sessions.active.collectLatest { session ->
+                while (true) {
+                    server.refresh(session)
+                    delay(5 * 60_000L)
+                }
+            }
+        }
+    }
+
+    /** Like [state], looking the Tonearm server up first if that's due (e.g. in a background job). */
+    suspend fun current(): Integrations {
+        val session = sessions.active.value ?: try {
+            sessions.awaitActive()
+        } catch (_: NoServerException) {
+            null
+        }
+        return repository.current().through(server.refresh(session))
+    }
 
     fun malojaKey(config: MalojaConfig): String = secrets.decrypt(config.keyEnc).orEmpty()
     fun lidarrKey(config: LidarrConfig): String = secrets.decrypt(config.keyEnc).orEmpty()
 
     suspend fun requireMaloja(): MalojaConfig =
-        repository.current().maloja ?: throw IntegrationNotConfiguredException("Connect Maloja in Settings → Integrations first")
+        current().maloja ?: throw IntegrationNotConfiguredException("Connect Maloja in Settings → Integrations first")
 
-    suspend fun requireLidarrOrNull(): Pair<LidarrConfig, String>? = repository.current().lidarr?.let { it to lidarrKey(it) }
+    suspend fun requireLidarrOrNull(): Pair<LidarrConfig, String>? = current().lidarr?.let { it to lidarrKey(it) }
 
     suspend fun requireLidarr(): Pair<LidarrConfig, String> {
-        val config = repository.current().lidarr ?: throw IntegrationNotConfiguredException("Connect Lidarr in Settings → Integrations first")
+        val config = current().lidarr ?: throw IntegrationNotConfiguredException("Connect Lidarr in Settings → Integrations first")
         return config to lidarrKey(config)
     }
 

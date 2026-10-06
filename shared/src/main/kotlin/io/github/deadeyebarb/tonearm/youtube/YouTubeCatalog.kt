@@ -1,5 +1,6 @@
 package io.github.deadeyebarb.tonearm.youtube
 
+import io.github.deadeyebarb.tonearm.integrations.SongMatch
 import io.github.deadeyebarb.tonearm.integrations.Names
 import io.github.deadeyebarb.tonearm.subsonic.Song
 import kotlinx.coroutines.Dispatchers
@@ -47,6 +48,13 @@ class YouTubeCatalog(private val youtube: YouTubeMusic) {
     }.take(limit)
 
     /** The YouTube Music artist best matching [name], if any. */
+    /** The YouTube Music album for one known by name (e.g. a suggestion), or null. */
+    suspend fun findAlbum(artist: String, title: String): YtAlbum? {
+        val hits = searchAlbums("$artist $title", 8)
+        fun same(a: String?, b: String) = a != null && Names.normalize(SongMatch.cleanTitle(a)) == Names.normalize(SongMatch.cleanTitle(b))
+        return hits.firstOrNull { same(it.title, title) && same(it.artist, artist) } ?: hits.firstOrNull { same(it.title, title) }
+    }
+
     suspend fun findArtist(name: String): YtArtist? =
         searchArtists(name, 5).firstOrNull { Names.normalize(it.name) == Names.normalize(name) }
 

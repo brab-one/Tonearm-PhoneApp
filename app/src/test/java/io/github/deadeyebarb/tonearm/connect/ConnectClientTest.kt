@@ -1,6 +1,9 @@
 package io.github.deadeyebarb.tonearm.connect
 
 import io.github.deadeyebarb.tonearm.data.AuthMethod
+import io.github.deadeyebarb.tonearm.data.Integrations
+import io.github.deadeyebarb.tonearm.data.MalojaConfig
+import io.github.deadeyebarb.tonearm.data.TonearmServerInfo
 import io.github.deadeyebarb.tonearm.data.LidarrConfig
 import io.github.deadeyebarb.tonearm.data.ServerConfig
 import io.github.deadeyebarb.tonearm.integrations.IntegrationHttp
@@ -157,6 +160,42 @@ class ConnectClientTest {
         } catch (e: IntegrationHttpException) {
             assertEquals(401, e.code)
         }
+    }
+
+    @Test
+    fun `requests to the tonearm server are signed with one salt for a while, others aren't touched`() = runTest {
+        repeat(3) { respond("ok") }
+        val session = session()
+        val http = session.client
+        http.newCall(okhttp3.Request.Builder().url(server.url("/connect-tonearm/lidarr/api/v1/queue")).build()).execute().close()
+        http.newCall(okhttp3.Request.Builder().url(server.url("/connect-tonearm/maloja/apis/mlj_1/scrobbles")).build()).execute().close()
+        http.newCall(okhttp3.Request.Builder().url(server.url("/rest/ping.view")).build()).execute().close()
+        val (lidarr, maloja, other) = List(3) { server.takeRequest().url }
+        assertEquals("alice", lidarr.queryParameter("u"))
+        assertEquals(lidarr.queryParameter("s"), maloja.queryParameter("s"))
+        assertEquals(SubsonicAuth.token("wonderland", lidarr.queryParameter("s")!!), lidarr.queryParameter("t"))
+        assertEquals(null, other.queryParameter("u"))
+    }
+
+    @Test
+    fun `the server's lidarr and maloja replace the app's own, keeping its request preferences`() {
+        val stored = Integrations(
+            lidarr = LidarrConfig(url = "http://lidarr.lan:8686", keyEnc = "secret", rootFolderPath = "/music", monitor = "latest"),
+            maloja = MalojaConfig(url = "http://maloja.lan", scrobble = true),
+        )
+        val info = TonearmServerInfo(baseUrl = "https://music.example/", lidarr = true, lidarrAdmin = false, maloja = true)
+        val used = stored.through(info)
+        assertEquals("https://music.example/connect-tonearm/lidarr", used.lidarr!!.url)
+        assertEquals("", used.lidarr!!.keyEnc)
+        assertEquals("/music", used.lidarr!!.rootFolderPath)
+        assertEquals("latest", used.lidarr!!.monitor)
+        assertTrue(used.lidarr!!.viaServer && used.lidarr!!.limited)
+        assertEquals("https://music.example/connect-tonearm/maloja", used.maloja!!.url)
+        assertTrue(used.maloja!!.scrobble)
+        // Without the server (or without what it doesn't offer) the app's own settings stay.
+        assertEquals(stored, stored.through(null))
+        assertEquals(stored.maloja, stored.through(info.copy(maloja = false)).maloja)
+        assertEquals(null, Integrations().through(info.copy(lidarr = false, maloja = false)).lidarr)
     }
 
     @Test

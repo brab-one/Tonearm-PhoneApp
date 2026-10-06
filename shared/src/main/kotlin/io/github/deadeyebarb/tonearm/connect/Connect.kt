@@ -1,10 +1,15 @@
 package io.github.deadeyebarb.tonearm.connect
 
 import io.github.deadeyebarb.tonearm.data.LidarrConfig
+import io.github.deadeyebarb.tonearm.data.TonearmServerInfo
 import io.github.deadeyebarb.tonearm.integrations.IntegrationHttp
 import io.github.deadeyebarb.tonearm.integrations.IntegrationHttpException
 import io.github.deadeyebarb.tonearm.subsonic.ServerSession
 import io.github.deadeyebarb.tonearm.subsonic.Song
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
@@ -126,6 +131,22 @@ class ConnectPluginMissingException :
             "(https://github.com/brab-one/Tonearm-Connect) and restart Lidarr.",
     )
 
+/** An album the Tonearm server's AI suggests, by an artist not in the library. */
+@Serializable
+data class AiPick(val artist: String, val album: String, val year: Int? = null, val why: String = "")
+
+@Serializable
+data class AiPicks(
+    val picks: List<AiPick> = emptyList(),
+    /** When they were made (ms), 0 if never. */
+    val madeAt: Long = 0,
+    /** New ones are being made (that takes a few minutes). */
+    val running: Boolean = false,
+    /** Why the last attempt failed; the older picks stay. */
+    val problem: String? = null,
+    val model: String = "",
+)
+
 /** Where Tonearm Connect runs: the Tonearm server beside the music server, or the plugin in Lidarr. */
 sealed interface ConnectRoute {
     /** The Tonearm server, reached at the music server's address with the same login; one hub per user. */
@@ -158,19 +179,34 @@ class ConnectClient(private val http: IntegrationHttp, private val json: Json) {
         call(route, "hello")["protocol"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
 
     /**
-     * Whether the music server's address has a Tonearm server. False when something else answers there
-     * (no such page, or Navidrome's web app); errors from a Tonearm server and network errors are thrown.
+     * The Tonearm server at the music server's address and what it offers this user. Null when something
+     * else answers there (no such page, or Navidrome's web app); its errors and network errors are thrown.
      */
-    suspend fun findServer(session: ServerSession): Boolean {
+    suspend fun findServer(session: ServerSession): TonearmServerInfo? {
         val text = try {
             http.post(session.connectUrl("hello"), "", session.client, service = "Tonearm server")
         } catch (e: IntegrationHttpException) {
-            if (e.code in 400..499 && e.code != 401 && e.code != 429) return false
+            if (e.code in 400..499 && e.code != 401 && e.code != 429) return null
             throw e
         }
-        val response = runCatching { json.parseToJsonElement(text).jsonObject }.getOrNull() ?: return false
-        return response["server"]?.jsonPrimitive?.contentOrNull == "tonearm"
+        val response = runCatching { json.parseToJsonElement(text).jsonObject }.getOrNull() ?: return null
+        if (response["server"]?.jsonPrimitive?.contentOrNull != "tonearm") return null
+        fun flag(name: String) = response[name]?.jsonPrimitive?.contentOrNull == "true"
+        return TonearmServerInfo(
+            baseUrl = session.config.baseUrl,
+            version = response["version"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+            user = response["user"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+            admin = flag("admin"),
+            lidarr = flag("lidarr"),
+            lidarrAdmin = flag("lidarrAdmin"),
+            maloja = flag("maloja"),
+            recommendations = flag("recommendations"),
+        )
     }
+
+    /** The Tonearm server's album suggestions for this user (from its Ollama); [refresh] asks for new ones. */
+    suspend fun aiPicks(session: ServerSession, refresh: Boolean = false): AiPicks =
+        json.decodeFromJsonElement(AiPicks.serializer(), call(ConnectRoute.Server(session), "recommendations", listOf("refresh" to refresh.takeIf { it })))
 
     suspend fun publish(route: ConnectRoute, state: DeviceState) {
         call(route, "publish", listOf("device" to state.id), json.encodeToString(DeviceState.serializer(), state))
@@ -265,28 +301,53 @@ class ConnectClient(private val http: IntegrationHttp, private val json: Json) {
 }
 
 /**
- * Picks where Connect runs. The Tonearm server wins when the music server's address has one (it serves
- * every user of that Navidrome); otherwise the plugin in Lidarr. What was found is kept for a while, so a
- * device doesn't hop between the two while the other devices stay put.
+ * Finds the Tonearm server at the music server's address and picks where Connect runs: that server when
+ * it's there (it serves every user of that Navidrome), otherwise the plugin in Lidarr. What was found is
+ * kept for a while, so a device doesn't hop between the two while the other devices stay put, and it's
+ * published in [server] for the Lidarr and Maloja the server offers.
  */
 class ConnectRouter(private val client: ConnectClient) {
-    private data class Found(val server: String, val present: Boolean, val at: Long)
+    private data class Found(val server: String, val info: TonearmServerInfo?, val at: Long)
 
     private val lock = Mutex()
     @Volatile private var found: Found? = null
+    private val _server = MutableStateFlow<TonearmServerInfo?>(null)
+    /** The Tonearm server of the active music server, once looked up; null if there's none. */
+    val server: StateFlow<TonearmServerInfo?> = _server.asStateFlow()
 
     /** [lidarr] is only asked when there's no Tonearm server. */
     suspend fun route(session: ServerSession?, lidarr: suspend () -> Pair<LidarrConfig, String>?): ConnectRoute {
-        if (session != null && hasServer(session)) return ConnectRoute.Server(session)
+        if (session != null && lookup(session) != null) return ConnectRoute.Server(session)
         val (config, key) = lidarr() ?: throw ConnectUnavailableException()
         return ConnectRoute.Lidarr(config, key)
     }
 
-    private suspend fun hasServer(session: ServerSession): Boolean = lock.withLock {
+    /**
+     * Looks the server up again if what's known is old (or about another music server). Network errors
+     * keep the last answer, so a bad moment doesn't switch Lidarr and Maloja back to the app's own settings.
+     */
+    suspend fun refresh(session: ServerSession?): TonearmServerInfo? {
+        if (session == null) {
+            _server.value = null
+            return null
+        }
+        return try {
+            lookup(session)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            _server.value?.takeIf { it.baseUrl == session.config.baseUrl }
+        }
+    }
+
+    private suspend fun lookup(session: ServerSession): TonearmServerInfo? = lock.withLock {
         val server = session.config.baseUrl + "|" + session.config.username
         val now = System.currentTimeMillis()
-        found?.takeIf { it.server == server && now - it.at < if (it.present) RECHECK_FOUND_MS else RECHECK_MISSING_MS }?.let { return it.present }
-        client.findServer(session).also { found = Found(server, it, now) }
+        found?.takeIf { it.server == server && now - it.at < if (it.info != null) RECHECK_FOUND_MS else RECHECK_MISSING_MS }?.let { return it.info }
+        client.findServer(session).also {
+            found = Found(server, it, now)
+            _server.value = it
+        }
     }
 
     private companion object {

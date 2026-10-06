@@ -5,6 +5,8 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import mockwebserver3.Dispatcher
@@ -19,16 +21,32 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
+/** Against a fake Lidarr whose metadata knows Radiohead's albums and tracks. */
 class SongRequestsTest {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true; coerceInputValues = true; explicitNulls = false }
     private val server = MockWebServer()
-    private val posted = mutableListOf<Pair<String, String>>()
-    private val recordingQueries = mutableListOf<String>()
+    /** Method, path and body of every change sent to Lidarr. */
+    private val changes = mutableListOf<Triple<String, String, String>>()
     private lateinit var requests: SongRequests
     private lateinit var config: LidarrConfig
+    private var radioheadInLidarr = false
+    private var trackLooks = 0
 
     private val album = """{"title":"OK Computer","foreignAlbumId":"rg-ok","albumType":"Album","monitored":false,
         "artist":{"artistName":"Radiohead","foreignArtistId":"a-rh"}}"""
+
+    /** Lidarr fills in a new artist's tracks over a few looks. */
+    private fun tracks(): String {
+        trackLooks++
+        val all = listOf(
+            """{"id":1,"title":"Karma Police","albumId":12}""",
+            """{"id":2,"title":"Karma Police","albumId":11}""",
+            """{"id":3,"title":"Karma Police (Remastered)","albumId":10}""",
+            """{"id":4,"title":"Lucky","albumId":10}""",
+        )
+        val shown = if (radioheadInLidarr) all.size else (trackLooks - 1).coerceIn(0, all.size)
+        return all.take(shown).joinToString(",", "[", "]")
+    }
 
     @Before
     fun setUp() {
@@ -36,22 +54,24 @@ class SongRequestsTest {
             override fun dispatch(request: RecordedRequest): MockResponse {
                 val path = request.url.encodedPath
                 val term = request.url.queryParameter("term").orEmpty()
-                if (request.method == "POST") posted += path to request.body!!.utf8()
-                if (path == "/ws/2/recording") recordingQueries += request.url.queryParameter("query").orEmpty()
+                if (request.method != "GET") changes += Triple(request.method, path + (request.url.encodedQuery?.let { "?$it" } ?: ""), request.body?.utf8().orEmpty())
                 return when {
-                    path == "/ws/2/recording" && "Unknown" in request.url.queryParameter("query").orEmpty() -> MockResponse(body = """{"recordings":[]}""")
-                    path == "/ws/2/recording" -> MockResponse(body = """{"recordings":[{"id":"r1","title":"Karma Police","score":100,
-                        "artist-credit":[{"name":"Radiohead"}],"releases":[
-                        {"status":"Official","date":"2008","release-group":{"id":"rg-best","title":"The Best Of","primary-type":"Album","secondary-types":["Compilation"]}},
-                        {"status":"Official","date":"1997-08-25","release-group":{"id":"rg-single","title":"Karma Police","primary-type":"Single"}},
-                        {"status":"Official","date":"1997-05-21","release-group":{"id":"rg-ok","title":"OK Computer","primary-type":"Album"}}]}]}""")
-                    path == "/api/v1/album/lookup" && (term == "lidarr:rg-ok" || term == "Radiohead OK Computer") -> MockResponse(body = "[$album]")
+                    path == "/api/v1/album/lookup" && term == "Radiohead OK Computer" -> MockResponse(body = "[$album]")
                     path == "/api/v1/album/lookup" -> MockResponse(body = "[]")
-                    path == "/api/v1/artist/lookup" && term == "Radiohead" -> MockResponse(body = """[{"artistName":"Radiohead","foreignArtistId":"a-rh"}]""")
+                    path == "/api/v1/artist/lookup" && term == "Radiohead" ->
+                        MockResponse(body = """[{"artistName":"Radiohead","foreignArtistId":"a-rh"${if (radioheadInLidarr) ""","id":4""" else ""}}]""")
                     path == "/api/v1/artist/lookup" -> MockResponse(body = """[{"artistName":"Nobody Known","foreignArtistId":"a-n"}]""")
-                    path == "/api/v1/artist" -> MockResponse(body = "[]")
+                    path == "/api/v1/artist" && request.method == "GET" ->
+                        MockResponse(body = if (radioheadInLidarr) """[{"id":4,"artistName":"Radiohead","foreignArtistId":"a-rh"}]""" else "[]")
+                    path == "/api/v1/artist" && request.method == "POST" -> MockResponse(body = """{"id":4,"artistName":"Radiohead","foreignArtistId":"a-rh"}""")
                     path == "/api/v1/rootfolder" -> MockResponse(body = """[{"id":1,"path":"/music","defaultQualityProfileId":2,"defaultMetadataProfileId":3}]""")
+                    path == "/api/v1/track" -> MockResponse(body = tracks())
+                    path == "/api/v1/album" && request.method == "GET" -> MockResponse(body = """[
+                        {"id":10,"title":"OK Computer","artistId":4,"albumType":"Album","releaseDate":"1997-05-21T00:00:00Z","secondaryTypes":[]},
+                        {"id":11,"title":"Karma Police","artistId":4,"albumType":"Single","releaseDate":"1997-08-25T00:00:00Z"},
+                        {"id":12,"title":"The Best Of","artistId":4,"albumType":"Album","releaseDate":"2008-06-02T00:00:00Z","secondaryTypes":[{"id":1,"name":"Compilation"}]}]""")
                     path == "/api/v1/album" && request.method == "POST" -> MockResponse(body = album)
+                    path == "/api/v1/album/monitor" || path == "/api/v1/command" || path.startsWith("/api/v1/artist/") -> MockResponse(body = "{}")
                     else -> MockResponse(code = 404)
                 }
             }
@@ -59,49 +79,62 @@ class SongRequestsTest {
         server.start()
         val http = IntegrationHttp(OkHttpClient()) { null }
         val base = server.url("/").toString()
-        requests = SongRequests(LidarrClient(http, json), MusicBrainz(OkHttpClient(), json, base))
+        requests = SongRequests(LidarrClient(http, json)) { }
         config = LidarrConfig(url = base.trimEnd('/'), keyEnc = "")
     }
 
     @After
     fun tearDown() = server.close()
 
+    private fun change(method: String, path: String) = changes.single { it.first == method && it.second.startsWith(path) }
+
     @Test
-    fun `a liked song requests the studio album it first came out on`() = runTest {
+    fun `a liked song requests the studio album it first came out on, found in lidarr's own track lists`() = runTest {
         val result = requests.request(config, "k", TrackRef("Karma Police", "Radiohead - Topic"))
         assertEquals(SongRequestResult.Album("OK Computer", "Radiohead"), result)
-        val body = json.parseToJsonElement(posted.single { it.first == "/api/v1/album" }.second).jsonObject
-        assertTrue(body["monitored"]!!.jsonPrimitive.boolean)
-        // Only the album is monitored, not the artist's other albums.
-        assertEquals("none", (body["artist"] as JsonObject)["addOptions"]!!.jsonObject["monitor"]!!.jsonPrimitive.content)
+        // The artist went in without monitoring or searching anything…
+        val added = json.parseToJsonElement(change("POST", "/api/v1/artist").third).jsonObject
+        assertEquals("none", added["addOptions"]!!.jsonObject["monitor"]!!.jsonPrimitive.content)
+        assertFalse(added["addOptions"]!!.jsonObject["searchForMissingAlbums"]!!.jsonPrimitive.boolean)
+        // …and only the album with the song is wanted, once Lidarr had listed all the tracks.
+        val monitored = json.parseToJsonElement(change("PUT", "/api/v1/album/monitor").third).jsonObject
+        assertEquals(10, monitored["albumIds"]!!.jsonArray.single().jsonPrimitive.int)
+        assertTrue(trackLooks >= 5)
+        assertTrue(changes.none { it.first == "DELETE" })
+    }
+
+    @Test
+    fun `an artist already in lidarr is used as it is`() = runTest {
+        radioheadInLidarr = true
+        val result = requests.request(config, "k", TrackRef("Karma Police", "Radiohead"))
+        assertEquals(SongRequestResult.Album("OK Computer", "Radiohead"), result)
+        assertTrue(changes.none { it.first == "POST" && it.second == "/api/v1/artist" })
+        assertEquals(1, trackLooks)
     }
 
     @Test
     fun `an album named by the source is used directly`() = runTest {
         val result = requests.request(config, "k", TrackRef("Lucky", "Radiohead", album = "OK Computer"))
         assertEquals(SongRequestResult.Album("OK Computer", "Radiohead"), result)
-        assertFalse(server.takeRequestPaths().any { it.startsWith("/ws/2/") })
+        val body = json.parseToJsonElement(change("POST", "/api/v1/album").third).jsonObject
+        assertTrue(body["monitored"]!!.jsonPrimitive.boolean)
+        // Only the album is monitored, not the artist's other albums.
+        assertEquals("none", (body["artist"] as JsonObject)["addOptions"]!!.jsonObject["monitor"]!!.jsonPrimitive.content)
+        assertEquals(0, trackLooks)
     }
 
     @Test
-    fun `the artist's MusicBrainz id narrows the search`() = runTest {
-        requests.request(config, "k", TrackRef("Karma Police", "Radiohead"))
-        assertTrue(recordingQueries.any { "arid:a-rh" in it })
-    }
-
-    @Test
-    fun `no album means no request, not the artist's whole discography`() = runTest {
+    fun `a song on none of the albums requests nothing and takes the artist out again`() = runTest {
         val result = requests.request(config, "k", TrackRef("Unknown Song", "Radiohead"))
         assertTrue(result is SongRequestResult.NotFound)
-        assertTrue(posted.none { it.first == "/api/v1/artist" })
+        assertTrue(change("DELETE", "/api/v1/artist/4").second.contains("deleteFiles=false"))
+        assertTrue(changes.none { it.second.startsWith("/api/v1/album/monitor") })
     }
 
     @Test
     fun `no exact artist means nothing is added`() = runTest {
         val result = requests.request(config, "k", TrackRef("Unknown Song", "Nobody"))
         assertTrue(result is SongRequestResult.NotFound)
-        assertTrue(posted.isEmpty())
+        assertTrue(changes.isEmpty())
     }
-
-    private fun MockWebServer.takeRequestPaths(): List<String> = List(requestCount) { takeRequest().url.encodedPath }
 }

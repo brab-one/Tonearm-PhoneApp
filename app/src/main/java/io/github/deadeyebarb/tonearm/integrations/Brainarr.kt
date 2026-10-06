@@ -66,7 +66,8 @@ class BrainarrService(
 
     suspend fun load(): BrainarrData = coroutineScope {
         val (config, key) = integrations.requireLidarr()
-        val lists = lists(config, key)
+        // Brainarr's settings are for Navidrome admins when Lidarr comes through the Tonearm server.
+        val lists = if (config.limited) emptyList() else lists(config, key)
         if (lists.isEmpty()) {
             store.updateData { it.copy(available = false) }
             return@coroutineScope BrainarrData(emptyList(), emptyList()).also { _data.value = it }

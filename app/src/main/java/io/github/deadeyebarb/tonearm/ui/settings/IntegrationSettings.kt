@@ -47,6 +47,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import io.github.deadeyebarb.tonearm.AppContainer
 import io.github.deadeyebarb.tonearm.container
@@ -69,7 +70,7 @@ import kotlinx.coroutines.launch
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 class MalojaSettingsViewModel(private val c: AppContainer) : ViewModel() {
-    private val existing = c.integrations.state.value.maloja
+    private val existing = c.integrations.repository.state.value.maloja
     val isNew = existing == null
     var url by mutableStateOf(existing?.url.orEmpty())
     var key by mutableStateOf(existing?.let { c.integrations.decrypt(it.keyEnc) }.orEmpty())
@@ -103,7 +104,7 @@ class MalojaSettingsViewModel(private val c: AppContainer) : ViewModel() {
 }
 
 class LidarrSettingsViewModel(private val c: AppContainer) : ViewModel() {
-    private val existing = c.integrations.state.value.lidarr
+    private val existing = c.integrations.repository.state.value.lidarr
     val isNew = existing == null
     var url by mutableStateOf(existing?.url.orEmpty())
     var key by mutableStateOf(existing?.let { c.integrations.decrypt(it.keyEnc) }.orEmpty())
@@ -187,6 +188,8 @@ fun MalojaSettingsScreen() {
                     "music: what you play most, favourites you've drifted away from, and similar artists.",
                 style = MaterialTheme.typography.bodyMedium, color = Hud.colors.dim,
             )
+            val integrations by c.integrations.state.collectAsStateWithLifecycle()
+            if (integrations.maloja?.viaServer == true) ThroughServerNote("Maloja")
             OutlinedTextField(
                 vm.url, { vm.url = it }, label = { Text("Maloja address") }, placeholder = { Text("https://maloja.example.com") },
                 singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), modifier = Modifier.fillMaxWidth(),
@@ -213,6 +216,16 @@ fun MalojaSettingsScreen() {
             Spacer(Modifier.height(24.dp))
         }
     }
+}
+
+/** Shown when the Tonearm server provides [service] with its own key. */
+@Composable
+private fun ThroughServerNote(service: String, extra: String = "") {
+    Text(
+        "✓ $service comes through the Tonearm server on your music server, which holds its key: nothing to set up here. " +
+            "What you enter below is only used without it.$extra",
+        style = MaterialTheme.typography.bodyMedium, color = Hud.colors.accent,
+    )
 }
 
 private val MONITOR_OPTIONS = listOf(
@@ -242,6 +255,10 @@ fun LidarrSettingsScreen() {
                     "from search or from your Maloja recommendations. Once Lidarr imports them and your server rescans, they show up here.",
                 style = MaterialTheme.typography.bodyMedium, color = Hud.colors.dim,
             )
+            val integrations by c.integrations.state.collectAsStateWithLifecycle()
+            if (integrations.lidarr?.viaServer == true) {
+                ThroughServerNote("Lidarr", if (integrations.lidarr?.limited == true) " You can request music and see downloads; Brainarr is for its admins." else "")
+            }
             OutlinedTextField(
                 vm.url, { vm.url = it }, label = { Text("Lidarr address") }, placeholder = { Text("https://lidarr.example.com") },
                 singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), modifier = Modifier.fillMaxWidth(),

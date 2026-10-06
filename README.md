@@ -11,8 +11,9 @@ Related repositories:
 - [**Tonearm**](https://github.com/brab-one/Tonearm): start here, the short install and setup guide for everything
 - [**Tonearm-Desktop**](https://github.com/brab-one/Tonearm-Desktop): the desktop app for Linux and
   Windows (native, not a web app) with the same server support and a Lidarr/Brainarr dashboard
-- [**Tonearm-Server**](https://github.com/brab-one/Tonearm-Server): Tonearm Connect for everyone on your
-  Navidrome, so this app can see and control the desktop player and move playback between the two
+- [**Tonearm-Server**](https://github.com/brab-one/Tonearm-Server): for everyone on your Navidrome: Tonearm
+  Connect (this app controls the desktop player and moves playback between the two), Lidarr and Maloja
+  without handing out their keys, and AI picks from your Ollama
 - [**Tonearm-Connect**](https://github.com/brab-one/Tonearm-Connect): the same as a Lidarr plugin, used when
   there's no Tonearm server
 
@@ -70,6 +71,8 @@ Related repositories:
 - Maloja mix (in Android Auto): songs similar to what you've been playing, minus what you played recently
 - Request any artist or album through Lidarr from search, recommendations or the Request screen,
   and follow Lidarr's download queue
+- **AI picks** (with the Tonearm server and Ollama): albums by artists you don't have, from what you play
+  and like, under Discover; tap one to open it on YouTube Music, or request it
 - **Brainarr** picks: what the AI import list in your Lidarr added, with library / download status,
   "Ask Brainarr" (top of Discover) to have Lidarr run it now, "Get" for picks it added unmonitored, and a Brainarr mix of the ones you have
 - **Weekly picks** (Brainarr screen): every week Brainarr picks a few albums, Lidarr downloads them and they arrive
@@ -189,6 +192,11 @@ artwork shown in the notification and Android Auto.
 
 Open **Settings → Integrations** (or the **Discover** tab).
 
+With the [Tonearm server](https://github.com/brab-one/Tonearm-Server) holding Lidarr's and Maloja's keys,
+there's nothing to enter: both come through it with your music server login, and the settings say so (what
+you enter there is only used without the server). Through it, Navidrome admins get all of Lidarr; everyone
+else can request music and see downloads.
+
 **Maloja** needs its address and an API key (Maloja → Settings → API keys; reading charts works
 without one, sending plays needs it). Turn on *Send plays to Maloja* only if your music server doesn't
 already forward scrobbles there, or every play is counted twice. Similar-artist suggestions come from
@@ -232,8 +240,9 @@ yet, the **On YouTube Music** section of Search, and "play … on Tonearm" in th
 no match. They stream from YouTube Music (Opus, up to 160 kbps; Now Playing shows a YOUTUBE MUSIC tag)
 in the same queue as library songs, with the visualizer, cache-ahead and Maloja scrobbling (if on).
 
-Playing a song requests nothing. **Liking** one asks Lidarr for the album it's on (found through
-MusicBrainz, studio albums first), so the lossless version lands on your server; once it's there the song
+Playing a song requests nothing. **Liking** one asks Lidarr for the album it's on (the one YouTube Music
+names, else found in Lidarr's own track lists for the artist, studio albums first; the app doesn't contact
+MusicBrainz itself), so the lossless version lands on your server; once it's there the song
 is liked in your library. If its album can't be found, nothing is requested. Turn this off under
 **Settings → YouTube Music → Request songs you like**.
 
