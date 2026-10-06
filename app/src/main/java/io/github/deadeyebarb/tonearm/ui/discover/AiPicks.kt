@@ -7,7 +7,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
@@ -28,11 +31,14 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.deadeyebarb.tonearm.connect.AiPick
 import io.github.deadeyebarb.tonearm.connect.AiPicks
+import io.github.deadeyebarb.tonearm.connect.DiscoveryPick
+import io.github.deadeyebarb.tonearm.connect.DiscoveryPicks
 import io.github.deadeyebarb.tonearm.container
 import io.github.deadeyebarb.tonearm.integrations.WeeklyPicksWorker
 import io.github.deadeyebarb.tonearm.subsonic.userMessage
 import io.github.deadeyebarb.tonearm.ui.YtAlbumRoute
 import io.github.deadeyebarb.tonearm.ui.common.AppActions
+import io.github.deadeyebarb.tonearm.ui.request.RemoteCover
 import io.github.deadeyebarb.tonearm.ui.theme.Hud
 import io.github.deadeyebarb.tonearm.ui.theme.HudButton
 import io.github.deadeyebarb.tonearm.ui.theme.HudPanel
@@ -104,6 +110,85 @@ fun AiPicksPanel(actions: AppActions, modifier: Modifier = Modifier) {
             current?.picks?.forEach { pick ->
                 AiPickRow(pick, canRequest = integrations.lidarr != null, onYouTube = settings.youtubeFallback, actions = actions)
             }
+        }
+    }
+}
+
+/**
+ * Discovery picks: artists you don't have that the ones you play point to (Deezer's related artists, through
+ * the Tonearm server), with an album each. Tap one to open it on YouTube Music; Request asks Lidarr for it.
+ */
+@Composable
+fun DiscoveryPicksPanel(actions: AppActions, modifier: Modifier = Modifier) {
+    val c = LocalContext.current.container
+    val server by c.tonearmServer.server.collectAsStateWithLifecycle()
+    if (server?.discovery != true) return
+    val integrations by c.integrations.state.collectAsStateWithLifecycle()
+    var picks by remember { mutableStateOf<DiscoveryPicks?>(null) }
+    var failed by remember { mutableStateOf<String?>(null) }
+    var asks by remember { mutableIntStateOf(0) }
+    LaunchedEffect(server?.baseUrl, asks) {
+        try {
+            picks = c.connect.discover(refresh = asks > 0)
+            failed = null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            failed = e.userMessage()
+        }
+    }
+    val hud = Hud.colors
+    val current = picks
+    HudPanel(modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Column(Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("DISCOVERY PICKS", style = MaterialTheme.typography.titleLarge.copy(fontSize = 15.sp))
+                    Text(
+                        when {
+                            current == null && failed == null -> "LOOKING AT WHAT YOU PLAY…"
+                            current?.picks.isNullOrEmpty() -> "NOTHING YET: PLAY AND LIKE SOME MUSIC"
+                            else -> "${current!!.picks.size} ARTISTS YOU DON'T HAVE"
+                        },
+                        style = MaterialTheme.typography.labelSmall, color = hud.accent,
+                    )
+                }
+                if (current != null) HudButton("Refresh", { asks++ }, filled = false)
+            }
+            (failed ?: current?.problem)?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = hud.danger, modifier = Modifier.padding(top = 6.dp))
+            }
+            current?.picks?.forEach { pick -> DiscoveryRow(pick, canRequest = integrations.lidarr != null, actions = actions) }
+        }
+    }
+}
+
+@Composable
+private fun DiscoveryRow(pick: DiscoveryPick, canRequest: Boolean, actions: AppActions) {
+    val c = LocalContext.current.container
+    val hud = Hud.colors
+    val open = Modifier.clickable {
+        actions.launch {
+            val album = pick.album?.let { c.catalog.findAlbum(pick.artist, it) }
+            if (album != null) actions.navigate(YtAlbumRoute(album.url, album.title, album.artist, album.imageUrl)) else actions.findOnYouTube(pick.artist)
+        }
+    }
+    Row(open.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        RemoteCover(pick.coverUrl ?: pick.imageUrl, Icons.Rounded.Album, Modifier.size(52.dp))
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(pick.album ?: pick.artist, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                (pick.artist + (pick.year?.let { " · $it" } ?: "")).uppercase(),
+                style = MaterialTheme.typography.labelSmall, color = hud.accent2, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+            if (pick.because.isNotEmpty()) {
+                Text("Because you play " + pick.because.joinToString(" and "), style = MaterialTheme.typography.bodySmall, color = hud.dim, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        if (canRequest) {
+            Spacer(Modifier.width(10.dp))
+            HudButton("Request", { pick.album?.let { actions.requestAlbum(it, pick.artist) } ?: actions.requestArtistByName(pick.artist) }, filled = false)
         }
     }
 }

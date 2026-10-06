@@ -30,6 +30,15 @@ class QueueContinuation(
         }
     }
 
+    /** Songs like [entry]: the library's similar songs, then YouTube Music's radio (with library copies swapped in). */
+    suspend fun similarTo(entry: QueueSong): List<QueueSong> {
+        val session = sessions.active.value
+        val songs = continuation.similar(entry.song, YouTubeMusic.isYouTube(entry.serverId), session, setOf(key(entry)), settings.state.value.youtubeFallback)
+        return songs.mapNotNull { next ->
+            if (next.youtube) QueueSong(YouTubeMusic.SOURCE_ID, next.song) else session?.let { QueueSong(it.id, next.song) }
+        }
+    }
+
     companion object {
         fun key(entry: QueueSong) = Continuation.key(entry.song.id, YouTubeMusic.isYouTube(entry.serverId))
     }

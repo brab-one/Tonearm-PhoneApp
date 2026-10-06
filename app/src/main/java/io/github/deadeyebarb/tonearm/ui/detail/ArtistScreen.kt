@@ -1,10 +1,5 @@
 package io.github.deadeyebarb.tonearm.ui.detail
 
-import androidx.compose.runtime.LaunchedEffect
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import io.github.deadeyebarb.tonearm.integrations.Names
-import io.github.deadeyebarb.tonearm.youtube.YtAlbum
-import io.github.deadeyebarb.tonearm.youtube.YtArtist
 import android.text.Html
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.clickable
@@ -31,24 +26,27 @@ import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.github.deadeyebarb.tonearm.connect.SimilarArtist
 import io.github.deadeyebarb.tonearm.container
+import io.github.deadeyebarb.tonearm.integrations.Names
 import io.github.deadeyebarb.tonearm.subsonic.Artist
 import io.github.deadeyebarb.tonearm.subsonic.ArtistInfo
 import io.github.deadeyebarb.tonearm.subsonic.Song
 import io.github.deadeyebarb.tonearm.subsonic.StarKind
 import io.github.deadeyebarb.tonearm.ui.common.AlbumCard
-import io.github.deadeyebarb.tonearm.ui.theme.Hud
-import io.github.deadeyebarb.tonearm.ui.theme.glow
-import io.github.deadeyebarb.tonearm.ui.theme.glowBorder
 import io.github.deadeyebarb.tonearm.ui.common.AppActions
 import io.github.deadeyebarb.tonearm.ui.common.ArtistCircle
 import io.github.deadeyebarb.tonearm.ui.common.CoverArt
@@ -60,6 +58,12 @@ import io.github.deadeyebarb.tonearm.ui.common.SectionHeader
 import io.github.deadeyebarb.tonearm.ui.common.SongRow
 import io.github.deadeyebarb.tonearm.ui.common.StarButton
 import io.github.deadeyebarb.tonearm.ui.common.rememberLoader
+import io.github.deadeyebarb.tonearm.ui.request.RemoteCover
+import io.github.deadeyebarb.tonearm.ui.theme.Hud
+import io.github.deadeyebarb.tonearm.ui.theme.glow
+import io.github.deadeyebarb.tonearm.ui.theme.glowBorder
+import io.github.deadeyebarb.tonearm.youtube.YtAlbum
+import io.github.deadeyebarb.tonearm.youtube.YtArtist
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -124,15 +128,62 @@ fun ArtistScreen(id: String) {
                     item(span = full) { SectionHeader("About") }
                     item(span = full) { Biography(bio) }
                 }
-                val similar = data.info?.similarArtist.orEmpty().filter { it.inLibrary }.distinctBy { it.id }
-                if (similar.isNotEmpty()) {
-                    item(span = full) { SectionHeader("Similar artists") }
-                    item(span = full) {
-                        LazyRow { items(similar, key = { it.id }) { artist -> ArtistCircle(artist) { actions.openArtist(artist.id) } } }
-                    }
-                }
+                item(span = full) { SimilarArtists(data) }
             }
         }
+    }
+}
+
+/**
+ * Similar artists: from the Tonearm server when it has them (Deezer's related artists, including ones you
+ * don't have, which open on YouTube Music), else the music server's own similar artists in the library.
+ */
+@Composable
+private fun SimilarArtists(page: ArtistPage) {
+    val c = LocalContext.current.container
+    val actions = LocalActions.current
+    val server by c.tonearmServer.server.collectAsStateWithLifecycle()
+    val own = page.info?.similarArtist.orEmpty().filter { it.inLibrary }.distinctBy { it.id }
+    var found by remember(page.artist.name) { mutableStateOf<List<SimilarArtist>?>(null) }
+    LaunchedEffect(page.artist.name, server?.discovery) {
+        if (server?.discovery == true) found = runCatching { c.connect.similarArtists(page.artist.name) }.getOrNull()
+    }
+    val similar = found
+    if (similar.isNullOrEmpty()) {
+        if (own.isEmpty()) return
+        Column {
+            SectionHeader("Similar artists")
+            LazyRow { items(own, key = { it.id }) { artist -> ArtistCircle(artist) { actions.openArtist(artist.id) } } }
+        }
+        return
+    }
+    // Ones in the library open there; the rest on YouTube Music.
+    fun open(artist: SimilarArtist) = actions.launch {
+        val key = Names.normalize(artist.artist)
+        val id = if (!artist.inLibrary) null else own.firstOrNull { Names.normalize(it.name) == key }?.id
+            ?: c.api.search(artist.artist, artistCount = 10, albumCount = 0, songCount = 0).artist.firstOrNull { Names.normalize(it.name) == key }?.id
+        if (id != null) actions.openArtist(id) else actions.findOnYouTube(artist.artist)
+    }
+    Column {
+        SectionHeader("Similar artists")
+        LazyRow { items(similar, key = { it.artist }) { artist -> SimilarCircle(artist) { open(artist) } } }
+    }
+}
+
+@Composable
+private fun SimilarCircle(artist: SimilarArtist, onClick: () -> Unit) {
+    val hud = Hud.colors
+    Column(
+        Modifier.width(120.dp).clip(MaterialTheme.shapes.medium).clickable(onClick = onClick).padding(8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        RemoteCover(artist.imageUrl, Icons.Rounded.Person, Modifier.size(104.dp), shape = CircleShape)
+        Spacer(Modifier.height(8.dp))
+        Text(artist.artist, style = MaterialTheme.typography.titleSmall, maxLines = 2, textAlign = TextAlign.Center, overflow = TextOverflow.Ellipsis)
+        Text(
+            if (artist.inLibrary) "IN LIBRARY" else "YOUTUBE MUSIC",
+            style = MaterialTheme.typography.labelSmall, color = if (artist.inLibrary) hud.ok else hud.accent2,
+        )
     }
 }
 

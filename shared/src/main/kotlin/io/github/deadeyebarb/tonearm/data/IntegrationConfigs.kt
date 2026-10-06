@@ -72,6 +72,8 @@ data class TonearmServerInfo(
     val maloja: Boolean = false,
     /** Album suggestions from its Ollama. */
     val recommendations: Boolean = false,
+    /** Discovery picks and similar artists (from Deezer). */
+    val discovery: Boolean = false,
 ) {
     fun serviceUrl(service: String) = baseUrl.trimEnd('/') + "/connect-tonearm/" + service
 }

@@ -114,6 +114,7 @@ fun DiscoverScreen() {
                 }
                 if (data.libraryEmpty) item { EmptyLibraryBanner(lidarrReady, actions) }
                 item { DailyCard(actions) }
+                item { DiscoveryPicksPanel(actions) }
                 item { AiPicksPanel(actions) }
                 if (data.rotation.isNotEmpty()) {
                     item { HudSectionHeader("Heavy rotation") }
@@ -186,6 +187,7 @@ private fun EmptyLibraryBanner(lidarrReady: Boolean, actions: AppActions) {
 @Composable
 private fun NotConnected(actions: AppActions, lidarrReady: Boolean, modifier: Modifier) {
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        DiscoveryPicksPanel(actions, Modifier.padding(bottom = 8.dp))
         AiPicksPanel(actions, Modifier.padding(bottom = 8.dp))
         EmptyState(
             Icons.Rounded.AutoAwesome, "Recommendations from Maloja",

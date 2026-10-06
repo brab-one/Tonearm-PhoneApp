@@ -199,6 +199,20 @@ class ConnectClientTest {
     }
 
     @Test
+    fun `discovery picks and similar artists come from the tonearm server`() = runTest {
+        respond("""{"server":"tonearm","protocol":2,"discovery":true,"recommendations":false}""")
+        assertTrue(client.findServer(session())!!.discovery)
+        respond("""{"picks":[{"artist":"Björk","album":"Homogenic","year":1997,"because":["Radiohead","Portishead"]}],"madeAt":5}""")
+        val picks = client.discover(session(), refresh = true)
+        assertEquals(DiscoveryPick("Björk", "Homogenic", 1997, because = listOf("Radiohead", "Portishead")), picks.picks.single())
+        assertEquals("true", server.takeRequest().let { server.takeRequest() }.url.queryParameter("refresh"))
+        respond("""{"artist":"Portishead","similar":[{"artist":"Massive Attack","inLibrary":true},{"artist":"Tricky","imageUrl":"https://img/t.jpg"}]}""")
+        val similar = client.similarArtists(session(), "Portishead")
+        assertEquals(listOf("Massive Attack" to true, "Tricky" to false), similar.map { it.artist to it.inLibrary })
+        assertEquals("Portishead", server.takeRequest().url.queryParameter("artist"))
+    }
+
+    @Test
     fun `remote positions move on while playing`() {
         val state = PlaybackState(playing = true, positionMs = 10_000, durationMs = 60_000, at = 1_000)
         assertEquals(15_000, state.positionAt(now = 6_000))

@@ -128,10 +128,11 @@ class AppActions(
         player.play(container.api.randomSongs(200, session).map { QueueSong(session.id, it) })
     }
 
-    /** Plays songs similar to [song] (needs Last.fm / ListenBrainz data on the server). */
+    /** Plays [item] and songs like it: the server's similar songs, then YouTube Music's radio. */
     fun instantMix(item: QueueSong) = launch {
-        val similar = container.api.similarSongs(item.song.id)
-        if (similar.isEmpty()) message("The server has no similar songs for this one") else player.play(listOf(item) + entries(similar))
+        message("Finding songs like ${item.song.title}…")
+        val similar = container.continuation.similarTo(item)
+        if (similar.isEmpty()) message("Found nothing like ${item.song.title}") else player.play(listOf(item) + similar)
     }
 
     fun download(items: List<QueueSong>) {

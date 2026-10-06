@@ -71,8 +71,13 @@ Related repositories:
 - Maloja mix (in Android Auto): songs similar to what you've been playing, minus what you played recently
 - Request any artist or album through Lidarr from search, recommendations or the Request screen,
   and follow Lidarr's download queue
+- **Discovery picks** (with the Tonearm server): artists you don't have that the ones you play point to
+  (Deezer's related artists), each with an album and "because you play …", under Discover
 - **AI picks** (with the Tonearm server and Ollama): albums by artists you don't have, from what you play
   and like, under Discover; tap one to open it on YouTube Music, or request it
+- **Similar artists** on artist pages, including ones you don't have (they open on YouTube Music), and
+  **Instant mix** for any song: the server's similar songs, else YouTube Music's radio with your own copies
+  played from the library
 - **Weekly picks** (in the AI picks panel): every week the first few AI picks are downloaded by Lidarr and arrive
   as a "Weekly picks" playlist. A week later the playlist and its music are deleted again, except albums with a
   song you liked or put in another playlist; like the playlist itself (and name it) to keep all of it

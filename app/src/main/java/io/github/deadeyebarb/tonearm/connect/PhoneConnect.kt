@@ -42,6 +42,12 @@ class PhoneConnect(
         return client.aiPicks(session, refresh)
     }
 
+    /** Artists you don't have that yours point to, from the Tonearm server; [refresh] makes new ones. */
+    suspend fun discover(refresh: Boolean = false): DiscoveryPicks = client.discover(sessions.active.value ?: sessions.awaitActive(), refresh)
+
+    /** Artists like [artist] (Deezer's related artists, through the Tonearm server), marked when you have them. */
+    suspend fun similarArtists(artist: String): List<SimilarArtist> = client.similarArtists(sessions.active.value ?: sessions.awaitActive(), artist)
+
     /** The Tonearm server when the music server has one, else the plugin in Lidarr. */
     suspend fun route(): ConnectRoute {
         val session = sessions.active.value ?: try {

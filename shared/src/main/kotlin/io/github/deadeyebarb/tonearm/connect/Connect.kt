@@ -149,6 +149,24 @@ data class AiPicks(
     val seed: String? = null,
 )
 
+/** An artist you don't have, found through artists you play (on Deezer), with the album to start with. */
+@Serializable
+data class DiscoveryPick(
+    val artist: String,
+    val album: String? = null,
+    val year: Int? = null,
+    val imageUrl: String? = null,
+    val coverUrl: String? = null,
+    /** Your artists that led here. */
+    val because: List<String> = emptyList(),
+)
+
+@Serializable
+data class DiscoveryPicks(val picks: List<DiscoveryPick> = emptyList(), val madeAt: Long = 0, val problem: String? = null)
+
+@Serializable
+data class SimilarArtist(val artist: String, val imageUrl: String? = null, val fans: Long = 0, val inLibrary: Boolean = false)
+
 /** Where Tonearm Connect runs: the Tonearm server beside the music server, or the plugin in Lidarr. */
 sealed interface ConnectRoute {
     /** The Tonearm server, reached at the music server's address with the same login; one hub per user. */
@@ -203,8 +221,17 @@ class ConnectClient(private val http: IntegrationHttp, private val json: Json) {
             lidarrAdmin = flag("lidarrAdmin"),
             maloja = flag("maloja"),
             recommendations = flag("recommendations"),
+            discovery = flag("discovery"),
         )
     }
+
+    /** Artists you don't have that yours point to (on Deezer), with an album each; kept by the server for a day. */
+    suspend fun discover(session: ServerSession, refresh: Boolean = false): DiscoveryPicks =
+        json.decodeFromJsonElement(DiscoveryPicks.serializer(), call(ConnectRoute.Server(session), "discover", listOf("refresh" to refresh.takeIf { it })))
+
+    /** Artists like [artist], marked when the library has them. */
+    suspend fun similarArtists(session: ServerSession, artist: String): List<SimilarArtist> =
+        json.decodeFromJsonElement(ListSerializer(SimilarArtist.serializer()), call(ConnectRoute.Server(session), "similar", listOf("artist" to artist))["similar"] ?: JsonArray(emptyList()))
 
     /**
      * The Tonearm server's album suggestions for this user (from its Ollama); [refresh] asks for new ones,
