@@ -1,6 +1,7 @@
 package io.github.deadeyebarb.tonearm.data
 
 import io.github.deadeyebarb.tonearm.integrations.SongRequestResult
+import io.github.deadeyebarb.tonearm.connect.PhoneConnect
 import io.github.deadeyebarb.tonearm.likes.LikesSync
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.builtins.ListSerializer
@@ -45,6 +46,7 @@ class Likes(
     private val integrations: IntegrationsService,
     private val requests: SongRequests,
     private val sync: LikesSync,
+    private val connect: PhoneConnect,
     private val settings: SettingsRepository,
     private val messages: Messages,
 ) {
@@ -84,10 +86,13 @@ class Likes(
         request(ref)
     }
 
-    /** Shares pending likes with the desktop through Lidarr (Tonearm Connect); false if that isn't possible. */
-    suspend fun syncNow(): Boolean {
-        val (config, key) = integrations.requireLidarrOrNull() ?: return false
-        return runCatching { sync.sync(config, key, pending) }.getOrDefault(false)
+    /** Shares pending likes with the desktop through Tonearm Connect; false if that isn't possible. */
+    suspend fun syncNow(): Boolean = try {
+        sync.sync(connect.route(), pending)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        false
     }
 
     private fun syncSoon() {

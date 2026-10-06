@@ -3,18 +3,25 @@ package io.github.deadeyebarb.tonearm.connect
 import io.github.deadeyebarb.tonearm.local.LocalMusic
 import android.content.Context
 import android.os.Build
-import io.github.deadeyebarb.tonearm.integrations.IntegrationNotConfiguredException
 import io.github.deadeyebarb.tonearm.integrations.IntegrationsService
 import io.github.deadeyebarb.tonearm.media.QueueSong
+import io.github.deadeyebarb.tonearm.subsonic.NoServerException
+import io.github.deadeyebarb.tonearm.subsonic.SessionManager
 import io.github.deadeyebarb.tonearm.subsonic.Song
 import io.github.deadeyebarb.tonearm.youtube.YouTubeMusic
 import java.util.UUID
 
 /**
- * The phone's side of Tonearm Connect: finds the other Tonearm apps (the desktop player) through
- * the Tonearm Connect plugin in Lidarr, and remote-controls them.
+ * The phone's side of Tonearm Connect: finds the other Tonearm apps (the desktop player) through the
+ * Tonearm server next to the music server, or the Tonearm Connect plugin in Lidarr, and remote-controls them.
  */
-class PhoneConnect(context: Context, private val integrations: IntegrationsService, private val client: ConnectClient) {
+class PhoneConnect(
+    context: Context,
+    private val sessions: SessionManager,
+    private val integrations: IntegrationsService,
+    private val client: ConnectClient,
+) {
+    private val router = ConnectRouter(client)
     private val prefs = context.getSharedPreferences("connect", Context.MODE_PRIVATE)
 
     /** Stable per install, so the desktop sees commands come from the same device. */
@@ -22,20 +29,21 @@ class PhoneConnect(context: Context, private val integrations: IntegrationsServi
     val deviceName: String = listOf(Build.MANUFACTURER.replaceFirstChar { it.uppercase() }, Build.MODEL).distinct().joinToString(" ")
 
     /** Other devices, online ones first. */
-    suspend fun devices(): List<ConnectDevice> {
-        val (config, key) = lidarr()
-        return client.devices(config, key).filter { it.state.id != deviceId }.sortedByDescending { it.online }
-    }
+    suspend fun devices(): List<ConnectDevice> =
+        client.devices(route()).filter { it.state.id != deviceId }.sortedByDescending { it.online }
 
     suspend fun send(target: String, command: ConnectCommand) {
-        val (config, key) = lidarr()
-        client.send(config, key, deviceId, target, command)
+        client.send(route(), deviceId, target, command)
     }
 
-    private suspend fun lidarr() = try {
-        integrations.requireLidarr()
-    } catch (_: IntegrationNotConfiguredException) {
-        throw IntegrationNotConfiguredException("Tonearm Connect runs through Lidarr: connect Lidarr in Settings first")
+    /** The Tonearm server when the music server has one, else the plugin in Lidarr. */
+    suspend fun route(): ConnectRoute {
+        val session = sessions.active.value ?: try {
+            sessions.awaitActive()
+        } catch (_: NoServerException) {
+            null
+        }
+        return router.route(session) { integrations.requireLidarrOrNull() }
     }
 
     private companion object {

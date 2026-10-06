@@ -11,8 +11,10 @@ Related repositories:
 - [**Tonearm**](https://github.com/brab-one/Tonearm): start here, the short install and setup guide for everything
 - [**Tonearm-Desktop**](https://github.com/brab-one/Tonearm-Desktop): the desktop app for Linux and
   Windows (native, not a web app) with the same server support and a Lidarr/Brainarr dashboard
-- [**Tonearm-Connect**](https://github.com/brab-one/Tonearm-Connect): the Lidarr plugin that lets this
-  app see and control the desktop player, and move playback between the two
+- [**Tonearm-Server**](https://github.com/brab-one/Tonearm-Server): Tonearm Connect for everyone on your
+  Navidrome, so this app can see and control the desktop player and move playback between the two
+- [**Tonearm-Connect**](https://github.com/brab-one/Tonearm-Connect): the same as a Lidarr plugin, used when
+  there's no Tonearm server
 
 ![Tonearm: home, Now Playing with the live spectrum, album](tools/screenshots.png)
 
@@ -50,7 +52,7 @@ Related repositories:
 - **Like** button everywhere (mini player, Now Playing, song menus, the notification and the car). Liking a
   YouTube Music song requests its album in Lidarr (never the whole discography) and likes it on the server
   once it's downloaded; until then it waits under Library → Liked. These likes are shared with the desktop app
-  through the Tonearm Connect plugin (1.1+), and songs from outside the library show whether they're in your
+  through Tonearm Connect (the Tonearm server, or the Lidarr plugin 1.1+), and songs from outside the library show whether they're in your
   library already, downloading in Lidarr or requested there
 - **YouTube Music artists and albums**: search and artist pages show artists' bios, popular songs and the albums
   you don't have, playable from YouTube Music, with "Request album"
@@ -242,8 +244,9 @@ downloaded, added to server playlists or show lyrics.
 
 ## Tonearm Connect (phone ↔ desktop)
 
-With the [Tonearm Connect](https://github.com/brab-one/Tonearm-Connect) plugin in your Lidarr (System →
-Plugins → `https://github.com/brab-one/Tonearm-Connect`), the **Devices** screen (the devices icon on Home
+With the [Tonearm server](https://github.com/brab-one/Tonearm-Server) next to your Navidrome (at
+`<music server>/connect-tonearm/`, found by itself; it serves every user with their own login), or else the
+[Tonearm Connect](https://github.com/brab-one/Tonearm-Connect) plugin in your Lidarr, the **Devices** screen (the devices icon on Home
 and in Now Playing) lists the [desktop players](https://github.com/brab-one/Tonearm-Desktop) and turns the
 phone into their remote: what's playing, seek, play/pause, skip, shuffle, repeat, volume and the queue
 (tap to jump). **Play this phone's music there** hands your queue and position to the desktop and pauses
@@ -295,6 +298,8 @@ python3 tools/mock-subsonic/server.py            # https://0.0.0.0:8443, user de
 python3 tools/mock-subsonic/server.py --no-mtls  # TLS without client auth
 python3 tools/mock-subsonic/server.py --empty-library  # no music, like a fresh server
 python3 tools/mock-subsonic/server.py --brainarr-untagged  # Brainarr list without a tag yet
+# in front of a Tonearm server, like the proxy (run the server with NAVIDROME_URL=http://127.0.0.1:8444)
+python3 tools/mock-subsonic/server.py --connect http://127.0.0.1:8790 --plain-port 8444
 ```
 
 On first run it creates a CA, a server certificate valid for `localhost`, `127.0.0.1` and
@@ -346,7 +351,7 @@ resolved at open time too, and fetched with the User-Agent of the YouTube client
   necessarily as the next song played.
 - Changing *Hi-res output* takes effect the next time the player starts.
 - The YouTube Music fallback depends on NewPipeExtractor keeping up with YouTube (see above).
-- Tonearm Connect needs the plugin in Lidarr; a device that quits uncleanly is listed as offline
+- Tonearm Connect needs the Tonearm server or the plugin in Lidarr; a device that quits uncleanly is listed as offline
   (with when it was last seen) until it's back.
 - Brainarr picks can't be previewed before Lidarr adds them, and artists that Lidarr's scheduled runs
   added before the list had a tag can't be told apart from your own additions.

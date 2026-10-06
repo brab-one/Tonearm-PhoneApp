@@ -3,7 +3,10 @@ package io.github.deadeyebarb.tonearm.connect
 import io.github.deadeyebarb.tonearm.data.LidarrConfig
 import io.github.deadeyebarb.tonearm.integrations.IntegrationHttp
 import io.github.deadeyebarb.tonearm.integrations.IntegrationHttpException
+import io.github.deadeyebarb.tonearm.subsonic.ServerSession
 import io.github.deadeyebarb.tonearm.subsonic.Song
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
@@ -123,9 +126,26 @@ class ConnectPluginMissingException :
             "(https://github.com/brab-one/Tonearm-Connect) and restart Lidarr.",
     )
 
+/** Where Tonearm Connect runs: the Tonearm server beside the music server, or the plugin in Lidarr. */
+sealed interface ConnectRoute {
+    /** The Tonearm server, reached at the music server's address with the same login; one hub per user. */
+    data class Server(val session: ServerSession) : ConnectRoute
+
+    data class Lidarr(val config: LidarrConfig, val key: String) : ConnectRoute
+}
+
+class ConnectUnavailableException :
+    IntegrationHttpException(
+        0,
+        "Tonearm Connect needs the Tonearm server next to your music server (https://github.com/brab-one/Tonearm-Server), " +
+            "or Lidarr with its Tonearm Connect plugin.",
+    )
+
 /**
- * Talks to the Tonearm Connect plugin in Lidarr, through Lidarr's provider action endpoint
+ * Talks to Tonearm Connect: the Tonearm server (`<music server>/connect-tonearm/api/<op>`, the data as the
+ * request body), or the plugin in Lidarr through Lidarr's provider action endpoint
  * (`POST api/v1/notification/action/tonearm?op=…`, the data in the resource's hidden Payload field).
+ * Both answer with the same JSON.
  */
 class ConnectClient(private val http: IntegrationHttp, private val json: Json) {
     private val deviceList = ListSerializer(RawDevice.serializer())
@@ -133,16 +153,31 @@ class ConnectClient(private val http: IntegrationHttp, private val json: Json) {
     @Serializable
     private data class RawDevice(val id: String = "", val online: Boolean = false, val secondsSinceSeen: Long = 0, val state: String? = null)
 
-    /** The plugin's protocol version. */
-    suspend fun hello(config: LidarrConfig, key: String): Int =
-        call(config, key, "hello")["protocol"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
+    /** The protocol version. */
+    suspend fun hello(route: ConnectRoute): Int =
+        call(route, "hello")["protocol"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
 
-    suspend fun publish(config: LidarrConfig, key: String, state: DeviceState) {
-        call(config, key, "publish", listOf("device" to state.id), json.encodeToString(DeviceState.serializer(), state))
+    /**
+     * Whether the music server's address has a Tonearm server. False when something else answers there
+     * (no such page, or Navidrome's web app); errors from a Tonearm server and network errors are thrown.
+     */
+    suspend fun findServer(session: ServerSession): Boolean {
+        val text = try {
+            http.post(session.connectUrl("hello"), "", session.client, service = "Tonearm server")
+        } catch (e: IntegrationHttpException) {
+            if (e.code in 400..499 && e.code != 401 && e.code != 429) return false
+            throw e
+        }
+        val response = runCatching { json.parseToJsonElement(text).jsonObject }.getOrNull() ?: return false
+        return response["server"]?.jsonPrimitive?.contentOrNull == "tonearm"
     }
 
-    suspend fun devices(config: LidarrConfig, key: String): List<ConnectDevice> {
-        val raw = json.decodeFromJsonElement(deviceList, call(config, key, "devices")["devices"] ?: JsonArray(emptyList()))
+    suspend fun publish(route: ConnectRoute, state: DeviceState) {
+        call(route, "publish", listOf("device" to state.id), json.encodeToString(DeviceState.serializer(), state))
+    }
+
+    suspend fun devices(route: ConnectRoute): List<ConnectDevice> {
+        val raw = json.decodeFromJsonElement(deviceList, call(route, "devices")["devices"] ?: JsonArray(emptyList()))
         return raw.mapNotNull { device ->
             val state = device.state?.let { runCatching { json.decodeFromString(DeviceState.serializer(), it) }.getOrNull() }
                 ?: return@mapNotNull null
@@ -150,13 +185,13 @@ class ConnectClient(private val http: IntegrationHttp, private val json: Json) {
         }
     }
 
-    suspend fun send(config: LidarrConfig, key: String, from: String, target: String, command: ConnectCommand) {
-        call(config, key, "send", listOf("device" to from, "target" to target), json.encodeToString(ConnectCommand.serializer(), command))
+    suspend fun send(route: ConnectRoute, from: String, target: String, command: ConnectCommand) {
+        call(route, "send", listOf("device" to from, "target" to target), json.encodeToString(ConnectCommand.serializer(), command))
     }
 
     /** Commands for [device] after [after], waiting up to [waitSeconds] for one; and the seq to resume from. */
-    suspend fun poll(config: LidarrConfig, key: String, device: String, after: Long, waitSeconds: Int): Pair<List<ReceivedCommand>, Long> {
-        val response = call(config, key, "poll", listOf("device" to device, "after" to after, "wait" to waitSeconds))
+    suspend fun poll(route: ConnectRoute, device: String, after: Long, waitSeconds: Int): Pair<List<ReceivedCommand>, Long> {
+        val response = call(route, "poll", listOf("device" to device, "after" to after, "wait" to waitSeconds))
         val commands = (response["commands"] as? JsonArray).orEmpty().mapNotNull { element ->
             val obj = element.jsonObject
             val payload = obj["payload"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
@@ -166,24 +201,24 @@ class ConnectClient(private val http: IntegrationHttp, private val json: Json) {
         return commands to (response["seq"]?.jsonPrimitive?.contentOrNull?.toLongOrNull() ?: after)
     }
 
-    suspend fun forget(config: LidarrConfig, key: String, device: String) {
-        call(config, key, "forget", listOf("device" to device))
+    suspend fun forget(route: ConnectRoute, device: String) {
+        call(route, "forget", listOf("device" to device))
     }
 
-    /** A shared document from the plugin's store (protocol 2): its JSON (null if never saved) and version. */
+    /** A shared document from the store (protocol 2): its JSON (null if never saved) and version. */
     data class Stored(val value: String?, val version: Long)
 
     /** Thrown by [storeGet]/[storePut] when the plugin is older than its store. */
     class StoreUnsupportedException : IntegrationHttpException(0, "Lidarr: Tonearm Connect is too old to share likes; update it under System → Plugins")
 
-    suspend fun storeGet(config: LidarrConfig, key: String, name: String): Stored = store {
-        val response = call(config, key, "get", listOf("key" to name))
+    suspend fun storeGet(route: ConnectRoute, name: String): Stored = store {
+        val response = call(route, "get", listOf("key" to name))
         Stored(response["value"]?.jsonPrimitive?.contentOrNull, response["version"]?.jsonPrimitive?.long ?: 0)
     }
 
     /** Saves [value] if the stored version is still [ifVersion]. Null when someone saved in between. */
-    suspend fun storePut(config: LidarrConfig, key: String, name: String, value: String, ifVersion: Long): Stored? = store {
-        val response = call(config, key, "put", listOf("key" to name, "ifVersion" to ifVersion), value)
+    suspend fun storePut(route: ConnectRoute, name: String, value: String, ifVersion: Long): Stored? = store {
+        val response = call(route, "put", listOf("key" to name, "ifVersion" to ifVersion), value)
         if (response["ok"]?.jsonPrimitive?.contentOrNull == "true") Stored(value, response["version"]?.jsonPrimitive?.long ?: 0) else null
     }
 
@@ -194,7 +229,17 @@ class ConnectClient(private val http: IntegrationHttp, private val json: Json) {
         throw e
     }
 
-    private suspend fun call(config: LidarrConfig, key: String, op: String, params: List<Pair<String, Any?>> = emptyList(), payload: String = ""): JsonObject {
+    private suspend fun call(route: ConnectRoute, op: String, params: List<Pair<String, Any?>> = emptyList(), payload: String = ""): JsonObject {
+        val (text, service) = when (route) {
+            is ConnectRoute.Server -> http.post(route.session.connectUrl(op, params), payload, route.session.client, service = "Tonearm server") to "Tonearm server"
+            is ConnectRoute.Lidarr -> callLidarr(route.config, route.key, op, params, payload) to "Lidarr: Tonearm Connect"
+        }
+        val response = json.parseToJsonElement(text).jsonObject
+        response["error"]?.jsonPrimitive?.contentOrNull?.let { throw IntegrationHttpException(0, "$service: $it") }
+        return response
+    }
+
+    private suspend fun callLidarr(config: LidarrConfig, key: String, op: String, params: List<Pair<String, Any?>>, payload: String): String {
         val url = IntegrationHttp.url(config.url, "api/v1/notification/action/tonearm", listOf("op" to op) + params)
         val body = buildJsonObject {
             put("name", JsonPrimitive("Tonearm"))
@@ -202,22 +247,50 @@ class ConnectClient(private val http: IntegrationHttp, private val json: Json) {
             put("configContract", JsonPrimitive("${IMPLEMENTATION}Settings"))
             put("fields", JsonArray(listOf(buildJsonObject { put("name", JsonPrimitive("payload")); put("value", JsonPrimitive(payload)) })))
         }
-        val text = try {
+        return try {
             http.postJson(url, body.toString(), config.useServerTls, mapOf("X-Api-Key" to key, "Accept" to "application/json"), service = "Lidarr")
         } catch (e: IntegrationHttpException) {
             // Lidarr can't find the provider type when the plugin isn't there.
             if (e.code == 500 && "targetType" in e.message.orEmpty()) throw ConnectPluginMissingException()
             throw e
         }
-        val response = json.parseToJsonElement(text).jsonObject
-        response["error"]?.jsonPrimitive?.contentOrNull?.let { throw IntegrationHttpException(0, "Lidarr: Tonearm Connect: $it") }
-        return response
     }
 
     companion object {
         const val IMPLEMENTATION = "TonearmConnect"
         const val PROTOCOL = 1
-        /** How long a poll waits on the plugin; below common proxy timeouts (60 s) and OkHttp's read timeout. */
+        /** How long a poll waits; below common proxy timeouts (60 s) and OkHttp's read timeout. */
         const val POLL_WAIT_SECONDS = 20
+    }
+}
+
+/**
+ * Picks where Connect runs. The Tonearm server wins when the music server's address has one (it serves
+ * every user of that Navidrome); otherwise the plugin in Lidarr. What was found is kept for a while, so a
+ * device doesn't hop between the two while the other devices stay put.
+ */
+class ConnectRouter(private val client: ConnectClient) {
+    private data class Found(val server: String, val present: Boolean, val at: Long)
+
+    private val lock = Mutex()
+    @Volatile private var found: Found? = null
+
+    /** [lidarr] is only asked when there's no Tonearm server. */
+    suspend fun route(session: ServerSession?, lidarr: suspend () -> Pair<LidarrConfig, String>?): ConnectRoute {
+        if (session != null && hasServer(session)) return ConnectRoute.Server(session)
+        val (config, key) = lidarr() ?: throw ConnectUnavailableException()
+        return ConnectRoute.Lidarr(config, key)
+    }
+
+    private suspend fun hasServer(session: ServerSession): Boolean = lock.withLock {
+        val server = session.config.baseUrl + "|" + session.config.username
+        val now = System.currentTimeMillis()
+        found?.takeIf { it.server == server && now - it.at < if (it.present) RECHECK_FOUND_MS else RECHECK_MISSING_MS }?.let { return it.present }
+        client.findServer(session).also { found = Found(server, it, now) }
+    }
+
+    private companion object {
+        const val RECHECK_FOUND_MS = 10 * 60_000L
+        const val RECHECK_MISSING_MS = 2 * 60_000L
     }
 }

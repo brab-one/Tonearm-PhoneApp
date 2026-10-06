@@ -1,6 +1,7 @@
 package io.github.deadeyebarb.tonearm.integrations
 
 import io.github.deadeyebarb.tonearm.connect.ConnectClient
+import io.github.deadeyebarb.tonearm.connect.ConnectRoute
 import io.github.deadeyebarb.tonearm.data.LidarrConfig
 import io.github.deadeyebarb.tonearm.likes.LikesDocument
 import io.github.deadeyebarb.tonearm.likes.LikesSync
@@ -73,7 +74,7 @@ class LikesSyncTest {
     fun tearDown() = server.close()
 
     private fun sync() = LikesSync(ConnectClient(IntegrationHttp(OkHttpClient()) { null }, json), json)
-    private val config get() = LidarrConfig(url = server.url("/").toString().trimEnd('/'), keyEnc = "")
+    private val route get() = ConnectRoute.Lidarr(LidarrConfig(url = server.url("/").toString().trimEnd('/'), keyEnc = ""), "k")
 
     @Test
     fun `likes from both devices are kept, unlikes win over older likes`() {
@@ -90,14 +91,14 @@ class LikesSyncTest {
     fun `a like reaches the store and comes back on the other device`() = runTest {
         val desktop = PendingLikes(tmp.newFile("desktop.json").also { it.delete() }, json)
         desktop.add(TrackRef("Karma Police", "Radiohead", youtubeId = "kp"))
-        assertTrue(sync().sync(config, "k", desktop))
+        assertTrue(sync().sync(route, desktop))
         val phone = PendingLikes(tmp.newFile("phone.json").also { it.delete() }, json)
-        assertTrue(sync().sync(config, "k", phone))
+        assertTrue(sync().sync(route, phone))
         assertEquals(listOf("kp"), phone.items.value.map { it.ref.youtubeId })
         // Unliked on the phone: gone on the desktop after its next sync.
         phone.remove(TrackRef("Karma Police", "Radiohead", youtubeId = "kp"))
-        sync().sync(config, "k", phone)
-        sync().sync(config, "k", desktop)
+        sync().sync(route, phone)
+        sync().sync(route, desktop)
         assertTrue(desktop.items.value.isEmpty())
     }
 
@@ -106,7 +107,7 @@ class LikesSyncTest {
         val phone = PendingLikes(tmp.newFile("p.json").also { it.delete() }, json)
         phone.add(TrackRef("Mine", "Me", youtubeId = "mine"))
         putsBeforeConflict = 1
-        assertTrue(sync().sync(config, "k", phone))
+        assertTrue(sync().sync(route, phone))
         val final = json.decodeFromString(LikesDocument.serializer(), stored!!)
         assertEquals(setOf("mine", "other"), final.likes.map { it.ref.youtubeId }.toSet())
     }
@@ -116,7 +117,7 @@ class LikesSyncTest {
         supported = false
         val phone = PendingLikes(tmp.newFile("o.json").also { it.delete() }, json)
         phone.add(TrackRef("Mine", "Me", youtubeId = "mine"))
-        assertFalse(sync().sync(config, "k", phone))
+        assertFalse(sync().sync(route, phone))
         assertEquals(1, phone.items.value.size)
     }
 }

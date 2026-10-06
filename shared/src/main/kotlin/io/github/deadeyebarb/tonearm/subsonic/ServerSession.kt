@@ -30,8 +30,14 @@ class ServerSession(val config: ServerConfig, private val secret: String, val cl
 
     fun matches(url: HttpUrl) = url.host == base.host && url.port == base.port
 
-    fun apiUrl(method: String, params: List<Pair<String, Any?>> = emptyList()): HttpUrl {
-        val builder = base.newBuilder().addPathSegment("rest").addPathSegment("$method.view")
+    fun apiUrl(method: String, params: List<Pair<String, Any?>> = emptyList()): HttpUrl =
+        signed(base.newBuilder().addPathSegment("rest").addPathSegment("$method.view"), params)
+
+    /** Tonearm Connect on the Tonearm server, which the proxy serves under the music server's address. Same login. */
+    fun connectUrl(op: String, params: List<Pair<String, Any?>> = emptyList()): HttpUrl =
+        signed(base.newBuilder().addPathSegment(CONNECT_PATH).addPathSegment("api").addPathSegment(op), params)
+
+    private fun signed(builder: HttpUrl.Builder, params: List<Pair<String, Any?>>): HttpUrl {
         when (config.auth) {
             AuthMethod.TOKEN -> {
                 val salt = SubsonicAuth.salt()
@@ -60,4 +66,8 @@ class ServerSession(val config: ServerConfig, private val secret: String, val cl
 
     fun coverUrl(coverId: String, size: Int?): HttpUrl =
         apiUrl("getCoverArt", listOf("id" to coverId, "size" to size))
+
+    companion object {
+        const val CONNECT_PATH = "connect-tonearm"
+    }
 }

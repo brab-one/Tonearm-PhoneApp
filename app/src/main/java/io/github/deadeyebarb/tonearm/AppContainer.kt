@@ -92,7 +92,8 @@ class AppContainer(val app: Application) {
     )
     val recommender = Recommender(api, sessions, integrations)
     val brainarr = BrainarrService(app, json, scope, api, sessions, integrations)
-    val connect = PhoneConnect(app, integrations, ConnectClient(integrationHttp, json))
+    private val connectClient = ConnectClient(integrationHttp, json)
+    val connect = PhoneConnect(app, sessions, integrations, connectClient)
     val daily = DailyDiscovery(app, json, scope, api, sessions, integrations, recommender, brainarr)
     val mediaItems = MediaItemFactory(app)
     val queueStore = QueueStore(app, json, mediaItems)
@@ -105,7 +106,7 @@ class AppContainer(val app: Application) {
     val fetches = FetchTracker(LidarrClient(integrationHttp, json), api)
     val local = LocalMusic(app)
     val songRequests = SongRequests(LidarrClient(integrationHttp, json), MusicBrainz(baseHttpClient, json))
-    val likes = Likes(app, json, scope, api, sessions, starred, integrations, songRequests, LikesSync(ConnectClient(integrationHttp, json), json), settings, messages)
+    val likes = Likes(app, json, scope, api, sessions, starred, integrations, songRequests, LikesSync(connectClient, json), connect, settings, messages)
     val weekly = WeeklyPicks(api, LidarrClient(integrationHttp, json), json, connect.deviceId, java.io.File(app.filesDir, "weekly-run.json"))
     val continuation = QueueContinuation(api, sessions, youtube, settings)
     val media by lazy { MediaEngine(app, sessions, settings, network, youtube, youtubeHttpClient) }

@@ -13,6 +13,8 @@ Log in with user "demo", password "demo". From the Android emulator the host is 
 
 The same address also serves a mock Maloja (API key "maloja-key", under /apis/mlj_1/) and a
 mock Lidarr (API key "lidarr-key", under /api/v1/) so recommendations and requests can be tried.
+With --connect http://127.0.0.1:8790 and --plain-port 8444 it also stands in for the proxy in front of a
+Tonearm server (run that with NAVIDROME_URL=http://127.0.0.1:8444).
 Only Python's standard library is used.
 """
 
@@ -31,6 +33,8 @@ import time
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+import urllib.error
+import urllib.request
 from urllib.parse import parse_qs, urlparse
 
 USER, PASSWORD = "demo", "demo"
@@ -215,6 +219,7 @@ def now():
 class Handler(BaseHTTPRequestHandler):
     no_ranges = False
     stream_kbps = 0
+    connect_url = None
     lib: Library = None
     server_version = "MockSubsonic/1.0"
 
@@ -237,8 +242,30 @@ class Handler(BaseHTTPRequestHandler):
     def error(self, code, message):
         self.send_json({"error": {"code": code, "message": message}}, status="failed")
 
+    def forward_connect(self, method):
+        # Like the reverse proxy in front of Navidrome: /connect-tonearm goes to the Tonearm server.
+        length = int(self.headers.get("Content-Length") or 0)
+        body = self.rfile.read(length) if length else None
+        request = urllib.request.Request(self.connect_url.rstrip("/") + self.path, data=body, method=method,
+                                         headers={"Content-Type": self.headers.get("Content-Type") or "text/plain",
+                                                  "X-Real-IP": self.client_address[0]})
+        try:
+            with urllib.request.urlopen(request, timeout=90) as response:
+                status, data, kind = response.status, response.read(), response.headers.get("Content-Type")
+        except urllib.error.HTTPError as e:
+            status, data, kind = e.code, e.read(), e.headers.get("Content-Type")
+        except OSError as e:
+            status, data, kind = 502, f"Tonearm server unreachable: {e}".encode(), "text/plain"
+        self.send_response(status)
+        self.send_header("Content-Type", kind or "application/octet-stream")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
     def do_POST(self):
         url = urlparse(self.path)
+        if self.connect_url and url.path.startswith("/connect-tonearm"):
+            return self.forward_connect("POST")
         length = int(self.headers.get("Content-Length") or 0)
         body = json.loads(self.rfile.read(length) or b"{}")
         with self.lib.lock:
@@ -273,6 +300,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         url = urlparse(self.path)
+        if self.connect_url and url.path.startswith("/connect-tonearm"):
+            return self.forward_connect("GET")
         q = {k: v for k, v in parse_qs(url.query).items()}
         one = lambda k, d=None: q.get(k, [d])[0]
         if url.path == "/mock/arrive":
@@ -813,6 +842,10 @@ def main():
     parser.add_argument("--no-ranges", action="store_true",
                         help="stream songs without Content-Length or range support, like some reverse proxies")
     parser.add_argument("--stream-kbps", type=int, default=0, help="with --no-ranges: stream this slowly (KiB/s), like a remote server")
+    parser.add_argument("--connect", metavar="URL",
+                        help="pass /connect-tonearm/ on to a Tonearm server (e.g. http://127.0.0.1:8790), like the proxy does")
+    parser.add_argument("--plain-port", type=int, default=0,
+                        help="also serve plain http on 127.0.0.1 at this port, like Navidrome's own port behind the proxy")
     parser.add_argument("--san", action="append", default=["DNS:localhost", "IP:127.0.0.1", "IP:10.0.2.2"],
                         help="subject alternative names for the server certificate (first run only)")
     args = parser.parse_args()
@@ -824,6 +857,7 @@ def main():
     # Brainarr's earlier picks: one you already have, one still downloading.
     Handler.no_ranges = args.no_ranges
     Handler.stream_kbps = args.stream_kbps
+    Handler.connect_url = args.connect
     Handler.lib.brainarr_tags = [] if args.brainarr_untagged else [BRAINARR_TAG["id"]]
     Handler.lib.lidarr_tags = [] if args.brainarr_untagged else [dict(BRAINARR_TAG)]
     Handler.add_lidarr_artist(Handler, "mb-signal-garden", tags=Handler.lib.brainarr_tags, days_ago=3, on_disk=True)
@@ -846,6 +880,12 @@ def main():
     mode = "plain http" if args.plain else ("TLS" if args.no_mtls else "mutual TLS (client certificate required)")
     print(f"Mock Subsonic on {scheme}://{args.host}:{args.port}  [{mode}]  user={USER} password={PASSWORD}")
     print(f"Client certificates: {data / 'certs' / 'client.p12'} (password '{P12_PASSWORD}')", flush=True)
+    if args.plain_port:
+        inside = ThreadingHTTPServer(("127.0.0.1", args.plain_port), Handler)
+        threading.Thread(target=inside.serve_forever, daemon=True).start()
+        print(f"Also plain http on 127.0.0.1:{args.plain_port}", flush=True)
+    if args.connect:
+        print(f"/connect-tonearm goes to {args.connect}", flush=True)
     httpd.serve_forever()
 
 

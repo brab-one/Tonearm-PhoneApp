@@ -53,9 +53,15 @@ class IntegrationHttp(
         service,
     )
 
-    private suspend fun execute(request: Request, useServerTls: Boolean, service: String): String {
+    /** POSTs [body] with a given [client], e.g. a music server's own with its client certificate. */
+    suspend fun post(url: HttpUrl, body: String, client: OkHttpClient, contentType: String = "text/plain; charset=utf-8", service: String = ""): String =
+        execute(Request.Builder().url(url).header("Accept", "application/json").post(body.toRequestBody(contentType.toMediaType())).build(), client, service)
+
+    private suspend fun execute(request: Request, useServerTls: Boolean, service: String): String =
+        execute(request, client(useServerTls), service)
+
+    private suspend fun execute(request: Request, client: OkHttpClient, service: String): String {
         val prefix = if (service.isEmpty()) "" else "$service: "
-        val client = client(useServerTls)
         return withContext(Dispatchers.IO) {
             try {
                 client.newCall(request).await().use { response ->

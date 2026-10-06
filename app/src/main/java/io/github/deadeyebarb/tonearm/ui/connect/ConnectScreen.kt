@@ -57,6 +57,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.deadeyebarb.tonearm.connect.ConnectCommand
 import io.github.deadeyebarb.tonearm.connect.ConnectDevice
 import io.github.deadeyebarb.tonearm.connect.ConnectSong
+import io.github.deadeyebarb.tonearm.connect.ConnectUnavailableException
 import io.github.deadeyebarb.tonearm.connect.coverServer
 import io.github.deadeyebarb.tonearm.connect.toConnect
 import io.github.deadeyebarb.tonearm.connect.toQueueSong
@@ -92,7 +93,6 @@ fun ConnectScreen() {
     var refresh by remember { mutableStateOf(0) }
 
     LaunchedEffect(integrations.lidarr?.url, refresh) {
-        if (integrations.lidarr == null) return@LaunchedEffect
         while (true) {
             devices = try {
                 Load.Ready(c.connect.devices())
@@ -106,14 +106,15 @@ fun ConnectScreen() {
     }
 
     DetailScaffold(title = "Devices") {
-        if (integrations.lidarr == null) {
+        if ((devices as? Load.Failed)?.error is ConnectUnavailableException) {
             Column(Modifier.fillMaxSize().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 EmptyState(
-                    Icons.Rounded.Devices, "Connect Lidarr",
-                    "Tonearm Connect runs through the Tonearm Connect plugin in your Lidarr, which the phone and the desktop app both reach.",
+                    Icons.Rounded.Devices, "Set up Tonearm Connect",
+                    "Tonearm Connect runs on the Tonearm server next to your music server (it serves everyone on it), " +
+                        "or on the Tonearm Connect plugin in your Lidarr. The phone and the desktop app find it by themselves.",
                     Modifier.weight(1f),
                 )
-                HudButton("Connect Lidarr", { actions.navigate(LidarrSettingsRoute) }, Modifier.fillMaxWidth())
+                if (integrations.lidarr == null) HudButton("Connect Lidarr", { actions.navigate(LidarrSettingsRoute) }, Modifier.fillMaxWidth())
             }
             return@DetailScaffold
         }
@@ -124,7 +125,7 @@ fun ConnectScreen() {
                 if (state.value.isEmpty()) {
                     EmptyState(
                         Icons.Rounded.Computer, "No other devices",
-                        "Start Tonearm on your computer (with the same Lidarr connected); it shows up here while it runs.",
+                        "Start Tonearm on your computer (signed in to the same music server); it shows up here while it runs.",
                     )
                     return@DetailScaffold
                 }
