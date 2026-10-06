@@ -78,6 +78,11 @@ Related repositories:
 **Offline**
 - Download songs, albums and playlists in original quality (Wi-Fi only by default)
 - Downloaded songs play from the device, with cover art, even with no connection
+- Downloads upgrade themselves: when the server gets a better file for a downloaded song (FLAC where it was
+  MP3/AAC, or hi-res where it was CD quality, e.g. after Lidarr upgraded it), the phone downloads the new one.
+  "Download" on a YouTube Music song saves your library's own file once Lidarr has it
+- The next songs in the queue play from your library's file as soon as it has one: a YouTube Music song switches
+  to the FLAC Lidarr downloaded, and a song whose file was upgraded isn't served from the old cached copy
 - 2 GB streaming cache (configurable) so replays don't hit the network
 - Cache ahead: the next 3 songs of the queue (configurable up to the whole queue, shuffle-aware) are cached
   while one plays, so skips are instant and a dead spot in the car doesn't stop the music
