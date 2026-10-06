@@ -44,18 +44,19 @@ data class Integrations(
     val lidarr: LidarrConfig? = null,
 ) {
     /**
-     * Lidarr and Maloja as the app uses them: the Tonearm server's when it offers them (it holds their
-     * keys, so the music server login is enough), else these settings. Request preferences are kept.
+     * Lidarr and Maloja as the app uses them: the Tonearm server's when it offers them (it holds their keys,
+     * so the music server login is enough). Lidarr only comes that way; the settings here only hold its
+     * request preferences. Maloja falls back to these settings.
      */
     fun through(server: TonearmServerInfo?): Integrations {
-        if (server == null) return this
+        if (server == null) return Integrations(maloja = maloja, lidarr = null)
         return Integrations(
             maloja = if (server.maloja) {
                 (maloja ?: MalojaConfig(url = "")).copy(url = server.serviceUrl("maloja"), keyEnc = "", useServerTls = true, viaServer = true)
             } else maloja,
             lidarr = if (server.lidarr) {
                 (lidarr ?: LidarrConfig(url = "")).copy(url = server.serviceUrl("lidarr"), keyEnc = "", useServerTls = true, viaServer = true, limited = !server.lidarrAdmin)
-            } else lidarr,
+            } else null,
         )
     }
 }

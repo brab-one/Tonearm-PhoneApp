@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.CloudDownload
 import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.Person
@@ -45,10 +46,10 @@ import io.github.deadeyebarb.tonearm.ui.common.LocalActions
 import io.github.deadeyebarb.tonearm.ui.common.PlayShuffleButtons
 import io.github.deadeyebarb.tonearm.ui.common.SectionHeader
 import io.github.deadeyebarb.tonearm.ui.common.SongRow
-import io.github.deadeyebarb.tonearm.ui.theme.glowBorder
 import io.github.deadeyebarb.tonearm.ui.common.rememberLoader
 import io.github.deadeyebarb.tonearm.ui.theme.Hud
 import io.github.deadeyebarb.tonearm.ui.theme.HudButton
+import io.github.deadeyebarb.tonearm.ui.theme.glowBorder
 import io.github.deadeyebarb.tonearm.youtube.YouTubeMusic
 import io.github.deadeyebarb.tonearm.youtube.YtAlbum
 import io.github.deadeyebarb.tonearm.youtube.YtArtist
@@ -100,6 +101,10 @@ fun YouTubeArtistScreen(artist: YtArtist) {
                                 HudButton("Request", { actions.requestArtistByName(page.artist.name) }, Modifier.weight(1f), icon = Icons.Rounded.CloudDownload, filled = false)
                             }
                         }
+                        HudButton(
+                            "More like this", { actions.moreLike(page.artist.name, page.artist.name, "the artist ${page.artist.name}", cover = page.artist.imageUrl) },
+                            Modifier.fillMaxWidth().padding(top = 8.dp), icon = Icons.Rounded.AutoAwesome, filled = false,
+                        )
                     }
                 }
                 if (page.albums.isNotEmpty()) {
@@ -162,6 +167,11 @@ fun YouTubeAlbumScreen(album: YtAlbum) {
                                 Modifier.fillMaxWidth(), icon = Icons.Rounded.CloudDownload, filled = false,
                             )
                         }
+                        HudButton(
+                            "More like this",
+                            { actions.moreLike("“${page.album.title}”", page.album.artist, "the album “${page.album.title}”" + (page.album.artist?.let { " by $it" } ?: ""), cover = page.album.imageUrl) },
+                            Modifier.fillMaxWidth().padding(top = 8.dp), icon = Icons.Rounded.AutoAwesome, filled = false,
+                        )
                     }
                 }
                 itemsIndexed(songs, key = { i, e -> "$i:" + e.song.id }) { i, entry ->

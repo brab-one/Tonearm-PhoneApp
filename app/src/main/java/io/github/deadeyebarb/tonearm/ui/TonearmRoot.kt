@@ -81,6 +81,7 @@ import io.github.deadeyebarb.tonearm.ui.detail.GenreScreen
 import io.github.deadeyebarb.tonearm.ui.detail.PlaylistScreen
 import io.github.deadeyebarb.tonearm.ui.discover.DailyScreen
 import io.github.deadeyebarb.tonearm.ui.discover.DiscoverScreen
+import io.github.deadeyebarb.tonearm.ui.discover.MoreLikeScreen
 import io.github.deadeyebarb.tonearm.ui.downloads.DownloadsScreen
 import io.github.deadeyebarb.tonearm.ui.home.HomeScreen
 import io.github.deadeyebarb.tonearm.ui.library.LibraryScreen
@@ -203,6 +204,7 @@ fun TonearmRoot(container: AppContainer, openPlayerRequests: Int, requestNotific
                     val r = it.toRoute<YtArtistRoute>()
                     YouTubeArtistScreen(YtArtist(r.url, r.name, r.imageUrl, r.subscribers))
                 }
+                composable<MoreLikeRoute> { MoreLikeScreen(it.toRoute<MoreLikeRoute>()) }
                 composable<YtAlbumRoute> {
                     val r = it.toRoute<YtAlbumRoute>()
                     YouTubeAlbumScreen(YtAlbum(r.url, r.title, r.artist, r.imageUrl))

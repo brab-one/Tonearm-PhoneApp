@@ -1,6 +1,5 @@
 package io.github.deadeyebarb.tonearm.ui.common
 
-import io.github.deadeyebarb.tonearm.local.LocalMusic
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -32,6 +31,7 @@ import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Radio
 import androidx.compose.material.icons.rounded.RemoveCircleOutline
 import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material3.AlertDialog
@@ -63,6 +63,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.deadeyebarb.tonearm.download.DownloadEntry
+import io.github.deadeyebarb.tonearm.local.LocalMusic
 import io.github.deadeyebarb.tonearm.media.QueueSong
 import io.github.deadeyebarb.tonearm.subsonic.Album
 import io.github.deadeyebarb.tonearm.subsonic.Artist
@@ -210,8 +211,9 @@ fun SongMenuButton(song: Song, serverId: String?, extraActions: List<MenuAction>
                 add(MenuAction("Remove download", Icons.Rounded.RemoveCircleOutline) { actions.removeDownloads(listOf(entry)) })
             }
         }
+        add(MenuAction("More like this", Icons.Rounded.AutoAwesome) { actions.moreLikeSong(entry) })
         if (sameServer) {
-            add(MenuAction("Instant mix", Icons.Rounded.AutoAwesome) { actions.instantMix(entry) })
+            add(MenuAction("Instant mix", Icons.Rounded.Radio) { actions.instantMix(entry) })
             song.albumId?.let { add(MenuAction("Go to album", Icons.Rounded.Album) { actions.openAlbum(it) }) }
             song.artistId?.let { add(MenuAction("Go to artist", Icons.Rounded.Person) { actions.openArtist(it) }) }
         }

@@ -10,8 +10,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -63,6 +63,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import coil3.compose.AsyncImage
 import io.github.deadeyebarb.tonearm.AppContainer
 import io.github.deadeyebarb.tonearm.container
+import io.github.deadeyebarb.tonearm.integrations.LidarrAlbum
 import io.github.deadeyebarb.tonearm.integrations.LidarrCandidate
 import io.github.deadeyebarb.tonearm.integrations.LidarrQueueItem
 import io.github.deadeyebarb.tonearm.integrations.Recommender
@@ -271,6 +272,11 @@ fun RemoteCover(
 @Composable
 private fun QueueSection(c: AppContainer) {
     val hud = Hud.colors
+    val actions = LocalActions.current
+    val wanted by produceState<List<LidarrAlbum>?>(null) {
+        value = runCatching { c.integrations.requireLidarr().let { (config, key) -> c.integrations.lidarr.wanted(config, key) } }
+            .getOrNull()?.sortedByDescending { it.releaseDate.orEmpty() }
+    }
     // Poll Lidarr's queue while this screen is open.
     val queue by produceState<Load<List<LidarrQueueItem>>>(Load.Loading) {
         while (true) {
@@ -321,7 +327,36 @@ private fun QueueSection(c: AppContainer) {
                 }
             }
         }
-    }
+            // What Lidarr is still looking for (monitored albums without their files).
+        item { HudSectionHeader("Wanted in Lidarr") }
+        when (val w = wanted) {
+            null -> Unit
+            else -> if (w.isEmpty()) {
+                item { Text("Nothing wanted: everything Lidarr monitors is on your server.", style = MaterialTheme.typography.bodyMedium, color = hud.dim, modifier = Modifier.padding(horizontal = 16.dp)) }
+            } else {
+                items(w, key = { "wanted:" + it.id }) { album ->
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        RemoteCover(album.remoteCover ?: album.images.firstOrNull { it.coverType.equals("cover", true) }?.remoteUrl, Icons.Rounded.Album, Modifier.size(44.dp))
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(album.title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(
+                                listOfNotNull(album.artist?.artistName, album.releaseDate?.take(4)).joinToString(" · ").uppercase(),
+                                style = MaterialTheme.typography.labelSmall, color = hud.accent2, maxLines = 1,
+                            )
+                        }
+                        HudButton("Search", {
+                            actions.launch {
+                                val (config, key) = c.integrations.requireLidarr()
+                                c.integrations.lidarr.monitorAlbum(config, key, album.id, search = true)
+                                actions.message("Lidarr is searching for ${album.title}")
+                            }
+                        }, filled = false)
+                    }
+                }
+            }
+        }
+}
 }
 
 /** Request a recommended artist by name: looks it up in Lidarr and lets you pick the right match. */

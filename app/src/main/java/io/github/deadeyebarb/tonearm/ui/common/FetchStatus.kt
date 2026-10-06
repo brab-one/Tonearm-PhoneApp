@@ -49,7 +49,7 @@ fun FetchIcon(state: FetchState?, modifier: Modifier = Modifier) {
             Icon(Icons.Rounded.Downloading, "Downloading in Lidarr", modifier.size(14.dp), tint = hud.accent)
             state.progress?.let { Text(" ${(it * 100).toInt()}%", style = MaterialTheme.typography.labelSmall, color = hud.accent) }
         }
-        Fetch.REQUESTED -> Icon(Icons.Rounded.Schedule, "Requested in Lidarr", modifier.size(14.dp), tint = hud.accent2)
+        Fetch.REQUESTED -> Icon(Icons.Rounded.Schedule, "Wanted in Lidarr", modifier.size(14.dp), tint = hud.accent2)
         null -> Unit
     }
 }
@@ -57,5 +57,5 @@ fun FetchIcon(state: FetchState?, modifier: Modifier = Modifier) {
 fun FetchState.label(): String = when (fetch) {
     Fetch.IN_LIBRARY -> "IN YOUR LIBRARY"
     Fetch.DOWNLOADING -> "DOWNLOADING" + (progress?.let { " ${(it * 100).toInt()}%" } ?: "")
-    Fetch.REQUESTED -> "REQUESTED"
+    Fetch.REQUESTED -> "WANTED"
 }

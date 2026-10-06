@@ -76,9 +76,10 @@ class WeeklyPicks(
     private val deviceId: String,
     private val runFile: File,
 ) {
+    /** On unless switched off: the week's picks download to the server by themselves. */
     suspend fun settings(session: ServerSession): WeeklySettings =
         connect.storeGet(ConnectRoute.Server(session), SETTINGS_KEY).value
-            ?.let { runCatching { json.decodeFromString(WeeklySettings.serializer(), it) }.getOrNull() } ?: WeeklySettings()
+            ?.let { runCatching { json.decodeFromString(WeeklySettings.serializer(), it) }.getOrNull() } ?: WeeklySettings(on = true)
 
     suspend fun saveSettings(session: ServerSession, settings: WeeklySettings) {
         val route = ConnectRoute.Server(session)

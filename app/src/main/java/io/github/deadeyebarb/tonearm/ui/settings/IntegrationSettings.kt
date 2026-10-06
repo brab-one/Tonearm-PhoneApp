@@ -54,6 +54,7 @@ import io.github.deadeyebarb.tonearm.container
 import io.github.deadeyebarb.tonearm.data.LidarrConfig
 import io.github.deadeyebarb.tonearm.data.MalojaConfig
 import io.github.deadeyebarb.tonearm.data.normalizeServerUrl
+import io.github.deadeyebarb.tonearm.integrations.IntegrationNotConfiguredException
 import io.github.deadeyebarb.tonearm.integrations.LidarrProfile
 import io.github.deadeyebarb.tonearm.integrations.LidarrRootFolder
 import io.github.deadeyebarb.tonearm.subsonic.userMessage
@@ -102,19 +103,16 @@ class MalojaSettingsViewModel(private val c: AppContainer) : ViewModel() {
     suspend fun remove() = c.integrations.repository.update { it.copy(maloja = null) }
 }
 
+/** Lidarr comes through the Tonearm server; what's kept here is how requests are made. */
 class LidarrSettingsViewModel(private val c: AppContainer) : ViewModel() {
     private val existing = c.integrations.repository.state.value.lidarr
-    val isNew = existing == null
-    var url by mutableStateOf(existing?.url.orEmpty())
-    var key by mutableStateOf(existing?.let { c.integrations.decrypt(it.keyEnc) }.orEmpty())
-    var useServerTls by mutableStateOf(existing?.useServerTls ?: true)
     var rootFolder by mutableStateOf(existing?.rootFolderPath)
     var qualityProfile by mutableStateOf(existing?.qualityProfileId)
     var metadataProfile by mutableStateOf(existing?.metadataProfileId)
     var monitor by mutableStateOf(existing?.monitor ?: "all")
     var searchOnAdd by mutableStateOf(existing?.searchOnAdd ?: true)
 
-    var test by mutableStateOf<TestState>(TestState.Idle)
+    var test by mutableStateOf<TestState>(TestState.Running)
         private set
     var roots by mutableStateOf<List<LidarrRootFolder>>(emptyList())
         private set
@@ -123,35 +121,21 @@ class LidarrSettingsViewModel(private val c: AppContainer) : ViewModel() {
     var metadatas by mutableStateOf<List<LidarrProfile>>(emptyList())
         private set
 
-    val valid get() = normalizeServerUrl(url).toHttpUrlOrNull() != null && key.isNotBlank()
-
-    private fun config() = LidarrConfig(
-        url = normalizeServerUrl(url), keyEnc = c.integrations.encrypt(key.trim()), rootFolderPath = rootFolder,
-        qualityProfileId = qualityProfile, metadataProfileId = metadataProfile, monitor = monitor,
-        searchOnAdd = searchOnAdd, useServerTls = useServerTls,
-    )
-
     init {
-        if (!isNew) runTest()
-    }
-
-    fun runTest() {
-        if (!valid) return
-        test = TestState.Running
         viewModelScope.launch {
             test = try {
-                val config = config()
-                val k = key.trim()
+                val config = c.integrations.current().lidarr
+                    ?: throw IntegrationNotConfiguredException("The Tonearm server doesn't offer Lidarr: set LIDARR_URL and LIDARR_API_KEY there")
                 val lidarr = c.integrations.lidarr
-                val status = lidarr.status(config, k)
-                val r = async { lidarr.rootFolders(config, k) }
-                val q = async { lidarr.qualityProfiles(config, k) }
-                val m = async { lidarr.metadataProfiles(config, k) }
+                val status = lidarr.status(config, "")
+                val r = async { lidarr.rootFolders(config, "") }
+                val q = async { lidarr.qualityProfiles(config, "") }
+                val m = async { lidarr.metadataProfiles(config, "") }
                 roots = r.await()
                 qualities = q.await()
                 metadatas = m.await()
                 TestState.Passed(
-                    "Connected to ${status.instanceName ?: status.appName ?: "Lidarr"} ${status.version.orEmpty()}".trim() +
+                    "Lidarr ${status.version.orEmpty()} through the Tonearm server".replace("  ", " ") +
                         if (roots.isEmpty()) " · no root folder yet, add one in Lidarr" else "",
                 )
             } catch (e: CancellationException) {
@@ -162,8 +146,14 @@ class LidarrSettingsViewModel(private val c: AppContainer) : ViewModel() {
         }
     }
 
-    suspend fun save() = c.integrations.repository.update { it.copy(lidarr = config()) }
-    suspend fun remove() = c.integrations.repository.update { it.copy(lidarr = null) }
+    suspend fun save() = c.integrations.repository.update {
+        it.copy(
+            lidarr = (it.lidarr ?: LidarrConfig(url = "")).copy(
+                rootFolderPath = rootFolder, qualityProfileId = qualityProfile, metadataProfileId = metadataProfile,
+                monitor = monitor, searchOnAdd = searchOnAdd,
+            ),
+        )
+    }
 }
 
 @Composable
@@ -245,27 +235,16 @@ fun LidarrSettingsScreen() {
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(
-                "Lidarr finds and downloads music. Connect it to request artists and albums that aren't in your library, " +
-                    "from search or from your Maloja recommendations. Once Lidarr imports them and your server rescans, they show up here.",
+                "Lidarr finds and downloads music: request artists and albums that aren't in your library, from search or " +
+                    "your recommendations. It comes through the Tonearm server on your music server, which holds its key, so " +
+                    "there's nothing to connect here. Once Lidarr imports what you asked for and your server rescans, it shows up here.",
                 style = MaterialTheme.typography.bodyMedium, color = Hud.colors.dim,
             )
             val integrations by c.integrations.state.collectAsStateWithLifecycle()
-            if (integrations.lidarr?.viaServer == true) {
-                ThroughServerNote("Lidarr", if (integrations.lidarr?.limited == true) " You can request music and see downloads; weekly picks are for its admins." else "")
+            if (integrations.lidarr?.limited == true) {
+                Text("You can request music and see downloads; weekly picks and removing music are for the server's admins.", style = MaterialTheme.typography.bodyMedium, color = Hud.colors.accent)
             }
-            OutlinedTextField(
-                vm.url, { vm.url = it }, label = { Text("Lidarr address") }, placeholder = { Text("https://lidarr.example.com") },
-                singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), modifier = Modifier.fillMaxWidth(),
-            )
-            SecretInput(vm.key, { vm.key = it }, "API key (Lidarr → Settings → General)")
-            ToggleRow(
-                "Use the music server's client certificate",
-                "For a Lidarr behind the same mTLS reverse proxy as your music server.",
-                vm.useServerTls,
-            ) { vm.useServerTls = it }
             TestResult(vm.test)
-            HudButton("Test & load profiles", vm::runTest, Modifier.fillMaxWidth(), filled = false, enabled = vm.valid && vm.test != TestState.Running)
-
             if (vm.roots.isNotEmpty()) {
                 HudSectionHeader("Request defaults")
                 ChoiceRow("Root folder", vm.rootFolder ?: "${vm.roots.first().path} (first)") {
@@ -304,12 +283,7 @@ fun LidarrSettingsScreen() {
                 ToggleRow("Start searching right away", "Lidarr looks for downloads as soon as you request something.", vm.searchOnAdd) {
                     vm.searchOnAdd = it
                 }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(vertical = 8.dp)) {
-                HudButton("Save", { scope.launch { vm.save(); actions.back() } }, Modifier.weight(1f), enabled = vm.valid)
-            }
-            if (!vm.isNew) {
-                HudButton("Disconnect Lidarr", { scope.launch { vm.remove(); actions.back() } }, Modifier.fillMaxWidth(), filled = false)
+                HudButton("Save", { scope.launch { vm.save(); actions.back() } }, Modifier.fillMaxWidth())
             }
             Spacer(Modifier.height(24.dp))
         }

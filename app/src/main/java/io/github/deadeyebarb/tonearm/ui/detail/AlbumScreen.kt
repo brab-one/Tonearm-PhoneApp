@@ -1,6 +1,7 @@
 package io.github.deadeyebarb.tonearm.ui.detail
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -15,10 +16,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
+import androidx.compose.material.icons.automirrored.rounded.PlaylistPlay
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Person
-import androidx.compose.material.icons.automirrored.rounded.PlaylistPlay
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -34,17 +36,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.layout.Box
 import io.github.deadeyebarb.tonearm.container
 import io.github.deadeyebarb.tonearm.media.MediaIds
 import io.github.deadeyebarb.tonearm.subsonic.Album
 import io.github.deadeyebarb.tonearm.subsonic.StarKind
 import io.github.deadeyebarb.tonearm.ui.common.ActionMenu
-import io.github.deadeyebarb.tonearm.ui.theme.Hud
-import io.github.deadeyebarb.tonearm.ui.theme.HudTag
-import io.github.deadeyebarb.tonearm.ui.theme.cornerBrackets
-import io.github.deadeyebarb.tonearm.ui.theme.glow
-import io.github.deadeyebarb.tonearm.ui.theme.glowBorder
 import io.github.deadeyebarb.tonearm.ui.common.CoverArt
 import io.github.deadeyebarb.tonearm.ui.common.CoverSize
 import io.github.deadeyebarb.tonearm.ui.common.DownloadAllButton
@@ -57,6 +53,11 @@ import io.github.deadeyebarb.tonearm.ui.common.SongRow
 import io.github.deadeyebarb.tonearm.ui.common.StarButton
 import io.github.deadeyebarb.tonearm.ui.common.formatTotal
 import io.github.deadeyebarb.tonearm.ui.common.rememberLoader
+import io.github.deadeyebarb.tonearm.ui.theme.Hud
+import io.github.deadeyebarb.tonearm.ui.theme.HudTag
+import io.github.deadeyebarb.tonearm.ui.theme.cornerBrackets
+import io.github.deadeyebarb.tonearm.ui.theme.glow
+import io.github.deadeyebarb.tonearm.ui.theme.glowBorder
 
 @Composable
 fun AlbumScreen(id: String) {
@@ -154,6 +155,13 @@ private fun AlbumMenu(album: Album) {
                 add(MenuAction("Play next", Icons.AutoMirrored.Rounded.PlaylistPlay) { actions.playNext(entries) })
                 add(MenuAction("Add to queue", Icons.AutoMirrored.Rounded.QueueMusic) { actions.enqueue(entries) })
                 add(MenuAction("Add to playlist", Icons.AutoMirrored.Rounded.PlaylistAdd) { actions.addToPlaylist(entries) })
+                add(MenuAction("More like this", Icons.Rounded.AutoAwesome) {
+                    actions.moreLike(
+                        "“${album.name}”", album.artistLabel, "the album “${album.name}”" + album.artistLabel.takeIf { it.isNotEmpty() }?.let { " by $it" }.orEmpty() +
+                            album.genre?.let { " ($it)" }.orEmpty(),
+                        artistId = album.artistId, cover = album.coverArt,
+                    )
+                })
                 album.artistId?.let { add(MenuAction("Go to artist", Icons.Rounded.Person) { actions.openArtist(it) }) }
             },
         )

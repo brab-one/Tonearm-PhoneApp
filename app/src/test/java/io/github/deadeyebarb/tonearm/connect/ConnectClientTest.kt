@@ -28,73 +28,17 @@ class ConnectClientTest {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true; coerceInputValues = true; explicitNulls = false }
     private val server = MockWebServer()
     private lateinit var client: ConnectClient
-    private lateinit var lidarr: ConnectRoute.Lidarr
 
     @Before
     fun setUp() {
         server.start()
         client = ConnectClient(IntegrationHttp(OkHttpClient()) { null }, json)
-        lidarr = ConnectRoute.Lidarr(LidarrConfig(url = server.url("/lidarr").toString(), keyEnc = ""), "key")
     }
 
     @After
     fun tearDown() = server.close()
 
     private fun respond(body: String, code: Int = 200) = server.enqueue(MockResponse.Builder().code(code).body(body).build())
-
-    @Test
-    fun `publishing posts the state in the hidden payload field of a plugin resource`() = runTest {
-        respond("""{"ok":true,"seq":0}""")
-        val state = DeviceState("desktop-1", "Desk", "desktop", "https://music.example", PlaybackState(playing = true, index = 0, queue = listOf(ConnectSong("s1", title = "Song"))))
-        client.publish(lidarr, state)
-        val request = server.takeRequest()
-        assertEquals("/lidarr/api/v1/notification/action/tonearm", request.url.encodedPath)
-        assertEquals("publish", request.url.queryParameter("op"))
-        assertEquals("desktop-1", request.url.queryParameter("device"))
-        assertEquals("key", request.headers["X-Api-Key"])
-        val body = json.parseToJsonElement(request.body!!.utf8()).jsonObject
-        assertEquals("TonearmConnect", body["implementation"]!!.jsonPrimitive.content)
-        assertEquals("TonearmConnectSettings", body["configContract"]!!.jsonPrimitive.content)
-        val field = body["fields"]!!.jsonArray.single().jsonObject
-        assertEquals("payload", field["name"]!!.jsonPrimitive.content)
-        assertEquals(state, json.decodeFromString(DeviceState.serializer(), field["value"]!!.jsonPrimitive.content))
-    }
-
-    @Test
-    fun `devices and polled commands are read from the plugin's answers`() = runTest {
-        // As the real plugin answers (Lidarr's camelCase JSON, states as strings).
-        respond("""{"devices":[{"id":"desktop-1","online":true,"secondsSinceSeen":3,"state":"{\"id\":\"desktop-1\",\"name\":\"Desk\",\"kind\":\"desktop\"}"},{"id":"junk","online":false,"secondsSinceSeen":9,"state":"not json"}]}""")
-        val devices = client.devices(lidarr)
-        assertEquals(listOf("Desk"), devices.map { it.state.name })
-        assertTrue(devices.single().online)
-
-        respond("""{"commands":[{"seq":7,"from":"phone-1","payload":"{\"type\":\"seek\",\"positionMs\":90000}"}],"seq":7}""")
-        val (commands, seq) = client.poll(lidarr, "desktop-1", after = 5, waitSeconds = 20)
-        assertEquals(7L, seq)
-        assertEquals(ConnectCommand(ConnectCommand.SEEK, positionMs = 90_000), commands.single().command)
-        assertEquals("phone-1", commands.single().from)
-        val request = server.takeRequest().let { server.takeRequest() }
-        assertEquals("5", request.url.queryParameter("after"))
-        assertEquals("20", request.url.queryParameter("wait"))
-    }
-
-    @Test(expected = ConnectPluginMissingException::class)
-    fun `a lidarr without the plugin is reported as such`() = runTest {
-        // What Lidarr 3.1 answers when no provider has that implementation name.
-        respond("""{"message":"Value can not be null. (Parameter 'targetType')","description":"System.ArgumentNullException…"}""", 500)
-        client.devices(lidarr)
-    }
-
-    @Test
-    fun `plugin errors come through`() = runTest {
-        respond("""{"error":"device is required"}""")
-        try {
-            client.poll(lidarr, "", 0, 0)
-            error("expected failure")
-        } catch (e: IntegrationHttpException) {
-            assertEquals("Lidarr: Tonearm Connect: device is required", e.message)
-        }
-    }
 
     private fun session(auth: AuthMethod = AuthMethod.TOKEN) =
         ServerSession(ServerConfig(name = "Music", baseUrl = server.url("/").toString(), username = "alice", auth = auth), "wonderland", OkHttpClient())
@@ -114,6 +58,34 @@ class ConnectClientTest {
     }
 
     @Test
+    fun `publishing posts the state as the body`() = runTest {
+        respond("""{"ok":true,"seq":0}""")
+        val state = DeviceState("desktop-1", "Desk", "desktop", "https://music.example", PlaybackState(playing = true, index = 0, queue = listOf(ConnectSong("s1", title = "Song"))))
+        client.publish(ConnectRoute.Server(session()), state)
+        val request = server.takeRequest()
+        assertEquals("/connect-tonearm/api/publish", request.url.encodedPath)
+        assertEquals("desktop-1", request.url.queryParameter("device"))
+        assertEquals(state, json.decodeFromString(DeviceState.serializer(), request.body!!.utf8()))
+    }
+
+    @Test
+    fun `devices and polled commands are read from the server's answers`() = runTest {
+        respond("""{"devices":[{"id":"desktop-1","online":true,"secondsSinceSeen":3,"state":"{\"id\":\"desktop-1\",\"name\":\"Desk\",\"kind\":\"desktop\"}"},{"id":"junk","online":false,"secondsSinceSeen":9,"state":"not json"}]}""")
+        val devices = client.devices(ConnectRoute.Server(session()))
+        assertEquals(listOf("Desk"), devices.map { it.state.name })
+        assertTrue(devices.single().online)
+
+        respond("""{"commands":[{"seq":7,"from":"phone-1","payload":"{\"type\":\"seek\",\"positionMs\":90000}"}],"seq":7}""")
+        val (commands, seq) = client.poll(ConnectRoute.Server(session()), "desktop-1", after = 5, waitSeconds = 20)
+        assertEquals(7L, seq)
+        assertEquals(ConnectCommand(ConnectCommand.SEEK, positionMs = 90_000), commands.single().command)
+        assertEquals("phone-1", commands.single().from)
+        val request = server.takeRequest().let { server.takeRequest() }
+        assertEquals("5", request.url.queryParameter("after"))
+        assertEquals("20", request.url.queryParameter("wait"))
+    }
+
+    @Test
     fun `tonearm server errors name the server`() = runTest {
         respond("""{"error":"Navidrome didn't accept that login"}""", 401)
         try {
@@ -126,36 +98,32 @@ class ConnectClientTest {
     }
 
     @Test
-    fun `the router prefers the tonearm server and remembers it`() = runTest {
+    fun `the router finds the tonearm server and remembers it`() = runTest {
         val router = ConnectRouter(client)
         respond("""{"server":"tonearm","protocol":2,"version":"1.0.0","user":"alice"}""")
-        val route = router.route(session()) { error("Lidarr isn't asked when the server is there") }
-        assertTrue(route is ConnectRoute.Server)
-        assertTrue(router.route(session()) { null } is ConnectRoute.Server)
+        assertTrue(router.route(session()) is ConnectRoute.Server)
+        assertTrue(router.route(session()) is ConnectRoute.Server)
         assertEquals(1, server.requestCount)
     }
 
     @Test
-    fun `without a tonearm server the router falls back to lidarr`() = runTest {
-        val config = LidarrConfig(url = "http://lidarr.example", keyEnc = "")
-        // Navidrome's answer for a page it doesn't have, and its web app.
-        respond("404 page not found", 404)
-        assertEquals(ConnectRoute.Lidarr(config, "k"), ConnectRouter(client).route(session()) { config to "k" })
-        respond("<!doctype html><html></html>")
-        assertEquals(ConnectRoute.Lidarr(config, "k"), ConnectRouter(client).route(session()) { config to "k" })
+    fun `without a tonearm server connect isn't available`() = runTest {
+        // Navidrome's answer for a page it doesn't have.
         respond("404 page not found", 404)
         try {
-            ConnectRouter(client).route(session()) { null }
+            ConnectRouter(client).route(session())
             error("expected failure")
         } catch (_: ConnectUnavailableException) {
         }
+        respond("<!doctype html><html></html>")
+        assertEquals(null, client.findServer(session()))
     }
 
     @Test
-    fun `a tonearm server that rejects the login isn't skipped`() = runTest {
+    fun `a tonearm server that rejects the login says so`() = runTest {
         respond("""{"error":"Navidrome didn't accept that login"}""", 401)
         try {
-            ConnectRouter(client).route(session()) { LidarrConfig(url = "http://lidarr.example", keyEnc = "") to "k" }
+            ConnectRouter(client).route(session())
             error("expected failure")
         } catch (e: IntegrationHttpException) {
             assertEquals(401, e.code)
@@ -192,10 +160,10 @@ class ConnectClientTest {
         assertTrue(used.lidarr!!.viaServer && used.lidarr!!.limited)
         assertEquals("https://music.example/connect-tonearm/maloja", used.maloja!!.url)
         assertTrue(used.maloja!!.scrobble)
-        // Without the server (or without what it doesn't offer) the app's own settings stay.
-        assertEquals(stored, stored.through(null))
+        // Lidarr only comes through the server; Maloja falls back to the app's own settings.
+        assertEquals(Integrations(maloja = stored.maloja), stored.through(null))
         assertEquals(stored.maloja, stored.through(info.copy(maloja = false)).maloja)
-        assertEquals(null, Integrations().through(info.copy(lidarr = false, maloja = false)).lidarr)
+        assertEquals(null, stored.through(info.copy(lidarr = false)).lidarr)
     }
 
     @Test

@@ -2,7 +2,8 @@ package io.github.deadeyebarb.tonearm.integrations
 
 import io.github.deadeyebarb.tonearm.connect.ConnectClient
 import io.github.deadeyebarb.tonearm.connect.ConnectRoute
-import io.github.deadeyebarb.tonearm.data.LidarrConfig
+import io.github.deadeyebarb.tonearm.data.ServerConfig
+import io.github.deadeyebarb.tonearm.subsonic.ServerSession
 import io.github.deadeyebarb.tonearm.likes.LikesDocument
 import io.github.deadeyebarb.tonearm.likes.LikesSync
 import io.github.deadeyebarb.tonearm.likes.PendingLike
@@ -30,11 +31,10 @@ class LikesSyncTest {
     @get:Rule val tmp = TemporaryFolder()
     private val json = Json { ignoreUnknownKeys = true; isLenient = true; coerceInputValues = true; explicitNulls = false }
     private val server = MockWebServer()
-    /** The plugin's store: value and version. */
+    /** The Tonearm server's store: value and version. */
     private var stored: String? = null
     private var version = 0L
     private var putsBeforeConflict = 0
-    private var supported = true
 
     private fun like(id: String, at: Long) = PendingLike(TrackRef("Song $id", "Artist", youtubeId = id), likedAt = at)
 
@@ -42,9 +42,7 @@ class LikesSyncTest {
     fun setUp() {
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse {
-                val op = request.url.queryParameter("op")
-                if (!supported) return MockResponse(body = """{"error":"Unknown op"}""")
-                return when (op) {
+                return when (request.url.encodedPath.substringAfterLast('/')) {
                     "get" -> MockResponse(body = json.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), kotlinx.serialization.json.buildJsonObject {
                         put("value", kotlinx.serialization.json.JsonPrimitive(stored))
                         put("version", kotlinx.serialization.json.JsonPrimitive(version))
@@ -58,8 +56,7 @@ class LikesSyncTest {
                             version++
                         }
                         if (ifVersion != version) return MockResponse(body = """{"ok":false,"conflict":true,"version":$version}""")
-                        val body = json.parseToJsonElement(request.body!!.utf8()).jsonObject
-                        stored = body["fields"]!!.jsonArray[0].jsonObject["value"]!!.jsonPrimitive.content
+                        stored = request.body!!.utf8()
                         version++
                         MockResponse(body = """{"ok":true,"conflict":false,"version":$version}""")
                     }
@@ -74,7 +71,7 @@ class LikesSyncTest {
     fun tearDown() = server.close()
 
     private fun sync() = LikesSync(ConnectClient(IntegrationHttp(OkHttpClient()) { null }, json), json)
-    private val route get() = ConnectRoute.Lidarr(LidarrConfig(url = server.url("/").toString().trimEnd('/'), keyEnc = ""), "k")
+    private val route get() = ConnectRoute.Server(ServerSession(ServerConfig(name = "Music", baseUrl = server.url("/").toString(), username = "alice"), "secret", OkHttpClient()))
 
     @Test
     fun `likes from both devices are kept, unlikes win over older likes`() {
@@ -110,14 +107,5 @@ class LikesSyncTest {
         assertTrue(sync().sync(route, phone))
         val final = json.decodeFromString(LikesDocument.serializer(), stored!!)
         assertEquals(setOf("mine", "other"), final.likes.map { it.ref.youtubeId }.toSet())
-    }
-
-    @Test
-    fun `an old plugin means no sharing, and nothing breaks`() = runTest {
-        supported = false
-        val phone = PendingLikes(tmp.newFile("o.json").also { it.delete() }, json)
-        phone.add(TrackRef("Mine", "Me", youtubeId = "mine"))
-        assertFalse(sync().sync(route, phone))
-        assertEquals(1, phone.items.value.size)
     }
 }

@@ -13,7 +13,7 @@ import java.util.UUID
 
 /**
  * The phone's side of Tonearm Connect: finds the other Tonearm apps (the desktop player) through the
- * Tonearm server next to the music server, or the Tonearm Connect plugin in Lidarr, and remote-controls them.
+ * Tonearm server next to the music server, and remote-controls them.
  */
 class PhoneConnect(
     context: Context,
@@ -37,25 +37,29 @@ class PhoneConnect(
     }
 
     /** Album suggestions from the Tonearm server's AI; [refresh] asks for new ones. */
-    suspend fun aiPicks(refresh: Boolean = false): AiPicks {
+    suspend fun aiPicks(refresh: Boolean = false, seed: String? = null): AiPicks {
         val session = sessions.active.value ?: sessions.awaitActive()
-        return client.aiPicks(session, refresh)
+        return client.aiPicks(session, refresh, seed)
     }
 
     /** Artists you don't have that yours point to, from the Tonearm server; [refresh] makes new ones. */
     suspend fun discover(refresh: Boolean = false): DiscoveryPicks = client.discover(sessions.active.value ?: sessions.awaitActive(), refresh)
 
+    suspend fun webSearch(query: String): WebSearch = client.webSearch(sessions.active.value ?: sessions.awaitActive(), query)
+
+    suspend fun aiSearch(query: String): AiSearch = client.aiSearch(sessions.active.value ?: sessions.awaitActive(), query)
+
     /** Artists like [artist] (Deezer's related artists, through the Tonearm server), marked when you have them. */
     suspend fun similarArtists(artist: String): List<SimilarArtist> = client.similarArtists(sessions.active.value ?: sessions.awaitActive(), artist)
 
-    /** The Tonearm server when the music server has one, else the plugin in Lidarr. */
+    /** The Tonearm server at the music server's address. */
     suspend fun route(): ConnectRoute {
         val session = sessions.active.value ?: try {
             sessions.awaitActive()
         } catch (_: NoServerException) {
             null
         }
-        return router.route(session) { integrations.requireLidarrOrNull() }
+        return router.route(session)
     }
 
     private companion object {

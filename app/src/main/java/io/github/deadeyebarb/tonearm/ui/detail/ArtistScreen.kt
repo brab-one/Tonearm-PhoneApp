@@ -22,7 +22,10 @@ import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -86,7 +89,14 @@ fun ArtistScreen(id: String) {
     val page = vm.value
     DetailScaffold(
         title = page?.artist?.name.orEmpty(),
-        actions = { page?.let { StarButton(serverId, StarKind.ARTIST, it.artist.id, it.artist.starred != null) } },
+        actions = {
+            page?.let { p ->
+                IconButton(onClick = { actions.moreLike(p.artist.name, p.artist.name, "the artist ${p.artist.name}", artistId = p.artist.id, cover = p.artist.coverArt) }) {
+                    Icon(Icons.Rounded.AutoAwesome, "More like this")
+                }
+                StarButton(serverId, StarKind.ARTIST, p.artist.id, p.artist.starred != null)
+            }
+        },
     ) {
         LoadContent(vm) { data ->
             val albums = data.artist.album.sortedByDescending { it.year ?: 0 }

@@ -68,7 +68,8 @@ class IntegrationsService(
     suspend fun requireLidarrOrNull(): Pair<LidarrConfig, String>? = current().lidarr?.let { it to lidarrKey(it) }
 
     suspend fun requireLidarr(): Pair<LidarrConfig, String> {
-        val config = current().lidarr ?: throw IntegrationNotConfiguredException("Connect Lidarr in Settings → Integrations first")
+        val config = current().lidarr
+            ?: throw IntegrationNotConfiguredException("Lidarr comes through the Tonearm server on your music server, and it isn't set up there yet")
         return config to lidarrKey(config)
     }
 

@@ -110,11 +110,10 @@ fun ConnectScreen() {
             Column(Modifier.fillMaxSize().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 EmptyState(
                     Icons.Rounded.Devices, "Set up Tonearm Connect",
-                    "Tonearm Connect runs on the Tonearm server next to your music server (it serves everyone on it), " +
-                        "or on the Tonearm Connect plugin in your Lidarr. The phone and the desktop app find it by themselves.",
+                    "Tonearm Connect runs on the Tonearm server next to your music server (it serves everyone on it). " +
+                        "The phone and the desktop app find it by themselves.",
                     Modifier.weight(1f),
                 )
-                if (integrations.lidarr == null) HudButton("Connect Lidarr", { actions.navigate(LidarrSettingsRoute) }, Modifier.fillMaxWidth())
             }
             return@DetailScaffold
         }

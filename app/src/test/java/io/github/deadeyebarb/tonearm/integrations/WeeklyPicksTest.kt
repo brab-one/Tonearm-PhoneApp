@@ -44,6 +44,8 @@ class WeeklyPicksTest {
     private var picks = """{"picks":[],"madeAt":0,"running":true}"""
     private var refreshes = 0
     private var importListLooks = 0
+    /** Tonearm's old Brainarr lists are still in Lidarr. */
+    private var oldLists = true
     /** Method and path(+query) of every change sent to Lidarr. */
     private val lidarrChanges = mutableListOf<Pair<String, String>>()
 
@@ -100,7 +102,7 @@ class WeeklyPicksTest {
         return when {
             endpoint == "importlist" -> {
                 importListLooks++
-                MockResponse(body = """[{"id":2,"name":"Brainarr AI Music Discovery","implementation":"Brainarr"},
+                if (!oldLists) MockResponse(body = "[]") else MockResponse(body = """[{"id":2,"name":"Brainarr AI Music Discovery","implementation":"Brainarr"},
                     {"id":3,"name":"Tonearm more like this","implementation":"Brainarr"},
                     {"id":4,"name":"Tonearm weekly picks","implementation":"Brainarr","fields":[{"name":"maxRecommendations","value":3}]}]""")
             }
@@ -175,6 +177,15 @@ class WeeklyPicksTest {
         assertEquals(1, lidarrChanges.count { it == "PUT" to "album/monitor" })
         assertEquals(2, lidarrChanges.count { it == "POST" to "album" })
         assertFalse(runFile.exists())
+    }
+
+    @Test
+    fun `weekly picks are on until switched off`() = runTest {
+        oldLists = false
+        assertEquals("Picking this week's albums from what you play", weekly.tick(config, "k", session, now = T))
+        assertEquals(WeeklySettings(on = true), weekly.settings(session))
+        weekly.saveSettings(session, WeeklySettings(on = false))
+        assertEquals(false, weekly.settings(session).on)
     }
 
     @Test

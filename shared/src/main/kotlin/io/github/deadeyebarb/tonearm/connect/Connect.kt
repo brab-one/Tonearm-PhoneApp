@@ -1,6 +1,5 @@
 package io.github.deadeyebarb.tonearm.connect
 
-import io.github.deadeyebarb.tonearm.data.LidarrConfig
 import io.github.deadeyebarb.tonearm.data.TonearmServerInfo
 import io.github.deadeyebarb.tonearm.integrations.IntegrationHttp
 import io.github.deadeyebarb.tonearm.integrations.IntegrationHttpException
@@ -17,8 +16,6 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -124,13 +121,6 @@ data class ConnectDevice(val state: DeviceState, val online: Boolean, val second
 
 data class ReceivedCommand(val seq: Long, val from: String, val command: ConnectCommand)
 
-class ConnectPluginMissingException :
-    IntegrationHttpException(
-        0,
-        "Lidarr: Tonearm Connect isn't installed. Add it under Lidarr → System → Plugins " +
-            "(https://github.com/brab-one/Tonearm-Connect) and restart Lidarr.",
-    )
-
 /** An album the Tonearm server's AI suggests, by an artist not in the library. */
 @Serializable
 data class AiPick(val artist: String, val album: String, val year: Int? = null, val why: String = "")
@@ -164,30 +154,39 @@ data class DiscoveryPick(
 @Serializable
 data class DiscoveryPicks(val picks: List<DiscoveryPick> = emptyList(), val madeAt: Long = 0, val problem: String? = null)
 
+/** What Deezer finds for a search. */
+@Serializable
+data class WebSearch(val songs: List<WebSong> = emptyList(), val albums: List<WebAlbum> = emptyList(), val artists: List<SimilarArtist> = emptyList())
+
+@Serializable
+data class WebSong(val title: String, val artist: String, val album: String? = null, val duration: Int? = null, val coverUrl: String? = null)
+
+@Serializable
+data class WebAlbum(val title: String, val artist: String, val coverUrl: String? = null, val type: String? = null)
+
+/** A song ([title]) or album the AI thinks a search means. */
+@Serializable
+data class AiHit(val artist: String, val title: String? = null, val album: String? = null, val why: String = "")
+
+@Serializable
+data class AiSearch(val query: String = "", val hits: List<AiHit> = emptyList(), val running: Boolean = false, val problem: String? = null)
+
 @Serializable
 data class SimilarArtist(val artist: String, val imageUrl: String? = null, val fans: Long = 0, val inLibrary: Boolean = false)
 
-/** Where Tonearm Connect runs: the Tonearm server beside the music server, or the plugin in Lidarr. */
+/** Where Tonearm Connect runs: the Tonearm server beside the music server, reached with its login. */
 sealed interface ConnectRoute {
     /** The Tonearm server, reached at the music server's address with the same login; one hub per user. */
     data class Server(val session: ServerSession) : ConnectRoute
-
-    data class Lidarr(val config: LidarrConfig, val key: String) : ConnectRoute
 }
 
 class ConnectUnavailableException :
     IntegrationHttpException(
         0,
-        "Tonearm Connect needs the Tonearm server next to your music server (https://github.com/brab-one/Tonearm-Server), " +
-            "or Lidarr with its Tonearm Connect plugin.",
+        "Tonearm Connect needs the Tonearm server next to your music server (https://github.com/brab-one/Tonearm-Server).",
     )
 
-/**
- * Talks to Tonearm Connect: the Tonearm server (`<music server>/connect-tonearm/api/<op>`, the data as the
- * request body), or the plugin in Lidarr through Lidarr's provider action endpoint
- * (`POST api/v1/notification/action/tonearm?op=…`, the data in the resource's hidden Payload field).
- * Both answer with the same JSON.
- */
+/** Talks to the Tonearm server: `<music server>/connect-tonearm/api/<op>`, the data as the request body. */
 class ConnectClient(private val http: IntegrationHttp, private val json: Json) {
     private val deviceList = ListSerializer(RawDevice.serializer())
 
@@ -228,6 +227,14 @@ class ConnectClient(private val http: IntegrationHttp, private val json: Json) {
     /** Artists you don't have that yours point to (on Deezer), with an album each; kept by the server for a day. */
     suspend fun discover(session: ServerSession, refresh: Boolean = false): DiscoveryPicks =
         json.decodeFromJsonElement(DiscoveryPicks.serializer(), call(ConnectRoute.Server(session), "discover", listOf("refresh" to refresh.takeIf { it })))
+
+    /** Songs, albums and artists matching [query] on Deezer, through the Tonearm server. */
+    suspend fun webSearch(session: ServerSession, query: String): WebSearch =
+        json.decodeFromJsonElement(WebSearch.serializer(), call(ConnectRoute.Server(session), "search", listOf("q" to query)))
+
+    /** What the server's AI makes of [query]; [AiSearch.running] until it has answered (ask again then). */
+    suspend fun aiSearch(session: ServerSession, query: String): AiSearch =
+        json.decodeFromJsonElement(AiSearch.serializer(), call(ConnectRoute.Server(session), "aisearch", listOf("q" to query)))
 
     /** Artists like [artist], marked when the library has them. */
     suspend fun similarArtists(session: ServerSession, artist: String): List<SimilarArtist> =
@@ -276,70 +283,37 @@ class ConnectClient(private val http: IntegrationHttp, private val json: Json) {
         call(route, "forget", listOf("device" to device))
     }
 
-    /** A shared document from the store (protocol 2): its JSON (null if never saved) and version. */
+    /** A shared document from the server's store: its JSON (null if never saved) and version. */
     data class Stored(val value: String?, val version: Long)
 
-    /** Thrown by [storeGet]/[storePut] when the plugin is older than its store. */
-    class StoreUnsupportedException : IntegrationHttpException(0, "Lidarr: Tonearm Connect is too old to share likes; update it under System → Plugins")
-
-    suspend fun storeGet(route: ConnectRoute, name: String): Stored = store {
+    suspend fun storeGet(route: ConnectRoute, name: String): Stored {
         val response = call(route, "get", listOf("key" to name))
-        Stored(response["value"]?.jsonPrimitive?.contentOrNull, response["version"]?.jsonPrimitive?.long ?: 0)
+        return Stored(response["value"]?.jsonPrimitive?.contentOrNull, response["version"]?.jsonPrimitive?.long ?: 0)
     }
 
     /** Saves [value] if the stored version is still [ifVersion]. Null when someone saved in between. */
-    suspend fun storePut(route: ConnectRoute, name: String, value: String, ifVersion: Long): Stored? = store {
+    suspend fun storePut(route: ConnectRoute, name: String, value: String, ifVersion: Long): Stored? {
         val response = call(route, "put", listOf("key" to name, "ifVersion" to ifVersion), value)
-        if (response["ok"]?.jsonPrimitive?.contentOrNull == "true") Stored(value, response["version"]?.jsonPrimitive?.long ?: 0) else null
-    }
-
-    private suspend fun <T> store(block: suspend () -> T): T = try {
-        block()
-    } catch (e: IntegrationHttpException) {
-        if ("Unknown op" in e.message.orEmpty()) throw StoreUnsupportedException()
-        throw e
+        return if (response["ok"]?.jsonPrimitive?.contentOrNull == "true") Stored(value, response["version"]?.jsonPrimitive?.long ?: 0) else null
     }
 
     private suspend fun call(route: ConnectRoute, op: String, params: List<Pair<String, Any?>> = emptyList(), payload: String = ""): JsonObject {
-        val (text, service) = when (route) {
-            is ConnectRoute.Server -> http.post(route.session.connectUrl(op, params), payload, route.session.client, service = "Tonearm server") to "Tonearm server"
-            is ConnectRoute.Lidarr -> callLidarr(route.config, route.key, op, params, payload) to "Lidarr: Tonearm Connect"
-        }
+        val session = (route as ConnectRoute.Server).session
+        val text = http.post(session.connectUrl(op, params), payload, session.client, service = "Tonearm server")
         val response = json.parseToJsonElement(text).jsonObject
-        response["error"]?.jsonPrimitive?.contentOrNull?.let { throw IntegrationHttpException(0, "$service: $it") }
+        response["error"]?.jsonPrimitive?.contentOrNull?.let { throw IntegrationHttpException(0, "Tonearm server: $it") }
         return response
     }
 
-    private suspend fun callLidarr(config: LidarrConfig, key: String, op: String, params: List<Pair<String, Any?>>, payload: String): String {
-        val url = IntegrationHttp.url(config.url, "api/v1/notification/action/tonearm", listOf("op" to op) + params)
-        val body = buildJsonObject {
-            put("name", JsonPrimitive("Tonearm"))
-            put("implementation", JsonPrimitive(IMPLEMENTATION))
-            put("configContract", JsonPrimitive("${IMPLEMENTATION}Settings"))
-            put("fields", JsonArray(listOf(buildJsonObject { put("name", JsonPrimitive("payload")); put("value", JsonPrimitive(payload)) })))
-        }
-        return try {
-            http.postJson(url, body.toString(), config.useServerTls, mapOf("X-Api-Key" to key, "Accept" to "application/json"), service = "Lidarr")
-        } catch (e: IntegrationHttpException) {
-            // Lidarr can't find the provider type when the plugin isn't there.
-            if (e.code == 500 && "targetType" in e.message.orEmpty()) throw ConnectPluginMissingException()
-            throw e
-        }
-    }
-
     companion object {
-        const val IMPLEMENTATION = "TonearmConnect"
-        const val PROTOCOL = 1
         /** How long a poll waits; below common proxy timeouts (60 s) and OkHttp's read timeout. */
         const val POLL_WAIT_SECONDS = 20
     }
 }
 
 /**
- * Finds the Tonearm server at the music server's address and picks where Connect runs: that server when
- * it's there (it serves every user of that Navidrome), otherwise the plugin in Lidarr. What was found is
- * kept for a while, so a device doesn't hop between the two while the other devices stay put, and it's
- * published in [server] for the Lidarr and Maloja the server offers.
+ * Finds the Tonearm server at the music server's address, for Connect and for what it offers (Lidarr, Maloja,
+ * picks). What was found is kept for a while and published in [server].
  */
 class ConnectRouter(private val client: ConnectClient) {
     private data class Found(val server: String, val info: TonearmServerInfo?, val at: Long)
@@ -350,11 +324,9 @@ class ConnectRouter(private val client: ConnectClient) {
     /** The Tonearm server of the active music server, once looked up; null if there's none. */
     val server: StateFlow<TonearmServerInfo?> = _server.asStateFlow()
 
-    /** [lidarr] is only asked when there's no Tonearm server. */
-    suspend fun route(session: ServerSession?, lidarr: suspend () -> Pair<LidarrConfig, String>?): ConnectRoute {
+    suspend fun route(session: ServerSession?): ConnectRoute {
         if (session != null && lookup(session) != null) return ConnectRoute.Server(session)
-        val (config, key) = lidarr() ?: throw ConnectUnavailableException()
-        return ConnectRoute.Lidarr(config, key)
+        throw ConnectUnavailableException()
     }
 
     /**

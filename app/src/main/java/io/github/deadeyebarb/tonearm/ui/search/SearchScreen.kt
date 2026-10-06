@@ -1,10 +1,6 @@
 package io.github.deadeyebarb.tonearm.ui.search
 
-import io.github.deadeyebarb.tonearm.local.LocalMusic
-import io.github.deadeyebarb.tonearm.ui.detail.YouTubeAlbumRow
-import io.github.deadeyebarb.tonearm.ui.detail.YouTubeArtistRow
-import io.github.deadeyebarb.tonearm.youtube.YtAlbum
-import io.github.deadeyebarb.tonearm.youtube.YtArtist
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -24,7 +20,9 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SearchOff
 import androidx.compose.material3.CircularProgressIndicator
@@ -50,13 +48,22 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import io.github.deadeyebarb.tonearm.AppContainer
+import io.github.deadeyebarb.tonearm.connect.AiSearch
+import io.github.deadeyebarb.tonearm.connect.WebSearch
+import io.github.deadeyebarb.tonearm.connect.WebSong
 import io.github.deadeyebarb.tonearm.container
+import io.github.deadeyebarb.tonearm.integrations.Names
 import io.github.deadeyebarb.tonearm.integrations.Recommender
+import io.github.deadeyebarb.tonearm.integrations.SearchRank
+import io.github.deadeyebarb.tonearm.integrations.SongMatch
+import io.github.deadeyebarb.tonearm.local.LocalMusic
 import io.github.deadeyebarb.tonearm.media.QueueSong
 import io.github.deadeyebarb.tonearm.subsonic.SearchResult
 import io.github.deadeyebarb.tonearm.subsonic.Song
@@ -70,9 +77,14 @@ import io.github.deadeyebarb.tonearm.ui.common.Load
 import io.github.deadeyebarb.tonearm.ui.common.LocalActions
 import io.github.deadeyebarb.tonearm.ui.common.SectionHeader
 import io.github.deadeyebarb.tonearm.ui.common.SongRow
+import io.github.deadeyebarb.tonearm.ui.detail.YouTubeAlbumRow
+import io.github.deadeyebarb.tonearm.ui.detail.YouTubeArtistRow
+import io.github.deadeyebarb.tonearm.ui.request.RemoteCover
 import io.github.deadeyebarb.tonearm.ui.theme.Hud
 import io.github.deadeyebarb.tonearm.ui.theme.HudButton
 import io.github.deadeyebarb.tonearm.youtube.YouTubeMusic
+import io.github.deadeyebarb.tonearm.youtube.YtAlbum
+import io.github.deadeyebarb.tonearm.youtube.YtArtist
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -128,6 +140,25 @@ private fun RequestPrompt(query: String) {
 }
 
 class SearchViewModel(private val c: AppContainer) : ViewModel() {
+    /** Asks the Tonearm server's AI about the search; it answers in the background. */
+    fun askAi() {
+        val q = lastQuery.takeIf { it.isNotEmpty() } ?: return
+        aiJob?.cancel()
+        aiJob = viewModelScope.launch {
+            while (true) {
+                ai = try {
+                    c.connect.aiSearch(q)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    AiSearch(q, problem = e.userMessage())
+                }
+                if (ai?.running != true) break
+                delay(4_000)
+            }
+        }
+    }
+
     var state by mutableStateOf<Load<SearchResult>?>(null)
         private set
     /** Songs on YouTube Music that aren't in the library; null when that's turned off. */
@@ -140,7 +171,14 @@ class SearchViewModel(private val c: AppContainer) : ViewModel() {
     /** Matching songs stored on the phone. */
     var phone by mutableStateOf<List<Song>>(emptyList())
         private set
+    /** Deezer's matches, through the Tonearm server. */
+    var web by mutableStateOf<WebSearch?>(null)
+        private set
+    /** What the server's AI makes of the search, once asked. */
+    var ai by mutableStateOf<AiSearch?>(null)
+        private set
     private var job: Job? = null
+    private var aiJob: Job? = null
     private var lastQuery = ""
 
     fun search(query: String, debounce: Boolean = true) {
@@ -154,13 +192,20 @@ class SearchViewModel(private val c: AppContainer) : ViewModel() {
             ytArtists = emptyList()
             ytAlbums = emptyList()
             phone = emptyList()
+            web = null
+            ai = null
+            aiJob?.cancel()
             return
         }
+        web = null
+        ai = null
+        aiJob?.cancel()
         job = viewModelScope.launch {
             if (debounce) delay(300)
             if (state == null) state = Load.Loading
             val yt = if (c.settings.state.value.youtubeFallback) async { runCatching { c.youtube.searchSongs(q, 15) } } else null
             if (c.local.hasPermission()) launch { phone = runCatching { c.local.load(); c.local.search(q).take(30) }.getOrDefault(emptyList()) }
+            if (c.tonearmServer.server.value?.discovery == true) launch { web = runCatching { c.connect.webSearch(q) }.getOrNull() }
             if (c.settings.state.value.youtubeCatalog) {
                 launch { ytArtists = runCatching { c.catalog.searchArtists(q, 8) }.getOrDefault(emptyList()) }
                 launch { ytAlbums = runCatching { c.catalog.searchAlbums(q, 12) }.getOrDefault(emptyList()) }
@@ -186,10 +231,89 @@ class SearchViewModel(private val c: AppContainer) : ViewModel() {
     }
 }
 
+/** A best match from one of the sources. */
+private sealed interface BestMatch {
+    val key: String
+    data class Own(val entry: QueueSong, override val key: String) : BestMatch
+    data class YouTube(val entry: QueueSong, override val key: String) : BestMatch
+    data class Web(val song: WebSong, override val key: String) : BestMatch
+}
+
+/**
+ * The songs that fit the search best, whatever their source: the library, YouTube Music or Deezer. On a tie
+ * the library's copy wins, so YouTube Music and Deezer only come first when they have a better match.
+ */
+private fun bestMatches(query: String, library: List<Song>, serverId: String?, youtube: List<Song>, web: List<WebSong>): List<BestMatch> {
+    fun key(artist: String?, title: String) = Names.normalize(artist.orEmpty()) + "|" + Names.normalize(SongMatch.cleanTitle(title))
+    val scored = buildList {
+        if (serverId != null) library.forEach { add(Triple(BestMatch.Own(QueueSong(serverId, it), key(it.artist, it.title)) as BestMatch, SearchRank.score(query, it.title, it.artist, it.album), 0)) }
+        youtube.forEach { add(Triple(BestMatch.YouTube(QueueSong(YouTubeMusic.SOURCE_ID, it), key(it.artist, it.title)), SearchRank.score(query, it.title, it.artist, it.album), 1)) }
+        web.forEach { add(Triple(BestMatch.Web(it, key(it.artist, it.title)), SearchRank.score(query, it.title, it.artist, it.album), 2)) }
+    }
+    val seen = HashSet<String>()
+    return scored.filter { it.second >= SearchRank.GOOD }
+        .sortedWith(compareByDescending<Triple<BestMatch, Double, Int>> { it.second }.thenBy { it.third })
+        .map { it.first }
+        .filter { seen.add(it.key) }
+        .take(5)
+}
+
+@Composable
+private fun BestMatchRow(match: BestMatch) {
+    val actions = LocalActions.current
+    when (match) {
+        is BestMatch.Own -> SongRow(match.entry.song, serverId = match.entry.serverId, onClick = { actions.playEntries(listOf(match.entry), 0) })
+        is BestMatch.YouTube -> SongRow(match.entry.song, serverId = match.entry.serverId, showAlbum = false, onClick = { actions.playRadio(match.entry) })
+        is BestMatch.Web -> FoundRow(match.song.title, "${match.song.artist}${match.song.album?.let { " · $it" } ?: ""}", "DEEZER // PLAYS FROM YOUTUBE MUSIC", match.song.coverUrl) {
+            actions.playFound(match.song.artist, match.song.title)
+        }
+    }
+}
+
+/** A song or album known only by name: tap to play it (or open it) from the library or YouTube Music. */
+@Composable
+private fun FoundRow(title: String, subtitle: String, note: String, cover: String?, onClick: () -> Unit) {
+    val hud = Hud.colors
+    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        RemoteCover(cover, Icons.Rounded.MusicNote, Modifier.size(48.dp))
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = hud.dim, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(note, style = MaterialTheme.typography.labelSmall, color = hud.accent2, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+/** The AI's take on the search: a button to ask, then what it found (songs play, albums open). */
+private fun LazyListScope.aiResults(ai: AiSearch?, available: Boolean, onAsk: () -> Unit) {
+    if (!available) return
+    item {
+        val actions = LocalActions.current
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
+            when {
+                ai == null -> HudButton("Ask the AI about this search", onAsk, Modifier.fillMaxWidth(), icon = Icons.Rounded.AutoAwesome, filled = false)
+                ai.running -> Text("The AI is thinking… (it can take a minute)", style = MaterialTheme.typography.bodySmall, color = Hud.colors.dim)
+                ai.problem != null -> Text("AI: ${ai.problem}", style = MaterialTheme.typography.bodySmall, color = Hud.colors.danger)
+                ai.hits.isEmpty() -> Text("The AI found nothing for this.", style = MaterialTheme.typography.bodySmall, color = Hud.colors.dim)
+                else -> Column {
+                    SectionHeader("The AI suggests")
+                    ai.hits.forEach { hit ->
+                        FoundRow(hit.title ?: hit.album.orEmpty(), hit.artist + if (hit.title == null) " · album" else "", hit.why.uppercase(), null) {
+                            if (hit.title != null) actions.playFound(hit.artist, hit.title) else actions.openFoundAlbum(hit.artist, hit.album.orEmpty())
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 fun SearchScreen() {
     val c = LocalContext.current.container
     val actions = LocalActions.current
+    val server by c.tonearmServer.server.collectAsStateWithLifecycle()
     val vm = viewModel { SearchViewModel(c) }
     var query by rememberSaveable { mutableStateOf("") }
     val focus = remember { FocusRequester() }
@@ -234,14 +358,24 @@ fun SearchScreen() {
                     val result = state.value
                     val youtube = vm.youtube
                     val youtubeHits = (youtube as? Load.Ready)?.value.orEmpty()
-                    if (result.artist.isEmpty() && result.album.isEmpty() && result.song.isEmpty() && youtubeHits.isEmpty() && vm.phone.isEmpty()) {
+                    if (result.artist.isEmpty() && result.album.isEmpty() && result.song.isEmpty() && youtubeHits.isEmpty() && vm.phone.isEmpty() &&
+                        vm.web?.songs.isNullOrEmpty() && vm.ai == null && server?.recommendations != true
+                    ) {
                         Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
                             EmptyState(Icons.Rounded.SearchOff, "Nothing found for “${query.trim()}”", modifier = Modifier.weight(1f))
                             if (youtube == Load.Loading) YouTubeSearching()
                             RequestPrompt(query.trim())
                         }
                     } else {
+                        val best = remember(result, youtubeHits, vm.web) {
+                            bestMatches(query.trim(), result.song, actions.activeServerId, youtubeHits, vm.web?.songs.orEmpty())
+                        }
                         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+                            if (best.isNotEmpty()) {
+                                item { SectionHeader("Best matches") }
+                                items(best, key = { "best:" + it.key }) { match -> BestMatchRow(match) }
+                            }
+                            aiResults(vm.ai, server?.recommendations == true, onAsk = vm::askAi)
                             if (result.artist.isNotEmpty()) {
                                 item {
                                     Column {

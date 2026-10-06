@@ -107,7 +107,7 @@ fun SettingsScreen() {
             }
             item {
                 Item(
-                    "Lidarr", integrations.lidarr?.let { if (it.viaServer) "Through the Tonearm server" else "Requests go to ${it.url}" } ?: "Not connected: request music you don't have",
+                    "Lidarr", if (integrations.lidarr != null) "Through the Tonearm server · request defaults" else "Comes through the Tonearm server, once it has Lidarr",
                     icon = { Icon(Icons.Rounded.CloudDownload, null) },
                 ) { actions.navigate(LidarrSettingsRoute) }
             }

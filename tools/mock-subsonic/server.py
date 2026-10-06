@@ -304,6 +304,13 @@ class Handler(BaseHTTPRequestHandler):
         if self.connect_url and url.path.startswith("/connect-tonearm"):
             return self.forward_connect("DELETE")
         with self.lib.lock:
+            album = re.match(r"^/api/v1/album/(\d+)$", url.path)
+            if album and self.headers.get("X-Api-Key") == LIDARR_KEY:
+                for mbid, state in list(self.lib.lidarr_albums.items()):
+                    if state["id"] == int(album.group(1)):
+                        state["monitored"] = False
+                        print(f"    lidarr: removed album {mbid} ({url.query})", flush=True)
+                        return self.send_raw({})
             m = re.match(r"^/api/v1/artist/(\d+)$", url.path)
             if m and self.headers.get("X-Api-Key") == LIDARR_KEY:
                 entry = self.lidarr_entry(int(m.group(1)))
@@ -394,6 +401,10 @@ class Handler(BaseHTTPRequestHandler):
     # --- API -----------------------------------------------------------------
     def api_ping(self, q, one):
         self.send_json({})
+
+    def api_startScan(self, q, one):
+        print("    navidrome: scan started", flush=True)
+        self.send_json({"scanStatus": {"scanning": True, "count": len(self.lib.songs)}})
 
     def api_getUser(self, q, one):
         name = one("username") or one("u")
@@ -573,6 +584,10 @@ class Handler(BaseHTTPRequestHandler):
             if entry:
                 self.register_albums(entry)
             return self.send_raw([self.lidarr_album(entry, a) for a in entry["albums"]] if entry else [])
+        if endpoint == "wanted/missing":
+            # Monitored albums Lidarr hasn't got yet.
+            records = [self.lidarr_album(e, a) for e in LIDARR_CATALOG for a in e["albums"] if self.lib.lidarr_albums.get(a[1], {}).get("monitored")]
+            return self.send_raw({"page": 1, "pageSize": len(records), "totalRecords": len(records), "records": records})
         if endpoint == "album/lookup":
             # Lidarr's metadata knows the catalog's albums; "artist album" finds one.
             return self.send_raw([self.lidarr_album(e, a) for e in LIDARR_CATALOG for a in e["albums"]

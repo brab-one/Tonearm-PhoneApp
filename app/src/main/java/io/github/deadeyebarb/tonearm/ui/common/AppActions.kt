@@ -1,5 +1,9 @@
 package io.github.deadeyebarb.tonearm.ui.common
 
+import io.github.deadeyebarb.tonearm.likes.findSong
+import io.github.deadeyebarb.tonearm.integrations.TrackRef
+import io.github.deadeyebarb.tonearm.integrations.SearchRank
+import io.github.deadeyebarb.tonearm.ui.MoreLikeRoute
 import io.github.deadeyebarb.tonearm.local.LocalMusic
 import io.github.deadeyebarb.tonearm.integrations.IntegrationsService
 import io.github.deadeyebarb.tonearm.ui.YtAlbumRoute
@@ -61,6 +65,48 @@ class AppActions(
     fun findOnYouTube(artist: String) = launch {
         val found = container.catalog.findArtist(artist)
         if (found == null) message("$artist isn't on YouTube Music") else openYouTubeArtist(found)
+    }
+
+    /** Opens "More like this": similar artists, similar songs and (with the server's AI) albums like it. */
+    fun moreLike(label: String, artist: String?, aiSeed: String, artistId: String? = null, song: QueueSong? = null, cover: String? = null) = navigate(
+        MoreLikeRoute(
+            label = label, artist = artist?.takeIf { it.isNotBlank() }, artistId = artistId, aiSeed = aiSeed,
+            songServerId = song?.serverId, songId = song?.song?.id, songTitle = song?.song?.title, songArtist = song?.song?.artist, songDuration = song?.song?.duration,
+            cover = cover,
+        ),
+    )
+
+    fun moreLikeSong(entry: QueueSong) = moreLike(
+        "“${entry.song.title}”", entry.song.artist, "the song “${entry.song.title}”" + (entry.song.artist?.let { " by $it" } ?: ""),
+        artistId = entry.song.artistId, song = entry, cover = entry.song.coverArt,
+    )
+
+    /** Plays a song known by name (from Deezer or the AI): the library's copy if it has one, else YouTube Music's, then songs like it. */
+    fun playFound(artist: String, title: String) = launch {
+        val session = container.sessions.active.value
+        val own = session?.let { runCatching { container.api.findSong(TrackRef(title, artist), it) }.getOrNull() }
+        val first = if (own != null) QueueSong(session.id, own) else {
+            val query = "$artist $title"
+            val hit = container.youtube.searchSongs(query, 5).maxByOrNull { SearchRank.score(query, it.title, it.artist) }
+                ?.takeIf { SearchRank.score(query, it.title, it.artist) >= SearchRank.GOOD }
+                ?: return@launch message("“$title” isn't on YouTube Music")
+            QueueSong(YouTubeMusic.SOURCE_ID, hit)
+        }
+        player.play(listOf(first) + container.continuation.similarTo(first))
+    }
+
+    /** Opens an album known by name on YouTube Music. */
+    fun openFoundAlbum(artist: String, album: String) = launch {
+        val found = container.catalog.findAlbum(artist, album) ?: return@launch message("“$album” isn't on YouTube Music")
+        openYouTubeAlbum(found)
+    }
+
+    /** Plays [artist]'s best-known song on YouTube Music and its radio. */
+    fun playLike(artist: String) = launch {
+        message("Finding music like $artist…")
+        val top = container.youtube.artistSongs(artist, 1).firstOrNull() ?: return@launch message("Found nothing like $artist")
+        val first = QueueSong(YouTubeMusic.SOURCE_ID, top)
+        player.play(listOf(first) + container.continuation.similarTo(first))
     }
 
     /** Plays [first] and then YouTube Music's radio for it. */

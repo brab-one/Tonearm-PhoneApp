@@ -1,10 +1,5 @@
 package io.github.deadeyebarb.tonearm.ui.player
 
-import io.github.deadeyebarb.tonearm.integrations.Fetch
-import io.github.deadeyebarb.tonearm.ui.common.label
-import io.github.deadeyebarb.tonearm.ui.common.rememberFetchState
-import io.github.deadeyebarb.tonearm.local.LocalMusic
-import io.github.deadeyebarb.tonearm.ui.common.LikeButton
 import android.os.Build
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
@@ -40,6 +35,7 @@ import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Radio
 import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.RepeatOne
 import androidx.compose.material.icons.rounded.Shuffle
@@ -76,6 +72,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.Player
 import io.github.deadeyebarb.tonearm.container
+import io.github.deadeyebarb.tonearm.integrations.Fetch
+import io.github.deadeyebarb.tonearm.local.LocalMusic
 import io.github.deadeyebarb.tonearm.media.QueueSong
 import io.github.deadeyebarb.tonearm.media.toQueueSong
 import io.github.deadeyebarb.tonearm.playback.AudioFormatInfo
@@ -88,6 +86,7 @@ import io.github.deadeyebarb.tonearm.ui.EqualizerRoute
 import io.github.deadeyebarb.tonearm.ui.common.ActionMenu
 import io.github.deadeyebarb.tonearm.ui.common.CoverArt
 import io.github.deadeyebarb.tonearm.ui.common.CoverSize
+import io.github.deadeyebarb.tonearm.ui.common.LikeButton
 import io.github.deadeyebarb.tonearm.ui.common.LocalActions
 import io.github.deadeyebarb.tonearm.ui.common.MenuAction
 import io.github.deadeyebarb.tonearm.ui.common.StarButton
@@ -95,6 +94,8 @@ import io.github.deadeyebarb.tonearm.ui.common.downloadOf
 import io.github.deadeyebarb.tonearm.ui.common.isHiRes
 import io.github.deadeyebarb.tonearm.ui.common.isLossless
 import io.github.deadeyebarb.tonearm.ui.common.khz
+import io.github.deadeyebarb.tonearm.ui.common.label
+import io.github.deadeyebarb.tonearm.ui.common.rememberFetchState
 import io.github.deadeyebarb.tonearm.ui.theme.Hud
 import io.github.deadeyebarb.tonearm.ui.theme.HudBackground
 import io.github.deadeyebarb.tonearm.ui.theme.HudTag
@@ -225,7 +226,7 @@ private fun Header(entry: QueueSong?, onBack: () -> Unit, onSleep: () -> Unit) {
                         song.albumId?.let { add(MenuAction("Go to album", Icons.Rounded.Album) { actions.openAlbum(it) }) }
                         song.artistId?.let { add(MenuAction("Go to artist", Icons.Rounded.Person) { actions.openArtist(it) }) }
                         add(MenuAction("Add to playlist", Icons.AutoMirrored.Rounded.PlaylistAdd) { actions.addToPlaylist(listOf(entry)) })
-                        add(MenuAction("Instant mix", Icons.Rounded.AutoAwesome) { actions.instantMix(entry) })
+                        add(MenuAction("Instant mix", Icons.Rounded.Radio) { actions.instantMix(entry) })
                     }
                     if (!LocalMusic.isLocal(entry.serverId)) add(MenuAction("Download", Icons.Rounded.Download) { actions.download(listOf(entry)) })
                 }

@@ -143,6 +143,11 @@ class SubsonicApi(private val sessions: ActiveServer, private val json: Json) {
         call(session ?: active(), "deletePlaylist", listOf("id" to playlistId))
     }
 
+    /** Has the server look for added and removed files now (admins only). */
+    suspend fun startScan(session: ServerSession? = null) {
+        call(session ?: active(), "startScan")
+    }
+
     suspend fun genres(session: ServerSession? = null): List<Genre> = call(session ?: active(), "getGenres").genres?.genre.orEmpty()
 
     suspend fun setStarred(session: ServerSession, kind: StarKind, id: String, starred: Boolean) {

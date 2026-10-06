@@ -75,6 +75,11 @@ Related repositories:
   (Deezer's related artists), each with an album and "because you play …", under Discover
 - **AI picks** (with the Tonearm server and Ollama): albums by artists you don't have, from what you play
   and like, under Discover; tap one to open it on YouTube Music, or request it
+- **More like this** on songs, albums and artists: similar songs to pick from (play them or put them in a
+  playlist), similar artists and, with the server's AI, albums like it
+- **Search** across the library, YouTube Music and Deezer at once, best matches first whatever the source,
+  with an "Ask the AI" button for searches that describe music
+- **Wanted**: what Lidarr is still looking for, under Request
 - **Similar artists** on artist pages, including ones you don't have (they open on YouTube Music), and
   **Instant mix** for any song: the server's similar songs, else YouTube Music's radio with your own copies
   played from the library
@@ -195,8 +200,9 @@ artwork shown in the notification and Android Auto.
 
 Open **Settings → Integrations** (or the **Discover** tab).
 
-With the [Tonearm server](https://github.com/brab-one/Tonearm-Server) holding Lidarr's and Maloja's keys,
-there's nothing to enter: both come through it with your music server login, and the settings say so (what
+Lidarr comes only through the [Tonearm server](https://github.com/brab-one/Tonearm-Server), which holds its
+key; the Lidarr settings keep just the request defaults. With the server holding Maloja's key too, there's
+nothing to enter: both come through it with your music server login, and the settings say so (what
 you enter there is only used without the server). Through it, Navidrome admins get all of Lidarr; everyone
 else can request music and see downloads.
 
