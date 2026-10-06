@@ -81,12 +81,6 @@ class LibraryTree(private val c: AppContainer) {
                         mediaType = MediaMetadata.MEDIA_TYPE_PLAYLIST, playable = true, browsable = false,
                     )
                 },
-                c.integrations.state.value.lidarr?.takeIf { c.brainarr.available.value }?.let {
-                    factory.folder(
-                        MediaIds.BRAINARR_MIX, "Brainarr picks", "AI picks from Lidarr you already have", artwork = icon(R.drawable.ic_car_ai),
-                        mediaType = MediaMetadata.MEDIA_TYPE_PLAYLIST, playable = true, browsable = false,
-                    )
-                },
             ) + listOf(
                 albumFolder(MediaIds.NEWEST, "Recently added", R.drawable.ic_car_new),
                 albumFolder(MediaIds.RECENT, "Recently played", R.drawable.ic_car_history),
@@ -133,7 +127,6 @@ class LibraryTree(private val c: AppContainer) {
     suspend fun songsOf(containerId: String): List<QueueSong> {
         when (containerId) {
             MediaIds.MALOJA_MIX -> return c.recommender.mix()
-            MediaIds.BRAINARR_MIX -> return c.brainarr.mix()
             MediaIds.DAILY -> return c.daily.ensureToday().entries
             MediaIds.MIX -> {
                 val session = c.sessions.awaitActive()
@@ -206,7 +199,6 @@ class LibraryTree(private val c: AppContainer) {
             val container = when {
                 item.mediaId == MediaIds.MIX -> MediaIds.MIX
                 item.mediaId == MediaIds.MALOJA_MIX -> MediaIds.MALOJA_MIX
-                item.mediaId == MediaIds.BRAINARR_MIX -> MediaIds.BRAINARR_MIX
                 item.mediaId == MediaIds.DAILY -> MediaIds.DAILY
                 parsed.type == MediaIds.ALBUM || parsed.type == MediaIds.PLAYLIST || parsed.type == MediaIds.GENRE -> item.mediaId
                 parsed.type == MediaIds.SONG && parsed.context != null -> parsed.context

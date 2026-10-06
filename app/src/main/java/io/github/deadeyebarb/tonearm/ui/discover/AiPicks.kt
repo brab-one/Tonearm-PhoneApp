@@ -1,13 +1,16 @@
 package io.github.deadeyebarb.tonearm.ui.discover
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -26,12 +29,16 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.deadeyebarb.tonearm.connect.AiPick
 import io.github.deadeyebarb.tonearm.connect.AiPicks
 import io.github.deadeyebarb.tonearm.container
+import io.github.deadeyebarb.tonearm.integrations.WeeklyPicksWorker
 import io.github.deadeyebarb.tonearm.subsonic.userMessage
 import io.github.deadeyebarb.tonearm.ui.YtAlbumRoute
 import io.github.deadeyebarb.tonearm.ui.common.AppActions
 import io.github.deadeyebarb.tonearm.ui.theme.Hud
 import io.github.deadeyebarb.tonearm.ui.theme.HudButton
 import io.github.deadeyebarb.tonearm.ui.theme.HudPanel
+import io.github.deadeyebarb.tonearm.weekly.WeeklyBatch
+import io.github.deadeyebarb.tonearm.weekly.WeeklySettings
+import io.github.deadeyebarb.tonearm.weekly.WeeklyState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import java.text.DateFormat
@@ -87,12 +94,71 @@ fun AiPicksPanel(actions: AppActions, modifier: Modifier = Modifier) {
                 }
                 if (current != null && !current.running) HudButton("Ask again", { asks++ }, filled = false)
             }
+            current?.seed?.let {
+                Text("More like $it", style = MaterialTheme.typography.bodySmall, color = hud.dim, modifier = Modifier.padding(top = 4.dp))
+            }
             (failed ?: current?.problem)?.let {
                 Text(it, style = MaterialTheme.typography.bodySmall, color = hud.danger, modifier = Modifier.padding(top = 6.dp))
             }
+            if (integrations.lidarr?.limited == false) WeeklyPicksRow(actions)
             current?.picks?.forEach { pick ->
                 AiPickRow(pick, canRequest = integrations.lidarr != null, onYouTube = settings.youtubeFallback, actions = actions)
             }
+        }
+    }
+}
+
+/** Weekly picks: on/off, how many albums, and this week's playlist. */
+@Composable
+private fun WeeklyPicksRow(actions: AppActions) {
+    val c = LocalContext.current.container
+    val context = LocalContext.current
+    val hud = Hud.colors
+    var settings by remember { mutableStateOf<WeeklySettings?>(null) }
+    var current by remember { mutableStateOf<WeeklyBatch?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var changed by remember { mutableIntStateOf(0) }
+    LaunchedEffect(changed) {
+        val session = c.sessions.active.value ?: return@LaunchedEffect
+        settings = runCatching { c.weekly.settings(session) }.getOrNull()
+        current = runCatching { c.weekly.batches(session) }.getOrDefault(emptyList()).maxByOrNull { it.state.created }
+    }
+    fun set(next: WeeklySettings) {
+        val session = c.sessions.active.value ?: return
+        busy = true
+        actions.launch {
+            try {
+                c.weekly.saveSettings(session, next)
+                settings = next
+                if (next.on) WeeklyPicksWorker.runNow(context)
+                changed++
+            } finally {
+                busy = false
+            }
+        }
+    }
+    Column(Modifier.padding(top = 12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("WEEKLY PICKS", style = MaterialTheme.typography.labelMedium, color = hud.accent)
+                Text(
+                    "Every week the first few are downloaded into a playlist. A week later it's deleted with its music, " +
+                        "unless you like the playlist (or songs in it).",
+                    style = MaterialTheme.typography.bodySmall, color = hud.dim,
+                )
+            }
+            Switch(checked = settings?.on == true, onCheckedChange = { set((settings ?: WeeklySettings()).copy(on = it)) }, enabled = !busy && settings != null)
+        }
+        settings?.takeIf { it.on }?.let { on ->
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for (n in listOf(3, 5, 10)) {
+                    FilterChip(selected = on.albums == n, onClick = { if (on.albums != n) set(on.copy(albums = n)) }, label = { Text("$n albums") }, enabled = !busy)
+                }
+            }
+        }
+        current?.let { batch ->
+            val status = if (batch.state.status == WeeklyState.RUNNING) "picking…" else "${batch.state.albums.size} albums · ${batch.playlist.songCount} songs so far"
+            HudButton("${batch.playlist.name}: $status", { actions.openPlaylist(batch.playlist.id) }, Modifier.fillMaxWidth().padding(top = 6.dp), filled = false)
         }
     }
 }

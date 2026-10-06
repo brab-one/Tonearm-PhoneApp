@@ -12,11 +12,12 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import io.github.deadeyebarb.tonearm.container
 import kotlinx.coroutines.CancellationException
+import java.io.File
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 /**
- * Brainarr's weekly picks, checked every hour: starts the week's run when it's due, collects what it
+ * Weekly picks, checked every hour: starts the week's run when it's due, collects what it
  * picked into the weekly playlist as it downloads, and deletes last week's (see WeeklyPicks).
  */
 class WeeklyPicksWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
@@ -26,6 +27,8 @@ class WeeklyPicksWorker(context: Context, params: WorkerParameters) : CoroutineW
         val session = c.sessions.active.value ?: return Result.success()
         return try {
             c.weekly.tick(config, key, session)?.let(c.messages::show)
+            // A run is under way (the AI takes a few minutes): look again soon rather than in an hour.
+            if (File(applicationContext.filesDir, "weekly-run.json").exists()) checkSoon(applicationContext)
             Result.success()
         } catch (e: CancellationException) {
             throw e
@@ -40,6 +43,11 @@ class WeeklyPicksWorker(context: Context, params: WorkerParameters) : CoroutineW
         fun schedule(context: Context) {
             val request = PeriodicWorkRequestBuilder<WeeklyPicksWorker>(1, TimeUnit.HOURS).setConstraints(network).build()
             WorkManager.getInstance(context).enqueueUniquePeriodicWork("weekly-picks", ExistingPeriodicWorkPolicy.KEEP, request)
+        }
+
+        private fun checkSoon(context: Context) {
+            val request = OneTimeWorkRequestBuilder<WeeklyPicksWorker>().setConstraints(network).setInitialDelay(5, TimeUnit.MINUTES).build()
+            WorkManager.getInstance(context).enqueueUniqueWork("weekly-picks-soon", ExistingWorkPolicy.APPEND_OR_REPLACE, request)
         }
 
         /** Checks right away (after turning weekly picks on, or when Discover opens). */

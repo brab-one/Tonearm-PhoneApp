@@ -79,7 +79,6 @@ import io.github.deadeyebarb.tonearm.ui.detail.AlbumScreen
 import io.github.deadeyebarb.tonearm.ui.detail.ArtistScreen
 import io.github.deadeyebarb.tonearm.ui.detail.GenreScreen
 import io.github.deadeyebarb.tonearm.ui.detail.PlaylistScreen
-import io.github.deadeyebarb.tonearm.ui.discover.BrainarrScreen
 import io.github.deadeyebarb.tonearm.ui.discover.DailyScreen
 import io.github.deadeyebarb.tonearm.ui.discover.DiscoverScreen
 import io.github.deadeyebarb.tonearm.ui.downloads.DownloadsScreen
@@ -187,7 +186,6 @@ fun TonearmRoot(container: AppContainer, openPlayerRequests: Int, requestNotific
                 composable<HomeRoute> { HomeScreen() }
                 composable<DiscoverRoute> { DiscoverScreen() }
                 composable<DailyRoute> { DailyScreen() }
-                composable<BrainarrRoute> { BrainarrScreen() }
                 composable<ConnectRoute> { ConnectScreen() }
                 composable<RequestRoute> { RequestScreen(it.toRoute<RequestRoute>().query) }
                 composable<MalojaSettingsRoute> { MalojaSettingsScreen() }

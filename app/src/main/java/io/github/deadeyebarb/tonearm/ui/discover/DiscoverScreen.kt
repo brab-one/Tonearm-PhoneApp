@@ -81,8 +81,6 @@ fun DiscoverScreen() {
     val session by c.sessions.active.collectAsStateWithLifecycle()
     val maloja = integrations.maloja
     val lidarrReady = integrations.lidarr != null
-    val brainarrReady = lidarrReady && c.brainarr.available.collectAsStateWithLifecycle().value
-    val asking by c.brainarr.asking.collectAsStateWithLifecycle()
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -108,24 +106,14 @@ fun DiscoverScreen() {
                             style = MaterialTheme.typography.labelMedium, color = Hud.colors.accent,
                         )
                         Spacer(Modifier.height(10.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            if (brainarrReady) {
-                                HudButton(
-                                    if (asking != null) "Thinking…" else "Ask Brainarr", { actions.askBrainarr() }, Modifier.weight(1f),
-                                    icon = Icons.Rounded.AutoAwesome, enabled = asking == null,
-                                )
-                            }
-                            HudButton(
-                                "Request", { actions.navigate(if (lidarrReady) RequestRoute() else LidarrSettingsRoute) }, Modifier.weight(1f),
-                                icon = Icons.Rounded.CloudDownload, filled = !brainarrReady,
-                            )
-                        }
-                        BrainarrProgress(asking)
+                        HudButton(
+                            "Request", { actions.navigate(if (lidarrReady) RequestRoute() else LidarrSettingsRoute) }, Modifier.fillMaxWidth(),
+                            icon = Icons.Rounded.CloudDownload,
+                        )
                     }
                 }
                 if (data.libraryEmpty) item { EmptyLibraryBanner(lidarrReady, actions) }
                 item { DailyCard(actions) }
-                item { BrainarrCard(actions) }
                 item { AiPicksPanel(actions) }
                 if (data.rotation.isNotEmpty()) {
                     item { HudSectionHeader("Heavy rotation") }
@@ -198,7 +186,6 @@ private fun EmptyLibraryBanner(lidarrReady: Boolean, actions: AppActions) {
 @Composable
 private fun NotConnected(actions: AppActions, lidarrReady: Boolean, modifier: Modifier) {
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        BrainarrCard(actions, Modifier.padding(bottom = 8.dp))
         AiPicksPanel(actions, Modifier.padding(bottom = 8.dp))
         EmptyState(
             Icons.Rounded.AutoAwesome, "Recommendations from Maloja",

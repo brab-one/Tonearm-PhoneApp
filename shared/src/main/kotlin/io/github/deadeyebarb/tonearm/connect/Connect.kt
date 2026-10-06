@@ -145,6 +145,8 @@ data class AiPicks(
     /** Why the last attempt failed; the older picks stay. */
     val problem: String? = null,
     val model: String = "",
+    /** What they were asked to be like ("more like this"), if anything. */
+    val seed: String? = null,
 )
 
 /** Where Tonearm Connect runs: the Tonearm server beside the music server, or the plugin in Lidarr. */
@@ -204,9 +206,15 @@ class ConnectClient(private val http: IntegrationHttp, private val json: Json) {
         )
     }
 
-    /** The Tonearm server's album suggestions for this user (from its Ollama); [refresh] asks for new ones. */
-    suspend fun aiPicks(session: ServerSession, refresh: Boolean = false): AiPicks =
-        json.decodeFromJsonElement(AiPicks.serializer(), call(ConnectRoute.Server(session), "recommendations", listOf("refresh" to refresh.takeIf { it })))
+    /**
+     * The Tonearm server's album suggestions for this user (from its Ollama); [refresh] asks for new ones,
+     * a [seed] for new ones like that ("the album “Dummy” by Portishead").
+     */
+    suspend fun aiPicks(session: ServerSession, refresh: Boolean = false, seed: String? = null): AiPicks =
+        json.decodeFromJsonElement(
+            AiPicks.serializer(),
+            call(ConnectRoute.Server(session), "recommendations", listOf("refresh" to refresh.takeIf { it }, "seed" to seed)),
+        )
 
     suspend fun publish(route: ConnectRoute, state: DeviceState) {
         call(route, "publish", listOf("device" to state.id), json.encodeToString(DeviceState.serializer(), state))

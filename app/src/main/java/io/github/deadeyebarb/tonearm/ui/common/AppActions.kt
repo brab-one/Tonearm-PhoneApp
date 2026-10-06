@@ -113,24 +113,6 @@ class AppActions(
         if (songs.isEmpty()) message("Nothing by $artist on YouTube Music") else player.play(songs)
     }
 
-    /** Has Lidarr run the Brainarr list now and says what it added; progress is in `brainarr.asking`. */
-    fun askBrainarr() = launch {
-        val result = container.brainarr.ask()
-        message(
-            when {
-                result.added.isEmpty() -> "Brainarr found nothing new" + (result.message?.let { " ($it)" } ?: "")
-                result.added.size > 3 -> "Brainarr added " + result.added.take(3).joinToString() + " and ${result.added.size - 3} more"
-                else -> "Brainarr added " + result.added.joinToString()
-            },
-        )
-    }
-
-    fun playBrainarrMix() = launch {
-        message("Building your mix…")
-        val songs = container.brainarr.mix()
-        if (songs.isEmpty()) message("None of Brainarr's picks are in your library yet") else player.play(songs)
-    }
-
     /** Opens the Lidarr request dialog for an artist, or the Lidarr setup if it isn't connected. */
     fun requestArtist(name: String) {
         if (container.integrations.state.value.lidarr == null) {

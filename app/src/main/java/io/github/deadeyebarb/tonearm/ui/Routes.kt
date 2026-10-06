@@ -5,7 +5,6 @@ import kotlinx.serialization.Serializable
 @Serializable data object HomeRoute
 @Serializable data object DiscoverRoute
 @Serializable data object DailyRoute
-@Serializable data object BrainarrRoute
 @Serializable data object ConnectRoute
 @Serializable data class RequestRoute(val query: String = "")
 @Serializable data object MalojaSettingsRoute

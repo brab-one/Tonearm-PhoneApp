@@ -1,7 +1,9 @@
 package io.github.deadeyebarb.tonearm.weekly
 
+import io.github.deadeyebarb.tonearm.connect.AiPick
+import io.github.deadeyebarb.tonearm.connect.ConnectClient
+import io.github.deadeyebarb.tonearm.connect.ConnectRoute
 import io.github.deadeyebarb.tonearm.data.LidarrConfig
-import io.github.deadeyebarb.tonearm.integrations.BrainarrList
 import io.github.deadeyebarb.tonearm.integrations.LidarrClient
 import io.github.deadeyebarb.tonearm.integrations.Names
 import io.github.deadeyebarb.tonearm.integrations.SongMatch
@@ -11,12 +13,6 @@ import io.github.deadeyebarb.tonearm.subsonic.Song
 import io.github.deadeyebarb.tonearm.subsonic.SubsonicApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import java.io.File
 import java.io.IOException
 import java.time.Instant
@@ -55,55 +51,42 @@ data class WeeklyBatch(val playlist: Playlist, val state: WeeklyState) {
     val expires: Long get() = state.created + WeeklyPicks.WEEK
 }
 
-/** The run a device started and is waiting for: Lidarr's command and what was there before. */
+/** Whether weekly picks are on, and how many albums a week; kept on the Tonearm server for all the user's devices. */
 @Serializable
-private data class RunInProgress(
-    val playlistId: String,
-    val commandId: Int,
-    val started: Long,
-    val monitoredBefore: Set<Int>,
-    val artistsBefore: Set<Int>,
-    val listId: Int? = null,
-)
+data class WeeklySettings(val on: Boolean = false, val albums: Int = WeeklyPicks.DEFAULT_ALBUMS)
+
+/** The run a device started and is waiting for: fresh AI picks asked for at [started]. */
+@Serializable
+private data class RunInProgress(val playlistId: String, val started: Long, val albums: Int = WeeklyPicks.DEFAULT_ALBUMS)
 
 /**
- * Brainarr's weekly picks: once a week a dedicated Brainarr list in Lidarr picks albums, Lidarr
- * downloads them, and a playlist on the music server collects them. A week later, when the next
- * selection arrives, the old playlist and its music are deleted again, except albums with a song you
- * liked or put in another playlist. Liking the playlist itself (and naming it) keeps it all.
+ * Weekly picks: once a week the Tonearm server's AI suggests albums from what you play, Lidarr downloads
+ * the first few, and a playlist on the music server collects them. A week later, when the next selection
+ * arrives, the old playlist and its music are deleted again, except albums with a song you liked or put in
+ * another playlist. Liking the playlist itself (and naming it) keeps it all.
  *
- * The weekly playlist's comment holds the state, so the phone and the desktop share it. [runFile] is
- * this device's note of a run it started.
+ * The weekly playlist's comment holds the state, so the phone and the desktop share it. [runFile] is this
+ * device's note of a run it started.
  */
 class WeeklyPicks(
     private val api: SubsonicApi,
     private val lidarr: LidarrClient,
+    private val connect: ConnectClient,
     private val json: Json,
     private val deviceId: String,
     private val runFile: File,
 ) {
-    /** The weekly list in Lidarr; its presence means weekly picks are on. */
-    suspend fun weeklyList(config: LidarrConfig, key: String): BrainarrList? =
-        lidarr.importLists(config, key).firstOrNull { (list, _) -> list.name == LIST_NAME }
-            ?.let { (list, raw) -> BrainarrList.from(list, raw) }
+    suspend fun settings(session: ServerSession): WeeklySettings =
+        connect.storeGet(ConnectRoute.Server(session), SETTINGS_KEY).value
+            ?.let { runCatching { json.decodeFromString(WeeklySettings.serializer(), it) }.getOrNull() } ?: WeeklySettings()
 
-    /**
-     * Turns weekly picks on: a copy of [main] that picks [albums] specific albums, monitors and
-     * searches them, and doesn't run on Lidarr's own schedule. Returns true when Lidarr hides the
-     * AI provider's API key, which then has to be entered once for the new list in Lidarr.
-     */
-    suspend fun enable(config: LidarrConfig, key: String, main: BrainarrList, albums: Int): Boolean {
-        val body = weeklyListBody(main.raw, albums)
-        weeklyList(config, key)?.let { existing ->
-            lidarr.updateImportList(config, key, existing.id, JsonObject(body + ("id" to JsonPrimitive(existing.id))))
-            return false
+    suspend fun saveSettings(session: ServerSession, settings: WeeklySettings) {
+        val route = ConnectRoute.Server(session)
+        repeat(4) {
+            val stored = connect.storeGet(route, SETTINGS_KEY)
+            if (connect.storePut(route, SETTINGS_KEY, json.encodeToString(WeeklySettings.serializer(), settings), stored.version) != null) return
         }
-        lidarr.createImportList(config, key, body)
-        return hasMaskedSecret(main.raw)
-    }
-
-    suspend fun disable(config: LidarrConfig, key: String) {
-        weeklyList(config, key)?.let { lidarr.deleteImportList(config, key, it.id) }
+        throw IOException("Couldn't save the weekly picks setting; try again")
     }
 
     suspend fun batches(session: ServerSession): List<WeeklyBatch> =
@@ -116,29 +99,27 @@ class WeeklyPicks(
      */
     suspend fun tick(config: LidarrConfig, key: String, session: ServerSession, now: Long = System.currentTimeMillis()): String? {
         runFile.parentFile?.mkdirs()
+        val settings = moveFromBrainarr(config, key, session) ?: settings(session)
         var news: String? = finishRun(config, key, session, now)
-        val list = weeklyList(config, key)
         var batches = batches(session)
         // A run whose device went away doesn't block the next week forever.
         batches.filter { it.state.status == WeeklyState.RUNNING && now - it.state.created > ABANDONED }.forEach {
             api.deletePlaylist(it.playlist.id, session)
         }
         batches = batches.filterNot { it.state.status == WeeklyState.RUNNING && now - it.state.created > ABANDONED }
-        // A run that ended without switching its list off again (the app quit): switch it off now.
-        if (list != null && list.automaticAdd && !runFile.exists()) runCatching { lidarr.setImportListAutomaticAdd(config, key, list.id, false) }
         val newest = batches.maxByOrNull { it.state.created }
         val lastAttempt = attemptFile.takeIf { it.exists() }?.readText()?.trim()?.toLongOrNull() ?: 0L
         val due = newest == null || now - newest.state.created >= WEEK - SLACK
-        if (list != null && due && !runFile.exists() && now - lastAttempt >= RETRY) {
+        if (settings.on && due && !runFile.exists() && now - lastAttempt >= RETRY) {
             attemptFile.writeText(now.toString())
-            news = startRun(config, key, session, list, now) ?: news
+            news = startRun(session, settings, now) ?: news
             batches = batches(session)
         }
         val current = batches.maxByOrNull { it.state.created }
         val gone = mutableSetOf<String>()
         for (old in batches) {
             val replaced = old !== current && current != null && old.state.created < current.state.created && current.state.status == WeeklyState.READY
-            val lapsed = list == null && now >= old.expires
+            val lapsed = !settings.on && now >= old.expires
             if (old.state.status == WeeklyState.READY && (replaced || lapsed)) {
                 cleanUp(config, key, session, old)
                 gone += old.playlist.id
@@ -151,10 +132,25 @@ class WeeklyPicks(
     /** Keeps a weekly playlist and its music for good, under [name]. */
     suspend fun keep(session: ServerSession, batch: WeeklyBatch, name: String) {
         api.renamePlaylist(batch.playlist.id, name.trim(), session)
-        api.setPlaylistComment(batch.playlist.id, "Kept from Brainarr's weekly picks of ${date(batch.state.created)}", session)
+        api.setPlaylistComment(batch.playlist.id, "Kept from the weekly picks of ${date(batch.state.created)}", session)
     }
 
-    private suspend fun startRun(config: LidarrConfig, key: String, session: ServerSession, list: BrainarrList, now: Long): String? {
+    /**
+     * Weekly picks used to run on a Brainarr list in Lidarr that Tonearm made (as did "more like this"):
+     * takes over its on/off and size, and removes Tonearm's lists. Returns the settings when it did.
+     */
+    private suspend fun moveFromBrainarr(config: LidarrConfig, key: String, session: ServerSession): WeeklySettings? {
+        if (movedFile.exists()) return null
+        val ours = lidarr.importLists(config, key).filter { (list, _) -> list.implementation == "Brainarr" && list.name.startsWith(OLD_LIST_PREFIX) }
+        val weekly = ours.firstOrNull { (list, _) -> list.name == OLD_WEEKLY_LIST }?.first
+        val settings = weekly?.let { WeeklySettings(on = true, albums = it.field("maxRecommendations")?.toIntOrNull() ?: DEFAULT_ALBUMS) }
+        if (settings != null) saveSettings(session, settings)
+        ours.forEach { (list, _) -> lidarr.deleteImportList(config, key, list.id) }
+        movedFile.writeText(System.currentTimeMillis().toString())
+        return settings
+    }
+
+    private suspend fun startRun(session: ServerSession, settings: WeeklySettings, now: Long): String? {
         val state = WeeklyState(created = now, by = deviceId)
         val playlist = api.createPlaylist(playlistName(now), emptyList(), session)
             ?: api.playlists(session).firstOrNull { it.name == playlistName(now) && parse(it, json) == null }
@@ -167,47 +163,61 @@ class WeeklyPicks(
             return null
         }
         try {
-            val monitored = lidarr.albums(config, key).filter { it.monitored }.map { it.id }.toSet()
-            val artists = lidarr.artists(config, key).map { it.id }.toSet()
-            lidarr.setImportListAutomaticAdd(config, key, list.id, true)
-            val command = lidarr.startCommand(config, key, "ImportListSync", "definitionId" to list.id)
-            writeRun(RunInProgress(playlist.id, command.id, now, monitored, artists, list.id))
+            connect.aiPicks(session, refresh = true)
+            writeRun(RunInProgress(playlist.id, now, settings.albums))
         } catch (e: Exception) {
-            runCatching { lidarr.setImportListAutomaticAdd(config, key, list.id, false) }
             api.deletePlaylist(playlist.id, session)
             throw e
         }
-        return "Brainarr is picking this week's albums"
+        return "Picking this week's albums from what you play"
     }
 
     private suspend fun finishRun(config: LidarrConfig, key: String, session: ServerSession, now: Long): String? {
         val run = readRun() ?: return null
-        val command = runCatching { lidarr.command(config, key, run.commandId) }.getOrNull()
-        if (command != null && !command.finished && now - run.started < ABANDONED) return null
+        val picks = runCatching { connect.aiPicks(session) }.getOrNull()
+        val fresh = picks != null && !picks.running && picks.madeAt >= run.started
+        val failed = picks != null && !picks.running && picks.madeAt < run.started && picks.problem != null
+        if (!fresh && !failed && now - run.started < ABANDONED) return null
         runFile.delete()
-        run.listId?.let { runCatching { lidarr.setImportListAutomaticAdd(config, key, it, false) } }
         val playlist = runCatching { api.playlist(run.playlistId, session) }.getOrNull() ?: return null
         val state = parse(playlist, json) ?: return null
-        if (command == null || command.status != "completed") {
+        if (!fresh) {
             api.deletePlaylist(playlist.id, session)
-            return "Brainarr's weekly run didn't work: ${command?.message ?: "Lidarr lost track of it"}"
+            return "This week's picks didn't work: ${picks?.problem ?: "the AI took too long"}"
         }
-        val artists = lidarr.artists(config, key).associateBy { it.id }
-        val added = lidarr.albums(config, key).filter { it.monitored && it.id !in run.monitoredBefore }.map { album ->
-            WeeklyAlbum(
-                lidarrId = album.id,
-                title = album.title,
-                artist = artists[album.artistId]?.artistName ?: album.artist?.artistName.orEmpty(),
-                artistId = album.artistId,
-                newArtist = album.artistId !in run.artistsBefore,
-            )
-        }
+        val added = request(config, key, picks.picks, run.albums)
         if (added.isEmpty()) {
             api.deletePlaylist(playlist.id, session)
-            return "Brainarr found nothing new this week"
+            return "Nothing new to get from the AI picks this week"
         }
         api.setPlaylistComment(playlist.id, comment(state.copy(status = WeeklyState.READY, albums = added), json), session)
         return "This week's picks: ${added.size} albums are downloading"
+    }
+
+    /** Has Lidarr get the first [count] picks it knows and doesn't already want. */
+    private suspend fun request(config: LidarrConfig, key: String, picks: List<AiPick>, count: Int): List<WeeklyAlbum> {
+        val artistsBefore = lidarr.artists(config, key).map { it.id }.toSet()
+        val defaults = lidarr.resolveDefaults(config, key).copy(search = true)
+        val added = mutableListOf<WeeklyAlbum>()
+        for (pick in picks) {
+            if (added.size >= count) break
+            val hit = runCatching { lidarr.lookupAlbum(config, key, "${pick.artist} ${pick.album}") }.getOrDefault(emptyList()).firstOrNull {
+                Names.normalize(SongMatch.cleanTitle(it.title)) == Names.normalize(SongMatch.cleanTitle(pick.album)) &&
+                    Names.normalize(it.artistName.orEmpty()) == Names.normalize(pick.artist)
+            } ?: continue
+            // Already wanted: not this week's to delete later.
+            if (hit.inLidarr && hit.monitored) continue
+            added += runCatching {
+                if (hit.inLidarr) {
+                    lidarr.monitorAlbum(config, key, hit.lidarrId, search = true)
+                    WeeklyAlbum(hit.lidarrId, hit.title, hit.artistName ?: pick.artist, hit.artistId, newArtist = false)
+                } else {
+                    val album = lidarr.addAlbum(config, key, hit.candidate, defaults)
+                    WeeklyAlbum(album.id, album.title, album.artist?.artistName ?: pick.artist, album.artistId, newArtist = album.artistId !in artistsBefore)
+                }
+            }.getOrNull() ?: continue
+        }
+        return added
     }
 
     /** Puts the downloaded songs of the batch's albums into its playlist, in album order. */
@@ -241,9 +251,9 @@ class WeeklyPicks(
             val otherWanted = runCatching { lidarr.albums(config, key, artistId) }.getOrDefault(emptyList())
                 .any { it.monitored && albums.none { a -> a.lidarrId == it.id } }
             if (albums.first().newArtist && artistId !in keepArtists && !otherWanted) {
-                runCatching { lidarr.deleteArtist(config, key, artistId) }
+                runCatching { lidarr.deleteArtist(config, key, artistId, exclude = false) }
             } else {
-                albums.forEach { runCatching { lidarr.deleteAlbum(config, key, it.lidarrId) } }
+                albums.forEach { runCatching { lidarr.deleteAlbum(config, key, it.lidarrId, exclude = false) } }
             }
         }
         api.deletePlaylist(batch.playlist.id, session)
@@ -271,6 +281,9 @@ class WeeklyPicks(
     /** When this device last started a run; a run that found nothing isn't retried right away. */
     private val attemptFile get() = File(runFile.parentFile, runFile.name + ".last")
 
+    /** Present once the old Brainarr-based setup has been taken over. */
+    private val movedFile get() = File(runFile.parentFile, runFile.name + ".from-brainarr")
+
     private fun readRun(): RunInProgress? = runCatching { json.decodeFromString(RunInProgress.serializer(), runFile.readText()) }.getOrNull()
 
     private fun writeRun(run: RunInProgress) {
@@ -278,14 +291,16 @@ class WeeklyPicks(
     }
 
     companion object {
-        const val LIST_NAME = "Tonearm weekly picks"
         const val MARKER = "[tonearm-weekly]"
+        const val SETTINGS_KEY = "weekly-picks"
         const val WEEK = 7 * 24 * 3_600_000L
         /** Runs may start up to this much early, so a weekly check-in doesn't drift later every week. */
         private const val SLACK = 2 * 3_600_000L
         private const val ABANDONED = 24 * 3_600_000L
         private const val RETRY = 12 * 3_600_000L
         const val DEFAULT_ALBUMS = 5
+        private const val OLD_LIST_PREFIX = "Tonearm "
+        private const val OLD_WEEKLY_LIST = "Tonearm weekly picks"
 
         private val compact = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
@@ -295,43 +310,12 @@ class WeeklyPicks(
         }
 
         fun comment(state: WeeklyState, json: Json = compact): String =
-            "Brainarr's picks for the week of ${date(state.created)}. Deleted when next week's arrive, unless you like this playlist.\n" +
+            "AI picks for the week of ${date(state.created)}. Deleted when next week's arrive, unless you like this playlist.\n" +
                 MARKER + compact.encodeToString(WeeklyState.serializer(), state)
 
         fun playlistName(created: Long) = "Weekly picks · ${date(created)}"
 
         fun date(millis: Long): String =
             DateTimeFormatter.ofPattern("d MMM", Locale.ENGLISH).withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(millis))
-
-        fun weeklyListBody(main: JsonObject, albums: Int): JsonObject {
-            val fields = (main["fields"] as? JsonArray).orEmpty().map { element ->
-                val field = element.jsonObject
-                when (field["name"]?.jsonPrimitive?.contentOrNull) {
-                    "recommendationMode" -> JsonObject(field + ("value" to JsonPrimitive("specificAlbums")))
-                    "maxRecommendations" -> JsonObject(field + ("value" to JsonPrimitive(albums)))
-                    else -> field
-                }
-            }
-            return JsonObject(
-                main - "id" + mapOf(
-                    "name" to JsonPrimitive(LIST_NAME),
-                    "enableAutomaticAdd" to JsonPrimitive(false),
-                    "shouldMonitor" to JsonPrimitive("specificAlbum"),
-                    "shouldMonitorExisting" to JsonPrimitive(true),
-                    "shouldSearch" to JsonPrimitive(true),
-                    "monitorNewItems" to JsonPrimitive("none"),
-                    "fields" to JsonArray(fields),
-                ),
-            )
-        }
-
-        /** Lidarr sends password fields back as asterisks; a copy made from them has no real key. */
-        fun hasMaskedSecret(raw: JsonObject): Boolean = (raw["fields"] as? JsonArray).orEmpty().any { element ->
-            val field = element as? JsonObject ?: return@any false
-            val value = (field["value"] as? JsonPrimitive)?.contentOrNull.orEmpty()
-            value.isNotEmpty() && value.all { it == '*' } && (field["type"]?.jsonPrimitive?.contentOrNull == "password" || "key" in field["name"].toString().lowercase())
-        }
-
-        private fun JsonArray?.orEmpty() = this ?: JsonArray(emptyList())
     }
 }

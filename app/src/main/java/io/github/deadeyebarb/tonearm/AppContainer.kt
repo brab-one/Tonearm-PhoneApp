@@ -25,7 +25,6 @@ import io.github.deadeyebarb.tonearm.data.ServerRepository
 import io.github.deadeyebarb.tonearm.data.SettingsRepository
 import io.github.deadeyebarb.tonearm.data.StarredStore
 import io.github.deadeyebarb.tonearm.download.DownloadRepository
-import io.github.deadeyebarb.tonearm.integrations.BrainarrService
 import io.github.deadeyebarb.tonearm.integrations.DailyDiscovery
 import io.github.deadeyebarb.tonearm.integrations.IntegrationHttp
 import io.github.deadeyebarb.tonearm.integrations.IntegrationImageCalls
@@ -97,9 +96,8 @@ class AppContainer(val app: Application) {
         scope,
     )
     val recommender = Recommender(api, sessions, integrations)
-    val brainarr = BrainarrService(app, json, scope, api, sessions, integrations)
     val connect = PhoneConnect(app, sessions, integrations, connectClient, tonearmServer)
-    val daily = DailyDiscovery(app, json, scope, api, sessions, integrations, recommender, brainarr)
+    val daily = DailyDiscovery(app, json, scope, api, sessions, integrations, recommender)
     val mediaItems = MediaItemFactory(app)
     val queueStore = QueueStore(app, json, mediaItems)
 
@@ -112,7 +110,7 @@ class AppContainer(val app: Application) {
     val local = LocalMusic(app)
     val songRequests = SongRequests(LidarrClient(integrationHttp, json))
     val likes = Likes(app, json, scope, api, sessions, starred, integrations, songRequests, LikesSync(connectClient, json), connect, settings, messages)
-    val weekly = WeeklyPicks(api, LidarrClient(integrationHttp, json), json, connect.deviceId, java.io.File(app.filesDir, "weekly-run.json"))
+    val weekly = WeeklyPicks(api, LidarrClient(integrationHttp, json), connectClient, json, connect.deviceId, java.io.File(app.filesDir, "weekly-run.json"))
     val continuation = QueueContinuation(api, sessions, youtube, settings)
     val media by lazy { MediaEngine(app, sessions, settings, network, youtube, youtubeHttpClient) }
 

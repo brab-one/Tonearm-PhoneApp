@@ -101,9 +101,6 @@ data class LidarrQueueItem(
         get() = if (size != null && size > 0 && sizeleft != null) (1 - sizeleft / size).toFloat().coerceIn(0f, 1f) else 0f
 }
 
-@Serializable
-data class LidarrTag(val id: Int = 0, val label: String = "")
-
 /** A setting of an import list (or other provider): `fields` in Lidarr's JSON. */
 @Serializable
 data class LidarrField(val name: String = "", val value: JsonElement? = null)
@@ -119,19 +116,6 @@ data class LidarrImportList(
     val fields: List<LidarrField> = emptyList(),
 ) {
     fun field(name: String): String? = (fields.firstOrNull { it.name == name }?.value as? JsonPrimitive)?.contentOrNull
-}
-
-@Serializable
-data class LidarrCommand(
-    val id: Int = 0,
-    val name: String? = null,
-    /** queued, started, completed, failed, aborted, cancelled, orphaned. */
-    val status: String? = null,
-    val message: String? = null,
-    val started: String? = null,
-    val ended: String? = null,
-) {
-    val finished get() = status in setOf("completed", "failed", "aborted", "cancelled", "orphaned")
 }
 
 @Serializable
@@ -193,44 +177,6 @@ class LidarrClient(private val http: IntegrationHttp, private val json: Json) {
             .map { json.decodeFromJsonElement<LidarrImportList>(it) to it }
 
     /** Saves an import list without Lidarr's connection test (which, for an AI list, would ask the model). */
-    suspend fun updateImportList(config: LidarrConfig, key: String, id: Int, raw: JsonObject) {
-        http.send("PUT", url(config, "importlist/$id", listOf("forceSave" to true)), raw.toString(), config.useServerTls, headers(key), service = "Lidarr")
-    }
-
-    suspend fun tags(config: LidarrConfig, key: String): List<LidarrTag> =
-        json.decodeFromString(ListSerializer(LidarrTag.serializer()), get(config, key, "tag"))
-
-    suspend fun createTag(config: LidarrConfig, key: String, label: String): LidarrTag {
-        val body = buildJsonObject { put("label", JsonPrimitive(label)) }
-        return json.decodeFromString(LidarrTag.serializer(), http.postJson(url(config, "tag"), body.toString(), config.useServerTls, headers(key), service = "Lidarr"))
-    }
-
-    /** Starts a command (e.g. `ImportListSync` with `definitionId`); poll it with [command]. */
-    suspend fun startCommand(config: LidarrConfig, key: String, name: String, vararg params: Pair<String, Int>): LidarrCommand {
-        val body = buildJsonObject {
-            put("name", JsonPrimitive(name))
-            params.forEach { (k, v) -> put(k, JsonPrimitive(v)) }
-        }
-        return json.decodeFromString(LidarrCommand.serializer(), http.postJson(url(config, "command"), body.toString(), config.useServerTls, headers(key), service = "Lidarr"))
-    }
-
-    suspend fun command(config: LidarrConfig, key: String, id: Int): LidarrCommand =
-        json.decodeFromString(LidarrCommand.serializer(), get(config, key, "command/$id"))
-
-    /**
-     * Monitors artists already in Lidarr, choosing their albums like a new request would ([monitor]:
-     * all, future, missing, latest, first, none), and optionally starts searching for them.
-     */
-    suspend fun monitorArtists(config: LidarrConfig, key: String, artistIds: List<Int>, monitor: String, search: Boolean) {
-        val body = buildJsonObject {
-            put("artist", JsonArray(artistIds.map { id -> buildJsonObject { put("id", JsonPrimitive(id)); put("monitored", JsonPrimitive(true)) } }))
-            put("monitoringOptions", buildJsonObject { put("monitor", JsonPrimitive(monitor)) })
-            put("monitorNewItems", JsonPrimitive(if (monitor == "none") "none" else "all"))
-        }
-        http.postJson(url(config, "albumstudio"), body.toString(), config.useServerTls, headers(key), service = "Lidarr")
-        if (search) artistIds.forEach { startCommand(config, key, "ArtistSearch", "artistId" to it) }
-    }
-
     /** Artists and albums matching [term], best matches first. */
     suspend fun search(config: LidarrConfig, key: String, term: String): List<LidarrCandidate> {
         val existing = runCatching { artists(config, key).mapNotNull { it.foreignArtistId }.toSet() }.getOrDefault(emptySet())
@@ -242,7 +188,7 @@ class LidarrClient(private val http: IntegrationHttp, private val json: Json) {
     }
 
     /** An album from Lidarr's album lookup ("artist album", or "lidarr:<release group id>"). */
-    class AlbumHit(val candidate: LidarrCandidate, val artistName: String?, val lidarrId: Int, val monitored: Boolean) {
+    class AlbumHit(val candidate: LidarrCandidate, val artistName: String?, val lidarrId: Int, val monitored: Boolean, val artistId: Int = 0) {
         val title get() = candidate.title
         val foreignId get() = candidate.foreignId
         val inLidarr get() = candidate.inLidarr
@@ -251,7 +197,7 @@ class LidarrClient(private val http: IntegrationHttp, private val json: Json) {
     suspend fun lookupAlbum(config: LidarrConfig, key: String, term: String): List<AlbumHit> =
         json.decodeFromString(ListSerializer(JsonObject.serializer()), get(config, key, "album/lookup", listOf("term" to term))).map { raw ->
             val album = json.decodeFromJsonElement<LidarrAlbum>(raw)
-            AlbumHit(albumCandidate(raw, emptySet()), album.artist?.artistName, album.id, raw["monitored"]?.jsonPrimitive?.booleanOrNull == true)
+            AlbumHit(albumCandidate(raw, emptySet()), album.artist?.artistName, album.id, raw["monitored"]?.jsonPrimitive?.booleanOrNull == true, album.artistId)
         }
 
     /** Monitors an album already in Lidarr and optionally searches for it. */
@@ -278,7 +224,7 @@ class LidarrClient(private val http: IntegrationHttp, private val json: Json) {
     suspend fun tracks(config: LidarrConfig, key: String, artistId: Int): List<LidarrTrack> =
         json.decodeFromString(ListSerializer(LidarrTrack.serializer()), get(config, key, "track", listOf("artistId" to artistId)))
 
-    /** Removes an artist with its files; the exclusion keeps import lists (Brainarr) from adding it again. */
+    /** Removes an artist (with its files unless told otherwise); an exclusion keeps import lists from adding it again. */
     suspend fun deleteArtist(config: LidarrConfig, key: String, artistId: Int, deleteFiles: Boolean = true, exclude: Boolean = true) {
         val url = url(config, "artist/$artistId", listOf("deleteFiles" to deleteFiles, "addImportListExclusion" to exclude))
         http.send("DELETE", url, "", config.useServerTls, headers(key), service = "Lidarr")
@@ -288,23 +234,6 @@ class LidarrClient(private val http: IntegrationHttp, private val json: Json) {
         val url = url(config, "album/$albumId", listOf("deleteFiles" to deleteFiles, "addImportListExclusion" to exclude))
         http.send("DELETE", url, "", config.useServerTls, headers(key), service = "Lidarr")
     }
-
-    /**
-     * Lidarr only fetches an import list whose automatic add is on, even when a run is started by hand.
-     * Tonearm's own lists stay off (so Lidarr's schedule leaves them alone) and are switched on for a run.
-     */
-    suspend fun setImportListAutomaticAdd(config: LidarrConfig, key: String, id: Int, enabled: Boolean) {
-        val raw = json.decodeFromString(JsonObject.serializer(), get(config, key, "importlist/$id"))
-        if ((raw["enableAutomaticAdd"] as? JsonPrimitive)?.booleanOrNull == enabled) return
-        updateImportList(config, key, id, JsonObject(raw + ("enableAutomaticAdd" to JsonPrimitive(enabled))))
-    }
-
-    /** Creates an import list (Lidarr skips its connection test with forceSave). */
-    suspend fun createImportList(config: LidarrConfig, key: String, raw: JsonObject): JsonObject =
-        json.decodeFromString(
-            JsonObject.serializer(),
-            http.postJson(url(config, "importlist", listOf("forceSave" to true)), raw.toString(), config.useServerTls, headers(key), service = "Lidarr"),
-        )
 
     suspend fun deleteImportList(config: LidarrConfig, key: String, id: Int) {
         http.send("DELETE", url(config, "importlist/$id"), "", config.useServerTls, headers(key), service = "Lidarr")

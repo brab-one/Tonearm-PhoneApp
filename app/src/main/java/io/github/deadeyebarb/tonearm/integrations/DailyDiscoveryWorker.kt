@@ -14,22 +14,12 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 /**
- * Refreshes Daily Discovery (and its server playlist) once a day, even if the app isn't opened, and
- * checks Lidarr for a Brainarr list (so the car shows "Brainarr picks" without a visit to Discover).
+ * Refreshes Daily Discovery (and its server playlist) once a day, even if the app isn't opened.
  */
 class DailyDiscoveryWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
         val c = applicationContext.container
         val integrations = c.integrations.current()
-        if (integrations.lidarr != null) {
-            try {
-                c.brainarr.load()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Exception) {
-                // Lidarr unreachable or no Brainarr: the daily mix doesn't depend on it.
-            }
-        }
         if (integrations.maloja == null) return Result.success()
         return try {
             c.daily.ensureToday()

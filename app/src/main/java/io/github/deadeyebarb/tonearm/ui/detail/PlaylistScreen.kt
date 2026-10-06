@@ -101,7 +101,7 @@ fun PlaylistScreen(id: String) {
                 WeeklyPicks.parse(pl)?.let { state ->
                     item {
                         Text(
-                            "Brainarr's weekly picks. When next week's arrive, this playlist and its music are deleted, except albums with a song " +
+                            "This week's AI picks. When next week's arrive, this playlist and its music are deleted, except albums with a song " +
                                 "you liked or put in another playlist. Tap the heart to keep all of it under a name of your own.",
                             style = MaterialTheme.typography.bodySmall, color = Hud.colors.dim, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                         )

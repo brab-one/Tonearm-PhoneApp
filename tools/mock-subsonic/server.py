@@ -573,6 +573,10 @@ class Handler(BaseHTTPRequestHandler):
             if entry:
                 self.register_albums(entry)
             return self.send_raw([self.lidarr_album(entry, a) for a in entry["albums"]] if entry else [])
+        if endpoint == "album/lookup":
+            # Lidarr's metadata knows the catalog's albums; "artist album" finds one.
+            return self.send_raw([self.lidarr_album(e, a) for e in LIDARR_CATALOG for a in e["albums"]
+                                  if a[0].lower() in term and e["artistName"].lower() in term])
         if endpoint == "track":
             entry = self.lidarr_entry(int(one("artistId") or 0))
             if not entry:

@@ -3,14 +3,14 @@
 A lossless-first Android music player for **Subsonic / OpenSubsonic** servers (Navidrome, Gonic,
 Airsonic-Advanced, LMS, …), with **mutual TLS** support so it works behind a reverse proxy that
 requires client certificates, a neon sci-fi HUD design, Android Auto support, recommendations from
-your **Maloja** scrobbles, music requests through **Lidarr**, AI picks from **Brainarr**, and
+your **Maloja** scrobbles, music requests through **Lidarr**, AI picks from your own **Ollama** (through the Tonearm server), and
 **YouTube Music** playback for anything you don't have yet (like a song there and its album gets requested in Lidarr).
 
 Related repositories:
 
 - [**Tonearm**](https://github.com/brab-one/Tonearm): start here, the short install and setup guide for everything
 - [**Tonearm-Desktop**](https://github.com/brab-one/Tonearm-Desktop): the desktop app for Linux and
-  Windows (native, not a web app) with the same server support and a Lidarr/Brainarr dashboard
+  Windows (native, not a web app) with the same server support and a Lidarr dashboard
 - [**Tonearm-Server**](https://github.com/brab-one/Tonearm-Server): for everyone on your Navidrome: Tonearm
   Connect (this app controls the desktop player and moves playback between the two), Lidarr and Maloja
   without handing out their keys, and AI picks from your Ollama
@@ -73,9 +73,7 @@ Related repositories:
   and follow Lidarr's download queue
 - **AI picks** (with the Tonearm server and Ollama): albums by artists you don't have, from what you play
   and like, under Discover; tap one to open it on YouTube Music, or request it
-- **Brainarr** picks: what the AI import list in your Lidarr added, with library / download status,
-  "Ask Brainarr" (top of Discover) to have Lidarr run it now, "Get" for picks it added unmonitored, and a Brainarr mix of the ones you have
-- **Weekly picks** (Brainarr screen): every week Brainarr picks a few albums, Lidarr downloads them and they arrive
+- **Weekly picks** (in the AI picks panel): every week the first few AI picks are downloaded by Lidarr and arrive
   as a "Weekly picks" playlist. A week later the playlist and its music are deleted again, except albums with a
   song you liked or put in another playlist; like the playlist itself (and name it) to keep all of it
 - Optional direct scrobbling to Maloja; all integrations can reuse the music server's mTLS client certificate
@@ -216,17 +214,11 @@ With an empty library (a fresh Navidrome answers “Library not found or empty�
 instead of failing, and Daily Discovery offers the artists from your Maloja history under
 *Request all* until Lidarr has fetched some music.
 
-**Brainarr** ([RicherTunes/Brainarr](https://github.com/RicherTunes/Brainarr)) is a Lidarr import list
-plugin that asks an AI model for music like your library. Nothing to set up in Tonearm: with Lidarr
-connected, a Brainarr list is found automatically (*Test* in the Lidarr settings shows it) and a
-**Brainarr** card appears in Discover. Lidarr's API can't preview an import list, so Tonearm shows what
-Brainarr has added to Lidarr: the artists that carry the list's tag, plus everything added by runs you
-start with **Ask Brainarr** (Lidarr's "ImportListSync" for that list, which adds the results right away).
-If the list has no tag, **Add the tag** in the Brainarr screen tags it `brainarr` (saved without
-Lidarr's connection test, so the model isn't called), and Lidarr's own scheduled runs show up from
-then on. Picks become playable once Lidarr has downloaded them and your server has scanned them; they
-are also mixed into Daily Discovery and playable in the car as "Brainarr picks". Brainarr's review
-queue isn't available: its actions have "/" in their names, which Lidarr's action URL can't carry.
+**AI picks** come from the [Tonearm server](https://github.com/brab-one/Tonearm-Server) when it has Ollama:
+albums by artists you don't have, from what you play and like on the music server, checked against
+Lidarr so made-up albums are dropped. They're renewed every week or when you tap **Ask again**; on the
+desktop, **More like this** asks for ones like a song, album, artist or playlist. With **Weekly picks** on
+(Navidrome admins), the first 3, 5 or 10 are requested every week; phone and desktop share that setting.
 
 **Daily Discovery** is rebuilt once a day (in the background too, via WorkManager) and stays the same
 for the rest of the day; the ⟳ button rebuilds it on demand. The server-side “Daily Discovery” playlist
@@ -235,8 +227,7 @@ is overwritten each day, so don't add your own songs to it.
 ## YouTube Music fallback
 
 Things you don't have can still be played: the ▶ buttons on Discover's "not in your library" rows
-and heavy-rotation artists you don't have, Daily Discovery's missing artists and Brainarr picks that aren't downloaded
-yet, the **On YouTube Music** section of Search, and "play … on Tonearm" in the car when the library has
+and heavy-rotation artists you don't have, Daily Discovery's missing artists, AI picks (tap one to open it), the **On YouTube Music** section of Search, and "play … on Tonearm" in the car when the library has
 no match. They stream from YouTube Music (Opus, up to 160 kbps; Now Playing shows a YOUTUBE MUSIC tag)
 in the same queue as library songs, with the visualizer, cache-ahead and Maloja scrobbling (if on).
 
@@ -265,7 +256,7 @@ address, since song ids are per server; the phone warns when they don't.
 ## Android Auto
 
 Tonearm shows up in Android Auto (and in cars running Android Automotive) with four tabs:
-**Home** (Daily Discovery, Maloja mix, Brainarr picks, shuffle all, recently added/played, most played, random picks), **Library** (artists, albums,
+**Home** (Daily Discovery, Maloja mix, shuffle all, recently added/played, most played, random picks), **Library** (artists, albums,
 playlists, genres), **Favorites** and **Downloads**. Albums show as cover grids, picking a song plays
 its album or playlist from there, search and voice ("play … on Tonearm") work, and the player has
 favorite / shuffle / repeat buttons. Streaming, mTLS and downloads all run on the phone as usual.
@@ -317,15 +308,15 @@ On first run it creates a CA, a server certificate valid for `localhost`, `127.0
 24/192 FLAC tones with cover art and synced lyrics, all under `tools/mock-subsonic/data/`.
 The same address also serves a mock **Maloja** (`/apis/mlj_1/`, API key `maloja-key`) with a listening
 history, and a mock **Lidarr** (`/api/v1/`, API key `lidarr-key`) with a small catalog, a download
-queue and a Brainarr import list (a run adds two artists after a few seconds), so Discover, Daily
-Discovery, requests and Brainarr can be tried end to end.
+queue, album lookups and track lists, so Discover, Daily Discovery, requests and (behind a Tonearm server)
+weekly picks can be tried end to end.
 
 ## Architecture
 
 `shared/` is plain Kotlin/JVM code that both this app and
 [Tonearm-Desktop](https://github.com/brab-one/Tonearm-Desktop) compile (the desktop repository includes
-this one as a submodule): the Subsonic client and models, TLS, the Lidarr/Brainarr/Maloja clients, the
-Connect protocol and YouTube Music. `app/` is the Android app.
+this one as a submodule): the Subsonic client and models, TLS, the Lidarr/Maloja clients, the
+Connect protocol (with the Tonearm server's AI picks), weekly picks and YouTube Music. `app/` is the Android app.
 
 ```
 ui/          Jetpack Compose (Material 3) screens, one LoaderViewModel per screen; ui/theme holds
@@ -339,7 +330,7 @@ subsonic/    REST client, models, sessions (one TLS-configured OkHttp client per
 net/         mTLS key managers, trust managers, PKCS#12/PEM handling
 data/        DataStore-backed settings, server list and integrations, Keystore-encrypted secrets
 integrations/ Maloja and Lidarr clients, Recommender, DailyDiscovery (+ daily WorkManager job),
-             Brainarr, AutoRequest (requests what plays from YouTube Music)
+             weekly picks job, AutoRequest (requests what plays from YouTube Music)
 youtube/     YouTube Music search and audio resolution (NewPipeExtractor over OkHttp)
 ```
 
@@ -362,5 +353,5 @@ resolved at open time too, and fetched with the User-Agent of the YouTube client
 - The YouTube Music fallback depends on NewPipeExtractor keeping up with YouTube (see above).
 - Tonearm Connect needs the Tonearm server or the plugin in Lidarr; a device that quits uncleanly is listed as offline
   (with when it was last seen) until it's back.
-- Brainarr picks can't be previewed before Lidarr adds them, and artists that Lidarr's scheduled runs
-  added before the list had a tag can't be told apart from your own additions.
+- AI picks are only as good as the model; a small one on an iGPU takes a few minutes and sometimes repeats
+  itself (made-up albums are dropped when Lidarr's metadata search answers).

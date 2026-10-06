@@ -49,8 +49,7 @@ data class RequestSummary(val requested: Int, val alreadyThere: Int, val notFoun
 
 /**
  * "Daily Discovery": once a day, a fresh mix of library songs picked from your Maloja history
- * (forgotten favourites, similar artists you rarely play, songs like your current favourites,
- * Brainarr's picks once they're downloaded),
+ * (forgotten favourites, similar artists you rarely play, songs like your current favourites),
  * plus the recommended artists you don't have yet, which can all be requested from Lidarr.
  * The songs are also kept as a "Daily Discovery" playlist on the music server.
  */
@@ -62,7 +61,6 @@ class DailyDiscovery(
     private val sessions: SessionManager,
     private val integrations: IntegrationsService,
     private val recommender: Recommender,
-    private val brainarr: BrainarrService,
 ) {
     private val store = jsonDataStore(context, "daily", DailyState.serializer(), DailyState(), json)
     private val mutex = Mutex()
@@ -87,10 +85,8 @@ class DailyDiscovery(
         val random = Random(LocalDate.parse(today).toEpochDay() * 31 + session.id.hashCode())
         val discover = recommender.discover()
         val pool = async { runCatching { recommender.similarToFavourites(session) }.getOrNull() }
-        val aiPicks = runCatching { brainarr.libraryPicks() }.getOrDefault(emptyList())
 
-        val artistIds = (discover.rediscover.take(4) + discover.similarInLibrary.take(6)).map { it.artist.id } +
-            aiPicks.shuffled(random).take(4).map { it.id }
+        val artistIds = (discover.rediscover.take(4) + discover.similarInLibrary.take(6)).map { it.artist.id }
         val artistBuckets = artistIds.distinct()
             .map { id -> async { runCatching { songsOf(session, id, 3, random) }.getOrDefault(emptyList()) } }
         val similar = pool.await()

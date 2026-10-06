@@ -54,7 +54,6 @@ import io.github.deadeyebarb.tonearm.container
 import io.github.deadeyebarb.tonearm.data.LidarrConfig
 import io.github.deadeyebarb.tonearm.data.MalojaConfig
 import io.github.deadeyebarb.tonearm.data.normalizeServerUrl
-import io.github.deadeyebarb.tonearm.integrations.BrainarrList
 import io.github.deadeyebarb.tonearm.integrations.LidarrProfile
 import io.github.deadeyebarb.tonearm.integrations.LidarrRootFolder
 import io.github.deadeyebarb.tonearm.subsonic.userMessage
@@ -123,9 +122,6 @@ class LidarrSettingsViewModel(private val c: AppContainer) : ViewModel() {
         private set
     var metadatas by mutableStateOf<List<LidarrProfile>>(emptyList())
         private set
-    /** Brainarr import lists found by the last test; null before a test. */
-    var brainarr by mutableStateOf<List<BrainarrList>?>(null)
-        private set
 
     val valid get() = normalizeServerUrl(url).toHttpUrlOrNull() != null && key.isNotBlank()
 
@@ -151,11 +147,9 @@ class LidarrSettingsViewModel(private val c: AppContainer) : ViewModel() {
                 val r = async { lidarr.rootFolders(config, k) }
                 val q = async { lidarr.qualityProfiles(config, k) }
                 val m = async { lidarr.metadataProfiles(config, k) }
-                val b = async { runCatching { c.brainarr.lists(config, k) }.getOrNull() }
                 roots = r.await()
                 qualities = q.await()
                 metadatas = m.await()
-                brainarr = b.await()
                 TestState.Passed(
                     "Connected to ${status.instanceName ?: status.appName ?: "Lidarr"} ${status.version.orEmpty()}".trim() +
                         if (roots.isEmpty()) " · no root folder yet, add one in Lidarr" else "",
@@ -257,7 +251,7 @@ fun LidarrSettingsScreen() {
             )
             val integrations by c.integrations.state.collectAsStateWithLifecycle()
             if (integrations.lidarr?.viaServer == true) {
-                ThroughServerNote("Lidarr", if (integrations.lidarr?.limited == true) " You can request music and see downloads; Brainarr is for its admins." else "")
+                ThroughServerNote("Lidarr", if (integrations.lidarr?.limited == true) " You can request music and see downloads; weekly picks are for its admins." else "")
             }
             OutlinedTextField(
                 vm.url, { vm.url = it }, label = { Text("Lidarr address") }, placeholder = { Text("https://lidarr.example.com") },
@@ -272,19 +266,6 @@ fun LidarrSettingsScreen() {
             TestResult(vm.test)
             HudButton("Test & load profiles", vm::runTest, Modifier.fillMaxWidth(), filled = false, enabled = vm.valid && vm.test != TestState.Running)
 
-            vm.brainarr?.let { lists ->
-                HudSectionHeader("Brainarr")
-                Text(
-                    if (lists.isEmpty()) {
-                        "No Brainarr list in this Lidarr. Brainarr is a plugin that asks an AI model for music like yours; " +
-                            "once it's set up as an import list, its picks show up in Discover."
-                    } else {
-                        lists.joinToString("\n") { list -> "✓ ${list.name}" + (list.summary.takeIf { it.isNotEmpty() }?.let { " — $it" } ?: "") } +
-                            "\nIts picks show up in Discover."
-                    },
-                    style = MaterialTheme.typography.bodyMedium, color = if (lists.isEmpty()) Hud.colors.dim else Hud.colors.text,
-                )
-            }
             if (vm.roots.isNotEmpty()) {
                 HudSectionHeader("Request defaults")
                 ChoiceRow("Root folder", vm.rootFolder ?: "${vm.roots.first().path} (first)") {
