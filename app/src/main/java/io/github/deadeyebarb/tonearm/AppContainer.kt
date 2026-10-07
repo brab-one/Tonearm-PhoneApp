@@ -30,7 +30,6 @@ import io.github.deadeyebarb.tonearm.integrations.IntegrationHttp
 import io.github.deadeyebarb.tonearm.integrations.IntegrationImageCalls
 import io.github.deadeyebarb.tonearm.integrations.IntegrationsService
 import io.github.deadeyebarb.tonearm.integrations.LidarrClient
-import io.github.deadeyebarb.tonearm.integrations.MalojaClient
 import io.github.deadeyebarb.tonearm.integrations.Recommender
 import io.github.deadeyebarb.tonearm.media.MediaEngine
 import io.github.deadeyebarb.tonearm.media.MediaItemFactory
@@ -84,19 +83,18 @@ class AppContainer(val app: Application) {
 
     private val integrationHttp = IntegrationHttp(baseHttpClient) { sessions.awaitActiveClient() }
     private val connectClient = ConnectClient(integrationHttp, json)
-    /** The Tonearm server at the music server's address: Connect, and Lidarr and Maloja with its keys. */
+    /** The Tonearm server at the music server's address: Connect, Lidarr with its key, history and picks. */
     val tonearmServer = ConnectRouter(connectClient)
     val integrations = IntegrationsService(
         IntegrationsRepository(app, json, scope),
-        MalojaClient(integrationHttp, json),
         LidarrClient(integrationHttp, json),
         secrets,
         tonearmServer,
         sessions,
         scope,
     )
-    val recommender = Recommender(api, sessions, integrations)
     val connect = PhoneConnect(app, sessions, integrations, connectClient, tonearmServer)
+    val recommender = Recommender(api, sessions, connect)
     val daily = DailyDiscovery(app, json, scope, api, sessions, integrations, recommender)
     val mediaItems = MediaItemFactory(app)
     val queueStore = QueueStore(app, json, mediaItems)

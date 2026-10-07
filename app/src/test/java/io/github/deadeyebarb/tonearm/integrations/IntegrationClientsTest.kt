@@ -1,7 +1,6 @@
 package io.github.deadeyebarb.tonearm.integrations
 
 import io.github.deadeyebarb.tonearm.data.LidarrConfig
-import io.github.deadeyebarb.tonearm.data.MalojaConfig
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -18,7 +17,6 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
-import java.time.LocalDate
 
 class IntegrationClientsTest {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true; coerceInputValues = true; explicitNulls = false }
@@ -38,61 +36,15 @@ class IntegrationClientsTest {
     private fun base(prefix: String = "") = server.url("/$prefix").toString().trimEnd('/')
 
     @Test
-    fun `maloja charts use since and max and parse v3 rows`() = runTest {
-        respond("""{"status":"ok","list":[{"scrobbles":42,"real_scrobbles":40,"artist":"Boards of Canada","artist_id":3,"associated_artists":[],"rank":1}]}""")
-        val maloja = MalojaClient(http, json)
-        val top = maloja.topArtists(MalojaConfig(base("maloja")), LocalDate.of(2026, 9, 4), 25)
-        assertEquals("Boards of Canada", top.single().artist)
-        assertEquals(42, top.single().scrobbles)
-        val url = server.takeRequest().url
-        assertEquals("/maloja/apis/mlj_1/charts/artists", url.encodedPath)
-        assertEquals("2026/09/04", url.queryParameter("since"))
-        assertEquals("25", url.queryParameter("max"))
-    }
-
-    @Test
-    fun `maloja all-time charts and track rows`() = runTest {
-        respond("""{"status":"ok","list":[{"scrobbles":7,"track":{"artists":["A","B"],"title":"Song","album":{"artists":["A"],"albumtitle":"LP"},"length":200},"track_id":9,"rank":1}]}""")
-        val tracks = MalojaClient(http, json).topTracks(MalojaConfig(base()), null, 5)
-        assertEquals(listOf("A", "B"), tracks.single().track!!.artists)
-        assertEquals("LP", tracks.single().track!!.album!!.albumtitle)
-        assertEquals("alltime", server.takeRequest().url.queryParameter("in"))
-    }
-
-    @Test
-    fun `maloja scrobble posts json with the key`() = runTest {
-        respond("""{"status":"success","track":{"artists":["A"],"title":"T"}}""")
-        MalojaClient(http, json).scrobble(MalojaConfig(base()), "k3y", listOf("A"), "T", "LP", 120, 200, 1_700_000_000)
-        val request = server.takeRequest()
-        assertEquals("/apis/mlj_1/newscrobble", request.url.encodedPath)
-        val body = json.parseToJsonElement(request.body!!.utf8()).jsonObject
-        assertEquals("k3y", body["key"]!!.jsonPrimitive.content)
-        assertEquals("T", body["title"]!!.jsonPrimitive.content)
-        assertEquals(1_700_000_000, body["time"]!!.jsonPrimitive.int)
-    }
-
-    @Test
-    fun `maloja wrong key is reported`() = runTest {
-        respond("""{"status":"error","error":"Wrong API key"}""", code = 403)
-        try {
-            MalojaClient(http, json).test(MalojaConfig(base()), "nope")
-            error("expected failure")
-        } catch (e: IntegrationHttpException) {
-            assertEquals(403, e.code)
-            assertEquals("Maloja: Wrong API key", e.message)
-        }
-    }
-
-    @Test
     fun `connection failures name the service`() = runTest {
         val url = base()
         server.close()
         try {
-            MalojaClient(http, json).topArtists(MalojaConfig(url), null, 5)
+            LidarrClient(http, json).status(LidarrConfig(url), "key")
             error("expected failure")
         } catch (e: IntegrationHttpException) {
             assertEquals(0, e.code)
-            assertTrue(e.message!!, e.message!!.startsWith("Maloja: "))
+            assertTrue(e.message!!, e.message!!.startsWith("Lidarr: "))
         }
     }
 
@@ -197,7 +149,7 @@ class IntegrationClientsTest {
     }
 
     @Test
-    fun `names match across maloja and the library`() {
+    fun `names match across the history and the library`() {
         assertEquals(Recommender.normalize("Sigur Rós"), Recommender.normalize("sigur ros"))
         assertEquals(Recommender.normalize("The Oscillators"), Recommender.normalize("Oscillators"))
         assertEquals(Recommender.normalize("Simon & Garfunkel"), Recommender.normalize("Simon  Garfunkel"))

@@ -61,8 +61,6 @@ import io.github.deadeyebarb.tonearm.data.AccentColor
 import io.github.deadeyebarb.tonearm.data.TranscodeFormat
 import io.github.deadeyebarb.tonearm.ui.EqualizerRoute
 import io.github.deadeyebarb.tonearm.ui.LidarrSettingsRoute
-import io.github.deadeyebarb.tonearm.ui.MalojaSettingsRoute
-import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.CloudDownload
 import io.github.deadeyebarb.tonearm.ui.ServersRoute
 import io.github.deadeyebarb.tonearm.ui.common.LocalActions
@@ -96,15 +94,6 @@ fun SettingsScreen() {
             }
 
             item { Group("Integrations") }
-            item {
-                val maloja = integrations.maloja
-                Item(
-                    "Maloja",
-                    maloja?.let { (if (it.viaServer) "Through the Tonearm server" else "Recommendations from ${it.url}") + if (it.scrobble) " · sending plays" else "" }
-                        ?: "Not connected: recommendations from your scrobbles",
-                    icon = { Icon(Icons.Rounded.AutoAwesome, null) },
-                ) { actions.navigate(MalojaSettingsRoute) }
-            }
             item {
                 Item(
                     "Lidarr", if (integrations.lidarr != null) "Through the Tonearm server · request defaults" else "Comes through the Tonearm server, once it has Lidarr",

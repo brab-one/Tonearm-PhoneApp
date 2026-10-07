@@ -3,20 +3,6 @@ package io.github.deadeyebarb.tonearm.data
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
 
-/** A self-hosted Maloja scrobble server: the source of listening history for recommendations. */
-@Serializable
-data class MalojaConfig(
-    val url: String,
-    /** Keystore-encrypted API key (Maloja → Settings → API keys). */
-    val keyEnc: String = "",
-    /** Send plays to Maloja directly. Off by default: many servers already forward scrobbles to it. */
-    val scrobble: Boolean = false,
-    /** Reuse the music server's client certificate and trusted CA (same mTLS proxy). */
-    val useServerTls: Boolean = true,
-    /** Reached through the Tonearm server, which holds the key. */
-    @Transient val viaServer: Boolean = false,
-)
-
 /** Lidarr, for requesting music that isn't in the library yet. */
 @Serializable
 data class LidarrConfig(
@@ -40,25 +26,17 @@ data class LidarrConfig(
 
 @Serializable
 data class Integrations(
-    val maloja: MalojaConfig? = null,
     val lidarr: LidarrConfig? = null,
 ) {
     /**
-     * Lidarr and Maloja as the app uses them: the Tonearm server's when it offers them (it holds their keys,
-     * so the music server login is enough). Lidarr only comes that way; the settings here only hold its
-     * request preferences. Maloja falls back to these settings.
+     * Lidarr as the app uses it: the Tonearm server's when it offers it (it holds the key, so the music server
+     * login is enough). It only comes that way; the settings here only hold its request preferences.
      */
-    fun through(server: TonearmServerInfo?): Integrations {
-        if (server == null) return Integrations(maloja = maloja, lidarr = null)
-        return Integrations(
-            maloja = if (server.maloja) {
-                (maloja ?: MalojaConfig(url = "")).copy(url = server.serviceUrl("maloja"), keyEnc = "", useServerTls = true, viaServer = true)
-            } else maloja,
-            lidarr = if (server.lidarr) {
-                (lidarr ?: LidarrConfig(url = "")).copy(url = server.serviceUrl("lidarr"), keyEnc = "", useServerTls = true, viaServer = true, limited = !server.lidarrAdmin)
-            } else null,
-        )
-    }
+    fun through(server: TonearmServerInfo?): Integrations = Integrations(
+        lidarr = if (server?.lidarr == true) {
+            (lidarr ?: LidarrConfig(url = "")).copy(url = server.serviceUrl("lidarr"), keyEnc = "", useServerTls = true, viaServer = true, limited = !server.lidarrAdmin)
+        } else null,
+    )
 }
 
 /** What the Tonearm server at the music server's address offers this user (its hello). */
@@ -70,11 +48,14 @@ data class TonearmServerInfo(
     val admin: Boolean = false,
     val lidarr: Boolean = false,
     val lidarrAdmin: Boolean = false,
-    val maloja: Boolean = false,
-    /** Album suggestions from its Ollama. */
+    /** Album suggestions and search from its AI. */
     val recommendations: Boolean = false,
     /** Discovery picks and similar artists (from Deezer). */
     val discovery: Boolean = false,
+    /** It keeps the listening history: the apps tell it what they played. */
+    val history: Boolean = false,
+    /** Which AI answers ("Claude claude-opus-5-5"), when there is one. */
+    val ai: String? = null,
 ) {
     fun serviceUrl(service: String) = baseUrl.trimEnd('/') + "/connect-tonearm/" + service
 }

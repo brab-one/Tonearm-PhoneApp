@@ -3,7 +3,7 @@
 A lossless-first Android music player for **Subsonic / OpenSubsonic** servers (Navidrome, Gonic,
 Airsonic-Advanced, LMS, …), with **mutual TLS** support so it works behind a reverse proxy that
 requires client certificates, a neon sci-fi HUD design, Android Auto support, recommendations from
-your **Maloja** scrobbles, music requests through **Lidarr**, AI picks from your own **Ollama** (through the Tonearm server), and
+what you play, music requests through **Lidarr**, AI picks from the AI of your choice (through the Tonearm server), and
 **YouTube Music** playback for anything you don't have yet (like a song there and its album gets requested in Lidarr).
 
 Related repositories:
@@ -12,8 +12,8 @@ Related repositories:
 - [**Tonearm-Desktop**](https://github.com/brab-one/Tonearm-Desktop): the desktop app for Linux and
   Windows (native, not a web app) with the same server support and a Lidarr dashboard
 - [**Tonearm-Server**](https://github.com/brab-one/Tonearm-Server): for everyone on your Navidrome: Tonearm
-  Connect (this app controls the desktop player and moves playback between the two), Lidarr and Maloja
-  without handing out their keys, and AI picks from your Ollama
+  Connect (this app controls the desktop player and moves playback between the two), Lidarr without handing
+  out its key, your listening history, and AI picks from your Ollama, an OpenAI-style API or Claude
 - [**Tonearm-Connect**](https://github.com/brab-one/Tonearm-Connect): the same as a Lidarr plugin, used when
   there's no Tonearm server
 
@@ -21,7 +21,7 @@ Related repositories:
 
 ![Tonearm in the car: browse tabs, album grid, Now Playing, and the setup prompt](tools/screenshots-car.png)
 
-![Discover with Maloja recommendations, Daily Discovery, and requesting through Lidarr](tools/screenshots-discover.png)
+![Discover with recommendations from what you play, Daily Discovery, and requesting through Lidarr](tools/screenshots-discover.png)
 
 ## Features
 
@@ -62,19 +62,22 @@ Related repositories:
   ("On this phone" under Library). They play straight from storage, next to the server's library
 - Instant mix from any song (needs similar-song data on the server)
 
-**Discover (Maloja + Lidarr)**
-- Recommendations from your Maloja listening history: heavy rotation, favourites you haven't played in months,
-  similar artists in your library you rarely play, and similar artists you don't have yet
+**Discover (with the Tonearm server)**
+- Recommendations from what you play, here and on the desktop, YouTube Music included (the Tonearm server keeps
+  the history): heavy rotation, favourites you haven't played in months, similar artists in your library you
+  rarely play, and similar artists you don't have yet
 - **Daily Discovery**: a fresh ~30-song mix every day (also kept as a "Daily Discovery" playlist on your server,
   so Android Auto and other apps can play it), plus the day's recommended artists you don't own,
   with **Request all** to send them all to Lidarr (latest album, all albums, or artist only)
-- Maloja mix (in Android Auto): songs similar to what you've been playing, minus what you played recently
+- Your mix (in Android Auto): songs similar to what you've been playing, minus what you played recently
 - Request any artist or album through Lidarr from search, recommendations or the Request screen,
   and follow Lidarr's download queue
 - **Discovery picks** (with the Tonearm server): artists you don't have that the ones you play point to
-  (Deezer's related artists), each with an album and "because you play …", under Discover
-- **AI picks** (with the Tonearm server and Ollama): albums by artists you don't have, from what you play
-  and like, under Discover; tap one to open it on YouTube Music, or request it
+  (Deezer's related artists), each with an album and "because you play …", under Discover; artists you keep
+  playing on YouTube Music without having them come first
+- **AI picks** (with the Tonearm server and its AI): albums by artists you don't have, from what you play,
+  like and skip, under Discover; tap one to open it on YouTube Music, or request it
+- **Not for me**: the thumbs-down on a pick keeps that artist out of the picks (until you play them a few times)
 - **More like this** on songs, albums and artists: similar songs to pick from (play them or put them in a
   playlist), similar artists and, with the server's AI, albums like it
 - **Search** across the library, YouTube Music and Deezer at once, best matches first whatever the source,
@@ -86,7 +89,8 @@ Related repositories:
 - **Weekly picks** (in the AI picks panel): every week the first few AI picks are downloaded by Lidarr and arrive
   as a "Weekly picks" playlist. A week later the playlist and its music are deleted again, except albums with a
   song you liked or put in another playlist; like the playlist itself (and name it) to keep all of it
-- Optional direct scrobbling to Maloja; all integrations can reuse the music server's mTLS client certificate
+- Every song you play (YouTube Music ones and skips too) goes to the Tonearm server's history, with *Scrobble
+  plays* on; the server and Lidarr are reached with the music server's mTLS client certificate
 
 **Offline**
 - Download songs, albums and playlists in original quality (Wi-Fi only by default)
@@ -196,37 +200,23 @@ certificate**.
 The certificate is used for every request: API calls, streaming, cover art, downloads, and the
 artwork shown in the notification and Android Auto.
 
-## Maloja and Lidarr
+## Recommendations and Lidarr
 
-Open **Settings → Integrations** (or the **Discover** tab).
+Both come through the [Tonearm server](https://github.com/brab-one/Tonearm-Server) next to your music server,
+with your music server login: nothing to enter. It keeps what you play (in this app and the desktop app,
+YouTube Music included) and holds Lidarr's key; the Lidarr settings (**Settings → Integrations**) keep just
+the request defaults. Through it, Navidrome admins get all of Lidarr; everyone else can request music and
+see downloads. Maloja isn't used anymore: the server can bring its history over once.
 
-Lidarr comes only through the [Tonearm server](https://github.com/brab-one/Tonearm-Server), which holds its
-key; the Lidarr settings keep just the request defaults. With the server holding Maloja's key too, there's
-nothing to enter: both come through it with your music server login, and the settings say so (what
-you enter there is only used without the server). Through it, Navidrome admins get all of Lidarr; everyone
-else can request music and see downloads.
-
-**Maloja** needs its address and an API key (Maloja → Settings → API keys; reading charts works
-without one, sending plays needs it). Turn on *Send plays to Maloja* only if your music server doesn't
-already forward scrobbles there, or every play is counted twice. Similar-artist suggestions come from
-your music server: in Navidrome set a Last.fm API key (`ND_LASTFM_APIKEY`) so “similar” and “not in
-your library” lists aren't empty.
-
-**Lidarr** needs its address and API key (Lidarr → Settings → General). *Test & load profiles* reads
-your root folders, quality and metadata profiles; leave them on “default” to use the root folder's
-defaults. Requests add the artist (or one album) with those settings and, if enabled, start searching.
-
-If Maloja or Lidarr sit behind the same mTLS proxy as your music server, leave *Use the music server's
-client certificate* on (the default). Requests then use the same client certificate and trusted CA as the
-music server, in the background daily job too. Errors from these services start with “Maloja:” or
-“Lidarr:”, so you can tell them apart from music server errors.
+Similar-artist suggestions on Discover come from your music server: in Navidrome set a Last.fm API key
+(`ND_LASTFM_APIKEY`) so “similar” and “not in your library” lists aren't empty.
 
 With an empty library (a fresh Navidrome answers “Library not found or empty”), Discover says so
-instead of failing, and Daily Discovery offers the artists from your Maloja history under
+instead of failing, and Daily Discovery offers the artists from your history under
 *Request all* until Lidarr has fetched some music.
 
-**AI picks** come from the [Tonearm server](https://github.com/brab-one/Tonearm-Server) when it has Ollama:
-albums by artists you don't have, from what you play and like on the music server, checked against
+**AI picks** come from the [Tonearm server](https://github.com/brab-one/Tonearm-Server) when it has an AI (Ollama,
+an OpenAI-style API or Claude): albums by artists you don't have, from what you play, like and skip, checked against
 Lidarr so made-up albums are dropped. They're renewed every week or when you tap **Ask again**; on the
 desktop, **More like this** asks for ones like a song, album, artist or playlist. With **Weekly picks** on
 (Navidrome admins), the first 3, 5 or 10 are requested every week; phone and desktop share that setting.
@@ -240,7 +230,7 @@ is overwritten each day, so don't add your own songs to it.
 Things you don't have can still be played: the ▶ buttons on Discover's "not in your library" rows
 and heavy-rotation artists you don't have, Daily Discovery's missing artists, AI picks (tap one to open it), the **On YouTube Music** section of Search, and "play … on Tonearm" in the car when the library has
 no match. They stream from YouTube Music (Opus, up to 160 kbps; Now Playing shows a YOUTUBE MUSIC tag)
-in the same queue as library songs, with the visualizer, cache-ahead and Maloja scrobbling (if on).
+in the same queue as library songs, with the visualizer, cache-ahead, and they count in your history.
 
 Playing a song requests nothing. **Liking** one asks Lidarr for the album it's on (the one YouTube Music
 names, else found in Lidarr's own track lists for the artist, studio albums first; the app doesn't contact
@@ -267,7 +257,7 @@ address, since song ids are per server; the phone warns when they don't.
 ## Android Auto
 
 Tonearm shows up in Android Auto (and in cars running Android Automotive) with four tabs:
-**Home** (Daily Discovery, Maloja mix, shuffle all, recently added/played, most played, random picks), **Library** (artists, albums,
+**Home** (Daily Discovery, Your mix, shuffle all, recently added/played, most played, random picks), **Library** (artists, albums,
 playlists, genres), **Favorites** and **Downloads**. Albums show as cover grids, picking a song plays
 its album or playlist from there, search and voice ("play … on Tonearm") work, and the player has
 favorite / shuffle / repeat buttons. Streaming, mTLS and downloads all run on the phone as usual.
@@ -317,8 +307,8 @@ On first run it creates a CA, a server certificate valid for `localhost`, `127.0
 `10.0.2.2` (the host as seen from the Android emulator), client certificates
 (`client.p12` and `client-legacy.p12`, password `tonearm`), and albums of 16/44.1, 24/96 and
 24/192 FLAC tones with cover art and synced lyrics, all under `tools/mock-subsonic/data/`.
-The same address also serves a mock **Maloja** (`/apis/mlj_1/`, API key `maloja-key`) with a listening
-history, and a mock **Lidarr** (`/api/v1/`, API key `lidarr-key`) with a small catalog, a download
+The same address also serves a mock **Maloja** (`/apis/mlj_1/`, API key `maloja-key`) for the Tonearm
+server's one-time history import, and a mock **Lidarr** (`/api/v1/`, API key `lidarr-key`) with a small catalog, a download
 queue, album lookups and track lists, so Discover, Daily Discovery, requests and (behind a Tonearm server)
 weekly picks can be tried end to end.
 
@@ -326,7 +316,7 @@ weekly picks can be tried end to end.
 
 `shared/` is plain Kotlin/JVM code that both this app and
 [Tonearm-Desktop](https://github.com/brab-one/Tonearm-Desktop) compile (the desktop repository includes
-this one as a submodule): the Subsonic client and models, TLS, the Lidarr/Maloja clients, the
+this one as a submodule): the Subsonic client and models, TLS, the Lidarr client, the
 Connect protocol (with the Tonearm server's AI picks), weekly picks and YouTube Music. `app/` is the Android app.
 
 ```
@@ -340,7 +330,7 @@ download/    Media3 DownloadManager + foreground DownloadService
 subsonic/    REST client, models, sessions (one TLS-configured OkHttp client per server)
 net/         mTLS key managers, trust managers, PKCS#12/PEM handling
 data/        DataStore-backed settings, server list and integrations, Keystore-encrypted secrets
-integrations/ Maloja and Lidarr clients, Recommender, DailyDiscovery (+ daily WorkManager job),
+integrations/ Lidarr client, Recommender, DailyDiscovery (+ daily WorkManager job),
              weekly picks job, AutoRequest (requests what plays from YouTube Music)
 youtube/     YouTube Music search and audio resolution (NewPipeExtractor over OkHttp)
 ```

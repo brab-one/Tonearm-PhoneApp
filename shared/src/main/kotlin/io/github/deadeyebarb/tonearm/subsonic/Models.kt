@@ -83,6 +83,8 @@ data class Album(
     val songCount: Int = 0,
     val duration: Int = 0,
     val playCount: Long = 0,
+    /** When it was last played (OpenSubsonic, ISO 8601). */
+    val played: String? = null,
     val created: String? = null,
     val starred: String? = null,
     val year: Int? = null,

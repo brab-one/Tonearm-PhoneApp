@@ -149,6 +149,41 @@ data class DiscoveryPick(
     val coverUrl: String? = null,
     /** Your artists that led here. */
     val because: List<String> = emptyList(),
+    /** Why, when it isn't [because] ("You've played them 5 times lately…"). */
+    val reason: String? = null,
+)
+
+/** One song as an app played it, for the Tonearm server's listening history; skipped ones too. */
+@Serializable
+data class Played(
+    /** When it started (ms). */
+    val at: Long,
+    val artist: String,
+    val title: String,
+    val album: String? = null,
+    val durationMs: Long = 0,
+    val listenedMs: Long = 0,
+    /** "library", "youtube" or "local". */
+    val source: String = "library",
+)
+
+@Serializable
+data class ArtistCount(val artist: String, val plays: Int, val skips: Int = 0, val lastPlayed: Long = 0)
+
+@Serializable
+data class SongCount(val artist: String, val title: String, val album: String? = null, val plays: Int)
+
+@Serializable
+data class RecentPlay(val artist: String, val title: String, val at: Long)
+
+/** Someone's listening over a time span, from the Tonearm server's history: most played first. */
+@Serializable
+data class Listening(
+    val since: Long = 0,
+    val plays: Int = 0,
+    val artists: List<ArtistCount> = emptyList(),
+    val songs: List<SongCount> = emptyList(),
+    val recent: List<RecentPlay> = emptyList(),
 )
 
 /** [running] while the server makes new ones (ask again in a few seconds). */
@@ -219,9 +254,10 @@ class ConnectClient(private val http: IntegrationHttp, private val json: Json) {
             admin = flag("admin"),
             lidarr = flag("lidarr"),
             lidarrAdmin = flag("lidarrAdmin"),
-            maloja = flag("maloja"),
             recommendations = flag("recommendations"),
             discovery = flag("discovery"),
+            history = flag("history"),
+            ai = response["ai"]?.jsonPrimitive?.contentOrNull,
         )
     }
 
@@ -236,6 +272,23 @@ class ConnectClient(private val http: IntegrationHttp, private val json: Json) {
     /** What the server's AI makes of [query]; [AiSearch.running] until it has answered (ask again then). */
     suspend fun aiSearch(session: ServerSession, query: String): AiSearch =
         json.decodeFromJsonElement(AiSearch.serializer(), call(ConnectRoute.Server(session), "aisearch", listOf("q" to query)))
+
+    /** Tells the server's listening history what was played (and skipped). */
+    suspend fun played(session: ServerSession, plays: List<Played>) {
+        call(ConnectRoute.Server(session), "played", payload = json.encodeToString(ListSerializer(Played.serializer()), plays))
+    }
+
+    /** The user's listening over the last [days] (all of it for null): top [artists], top [songs] and the [recent] plays. */
+    suspend fun listening(session: ServerSession, days: Int?, artists: Int = 50, songs: Int = 0, recent: Int = 0): Listening =
+        json.decodeFromJsonElement(
+            Listening.serializer(),
+            call(ConnectRoute.Server(session), "listening", listOf("days" to days, "artists" to artists, "songs" to songs, "recent" to recent)),
+        )
+
+    /** "Not for me": the server leaves [artist] (or just this [album] of theirs) out of the picks from now on. */
+    suspend fun dismiss(session: ServerSession, artist: String, album: String? = null) {
+        call(ConnectRoute.Server(session), "dismiss", listOf("artist" to artist, "album" to album))
+    }
 
     /** Artists like [artist], marked when the library has them. */
     suspend fun similarArtists(session: ServerSession, artist: String): List<SimilarArtist> =
@@ -313,7 +366,7 @@ class ConnectClient(private val http: IntegrationHttp, private val json: Json) {
 }
 
 /**
- * Finds the Tonearm server at the music server's address, for Connect and for what it offers (Lidarr, Maloja,
+ * Finds the Tonearm server at the music server's address, for Connect and for what it offers (Lidarr, history,
  * picks). What was found is kept for a while and published in [server].
  */
 class ConnectRouter(private val client: ConnectClient) {
@@ -332,7 +385,7 @@ class ConnectRouter(private val client: ConnectClient) {
 
     /**
      * Looks the server up again if what's known is old (or about another music server). Network errors
-     * keep the last answer, so a bad moment doesn't switch Lidarr and Maloja back to the app's own settings.
+     * keep the last answer, so a bad moment doesn't make Lidarr and the picks disappear.
      */
     suspend fun refresh(session: ServerSession?): TonearmServerInfo? {
         if (session == null) {

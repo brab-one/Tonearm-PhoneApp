@@ -69,15 +69,15 @@ class LibraryTree(private val c: AppContainer) {
                     mediaType = MediaMetadata.MEDIA_TYPE_PLAYLIST, playable = true, browsable = false,
                 ),
             ) + listOfNotNull(
-                c.integrations.state.value.maloja?.let {
+                c.tonearmServer.server.value?.takeIf { it.history }?.let {
                     factory.folder(
                         MediaIds.DAILY, "Daily Discovery", "Fresh recommendations every day", artwork = icon(R.drawable.ic_car_new),
                         mediaType = MediaMetadata.MEDIA_TYPE_PLAYLIST, playable = true, browsable = false,
                     )
                 },
-                c.integrations.state.value.maloja?.let {
+                c.tonearmServer.server.value?.takeIf { it.history }?.let {
                     factory.folder(
-                        MediaIds.MALOJA_MIX, "Maloja mix", "Similar to what you've been playing", artwork = icon(R.drawable.ic_car_explore),
+                        MediaIds.HISTORY_MIX, "Your mix", "Similar to what you've been playing", artwork = icon(R.drawable.ic_car_explore),
                         mediaType = MediaMetadata.MEDIA_TYPE_PLAYLIST, playable = true, browsable = false,
                     )
                 },
@@ -126,7 +126,7 @@ class LibraryTree(private val c: AppContainer) {
     /** All songs in a container media ID, in play order. */
     suspend fun songsOf(containerId: String): List<QueueSong> {
         when (containerId) {
-            MediaIds.MALOJA_MIX -> return c.recommender.mix()
+            MediaIds.HISTORY_MIX -> return c.recommender.mix()
             MediaIds.DAILY -> return c.daily.ensureToday().entries
             MediaIds.MIX -> {
                 val session = c.sessions.awaitActive()
@@ -198,7 +198,7 @@ class LibraryTree(private val c: AppContainer) {
             val parsed = MediaIds.parse(item.mediaId)
             val container = when {
                 item.mediaId == MediaIds.MIX -> MediaIds.MIX
-                item.mediaId == MediaIds.MALOJA_MIX -> MediaIds.MALOJA_MIX
+                item.mediaId == MediaIds.HISTORY_MIX -> MediaIds.HISTORY_MIX
                 item.mediaId == MediaIds.DAILY -> MediaIds.DAILY
                 parsed.type == MediaIds.ALBUM || parsed.type == MediaIds.PLAYLIST || parsed.type == MediaIds.GENRE -> item.mediaId
                 parsed.type == MediaIds.SONG && parsed.context != null -> parsed.context

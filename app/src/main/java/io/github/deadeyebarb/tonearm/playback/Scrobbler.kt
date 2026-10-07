@@ -3,26 +3,32 @@ package io.github.deadeyebarb.tonearm.playback
 import android.os.SystemClock
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import io.github.deadeyebarb.tonearm.connect.PhoneConnect
+import io.github.deadeyebarb.tonearm.connect.Played
 import io.github.deadeyebarb.tonearm.data.SettingsRepository
-import io.github.deadeyebarb.tonearm.integrations.IntegrationsService
+import io.github.deadeyebarb.tonearm.local.LocalMusic
 import io.github.deadeyebarb.tonearm.media.serverId
 import io.github.deadeyebarb.tonearm.media.songId
 import io.github.deadeyebarb.tonearm.subsonic.SessionManager
 import io.github.deadeyebarb.tonearm.subsonic.SubsonicApi
+import io.github.deadeyebarb.tonearm.youtube.YouTubeMusic
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.IOException
 
 /**
  * Reports "now playing" when a song starts and submits a scrobble once it has actually been
- * listened to for half its length or four minutes, whichever comes first (Last.fm rules).
+ * listened to for half its length or four minutes, whichever comes first (Last.fm rules). Every song,
+ * YouTube Music ones and skipped ones too, also goes to the Tonearm server's listening history.
  * Submissions that fail while offline are retried after the next successful one.
  */
 class Scrobbler(
     private val api: SubsonicApi,
     private val sessions: SessionManager,
     private val settings: SettingsRepository,
-    private val integrations: IntegrationsService,
+    private val connect: PhoneConnect,
     private val scope: CoroutineScope,
 ) : Player.Listener {
     private data class Play(
@@ -35,14 +41,14 @@ class Scrobbler(
         val album: String?,
     )
     private data class Pending(val serverId: String, val songId: String, val time: Long)
-    private data class MalojaPending(val play: Play, val listenedMs: Long)
 
     private var current: Play? = null
     private var listenedMs = 0L
     private var resumedAt = -1L
     private var announced = false
     private val pending = ArrayDeque<Pending>()
-    private val malojaPending = ArrayDeque<MalojaPending>()
+    private val history = ArrayDeque<Played>()
+    private val historyLock = Mutex()
 
     override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
         finish()
@@ -85,10 +91,8 @@ class Scrobbler(
             resumedAt = SystemClock.elapsedRealtime()
         }
         val threshold = if (play.durationMs > 0) minOf(play.durationMs / 2, 240_000L) else 240_000L
-        if (listenedMs >= threshold && listenedMs >= 10_000) {
-            submit(Pending(play.serverId, play.songId, play.startedAt))
-            submitToMaloja(MalojaPending(play, listenedMs))
-        }
+        if (listenedMs >= threshold && listenedMs >= 10_000) submit(Pending(play.serverId, play.songId, play.startedAt))
+        record(play, listenedMs)
         current = null
     }
 
@@ -104,38 +108,28 @@ class Scrobbler(
         }
     }
 
-    /** Direct Maloja scrobbles, when enabled (otherwise the music server may forward them itself). */
-    private fun submitToMaloja(entry: MalojaPending) {
-        val config = integrations.state.value.maloja?.takeIf { it.scrobble } ?: return
-        if (entry.play.artist.isNullOrBlank() || entry.play.title.isBlank()) return
+    /** Into the Tonearm server's history, in batches; what doesn't get there waits for the next song. */
+    private fun record(play: Play, listenedMs: Long) {
+        if (!settings.state.value.scrobble || play.artist.isNullOrBlank() || play.title.isBlank() || listenedMs < 1_000) return
+        val source = when {
+            YouTubeMusic.isYouTube(play.serverId) -> "youtube"
+            LocalMusic.isLocal(play.serverId) -> "local"
+            else -> "library"
+        }
+        history.addLast(Played(play.startedAt, play.artist, play.title, play.album, play.durationMs, listenedMs, source))
+        while (history.size > 500) history.removeFirst()
         scope.launch {
-            malojaPending.addLast(entry)
-            while (malojaPending.size > 200) malojaPending.removeFirst()
-            val key = integrations.malojaKey(config)
-            while (malojaPending.isNotEmpty()) {
-                val next = malojaPending.first()
+            historyLock.withLock {
+                val batch = history.toList().ifEmpty { return@withLock }
                 try {
-                    integrations.maloja.scrobble(
-                        config, key,
-                        artists = splitArtists(next.play.artist.orEmpty()),
-                        title = next.play.title,
-                        album = next.play.album,
-                        listenedSeconds = (next.listenedMs / 1000).toInt(),
-                        lengthSeconds = (next.play.durationMs / 1000).toInt().takeIf { it > 0 },
-                        timeSeconds = next.play.startedAt / 1000,
-                    )
-                    malojaPending.removeFirst()
+                    // Without a Tonearm server that keeps a history there's nowhere to send them.
+                    connect.played(batch)
+                    history.removeAll(batch.toSet())
                 } catch (_: IOException) {
-                    break
                 }
             }
         }
     }
-
-    /** "A feat. B" / "A, B" → [A, B]; Maloja also parses this server-side, this just helps. */
-    private fun splitArtists(artist: String): List<String> =
-        artist.split(Regex("""\s*(?:,|;| feat\.? | ft\.? | & )\s*""", RegexOption.IGNORE_CASE)).map { it.trim() }.filter { it.isNotEmpty() }
-            .ifEmpty { listOf(artist) }
 
     private fun submit(entry: Pending) {
         if (!settings.state.value.scrobble) return

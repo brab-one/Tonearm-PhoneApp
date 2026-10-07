@@ -3,6 +3,7 @@ package io.github.deadeyebarb.tonearm.connect
 import io.github.deadeyebarb.tonearm.local.LocalMusic
 import android.content.Context
 import android.os.Build
+import io.github.deadeyebarb.tonearm.integrations.IntegrationNotConfiguredException
 import io.github.deadeyebarb.tonearm.integrations.IntegrationsService
 import io.github.deadeyebarb.tonearm.media.QueueSong
 import io.github.deadeyebarb.tonearm.subsonic.NoServerException
@@ -48,6 +49,24 @@ class PhoneConnect(
     suspend fun webSearch(query: String): WebSearch = client.webSearch(sessions.active.value ?: sessions.awaitActive(), query)
 
     suspend fun aiSearch(query: String): AiSearch = client.aiSearch(sessions.active.value ?: sessions.awaitActive(), query)
+
+    /** Sends what was played to the Tonearm server's history; nothing happens without a server that keeps one. */
+    suspend fun played(plays: List<Played>) {
+        val session = sessions.active.value ?: sessions.awaitActive()
+        if (router.refresh(session)?.history == true) client.played(session, plays)
+    }
+
+    /** The listening history on the Tonearm server: the last [days] (all of it for null). */
+    suspend fun listening(days: Int?, artists: Int = 50, songs: Int = 0, recent: Int = 0): Listening {
+        val session = sessions.active.value ?: sessions.awaitActive()
+        if (router.refresh(session)?.history != true) {
+            throw IntegrationNotConfiguredException("Recommendations come from the listening history on the Tonearm server (1.5 or later), and it isn't on your music server yet")
+        }
+        return client.listening(session, days, artists, songs, recent)
+    }
+
+    /** "Not for me": the Tonearm server leaves [artist] (or just this [album]) out of the picks from now on. */
+    suspend fun dismiss(artist: String, album: String? = null) = client.dismiss(sessions.active.value ?: sessions.awaitActive(), artist, album)
 
     /** Artists like [artist] (Deezer's related artists, through the Tonearm server), marked when you have them. */
     suspend fun similarArtists(artist: String): List<SimilarArtist> = client.similarArtists(sessions.active.value ?: sessions.awaitActive(), artist)

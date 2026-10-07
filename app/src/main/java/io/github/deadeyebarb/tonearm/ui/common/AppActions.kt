@@ -151,7 +151,6 @@ class AppActions(
         message(if (items.size == 1) "Added to queue" else "Added ${items.size} songs to queue")
     }
 
-    /** Songs similar to what you've been playing lately, according to Maloja. */
     /** Plays an artist you don't have from YouTube Music; playing it requests it in Lidarr (if that's on). */
     fun playFromYouTube(artist: String) = launch {
         message("Finding $artist on YouTube Music…")

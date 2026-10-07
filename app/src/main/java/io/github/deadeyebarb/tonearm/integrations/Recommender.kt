@@ -1,6 +1,9 @@
 package io.github.deadeyebarb.tonearm.integrations
 
+import io.github.deadeyebarb.tonearm.connect.ArtistCount
+import io.github.deadeyebarb.tonearm.connect.PhoneConnect
 import io.github.deadeyebarb.tonearm.media.QueueSong
+import io.github.deadeyebarb.tonearm.subsonic.AlbumListType
 import io.github.deadeyebarb.tonearm.subsonic.Artist
 import io.github.deadeyebarb.tonearm.subsonic.ArtistInfo
 import io.github.deadeyebarb.tonearm.subsonic.ServerSession
@@ -10,7 +13,7 @@ import io.github.deadeyebarb.tonearm.subsonic.SubsonicApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
-import java.time.LocalDate
+import java.time.Instant
 
 data class RotationEntry(val name: String, val scrobbles: Int, val artist: Artist?)
 
@@ -26,7 +29,7 @@ data class DiscoverData(
     val rediscover: List<LibraryPick>,
     val similarInLibrary: List<LibraryPick>,
     val notInLibrary: List<MissingArtist>,
-    /** Artists you've scrobbled most that the library doesn't have. */
+    /** Artists you've played most that the library doesn't have (heard on YouTube Music). */
     val historyNotInLibrary: List<MissingArtist>,
     /** False when the server returned no similar-artist data at all (no Last.fm/Deezer agent). */
     val hasSimilarData: Boolean,
@@ -34,54 +37,57 @@ data class DiscoverData(
 )
 
 /**
- * Recommendations from listening history in Maloja, matched against the library:
- * what's in rotation, favourites that dropped out of it, and artists similar to what you play
- * (similarity comes from the Subsonic server's metadata agents, e.g. Last.fm in Navidrome).
+ * Recommendations from the listening history on the Tonearm server (every app's plays, YouTube Music ones
+ * too) and Navidrome's own play counts, matched against the library: what's in rotation, favourites that
+ * dropped out of it, and artists similar to what you play (from the music server's metadata agents).
  */
 class Recommender(
     private val api: SubsonicApi,
     private val sessions: SessionManager,
-    private val integrations: IntegrationsService,
+    private val connect: PhoneConnect,
 ) {
-    private val maloja get() = integrations.maloja
-
     suspend fun discover(): DiscoverData = coroutineScope {
-        val config = integrations.requireMaloja()
-        val today = LocalDate.now()
-        val recent = async { maloja.topArtists(config, today.minusDays(30), 25) }
-        val quarter = async { maloja.topArtists(config, today.minusDays(90), 500) }
-        val allTime = async { maloja.topArtists(config, null, 80) }
-        val count = async { runCatching { maloja.scrobbleCount(config, today.minusDays(30)) }.getOrDefault(0) }
+        val month = async { connect.listening(30, artists = 25) }
+        val quarter = async { connect.listening(90, artists = 500) }
+        val allTime = async { connect.listening(null, artists = 80) }
+        // Navidrome counts library plays from before the history started, and from other apps.
+        val frequent = async { runCatching { api.albumList(AlbumListType.FREQUENT, 500) }.getOrDefault(emptyList()) }
         val library = async { api.artists().flatMap { it.artist } }
 
         val byName = library.await().associateBy { normalize(it.name) }
-        val recentArtists = recent.await().filter { !it.artist.isNullOrBlank() }
-        val playedLately = quarter.await().mapNotNull { it.artist?.let(::normalize) }.toSet()
+        val recentArtists = month.await().artists
+        val quarterAgo = System.currentTimeMillis() - 90 * DAY_MS
+        val counted = frequent.await().filter { it.artistLabel.isNotBlank() }.groupBy { normalize(it.artistLabel) }
+        val playedLately = quarter.await().artists.map { normalize(it.artist) }.toSet() +
+            counted.filterValues { albums -> albums.any { (it.played?.let(::millis) ?: 0) > quarterAgo } }.keys
+        val everPlayed = (allTime.await().artists + counted.values.map { albums -> ArtistCount(albums.first().artistLabel, albums.sumOf { it.playCount }.toInt()) })
+            .groupBy { normalize(it.artist) }.map { (_, both) -> both.maxBy { it.plays } }
+            .filter { it.plays > 0 }.sortedByDescending { it.plays }.take(80)
 
-        val rotation = recentArtists.take(12).map { RotationEntry(it.artist!!, it.scrobbles, byName[normalize(it.artist)]) }
+        val rotation = recentArtists.take(12).map { RotationEntry(it.artist, it.plays, byName[normalize(it.artist)]) }
 
-        val rediscover = allTime.await()
-            .filter { !it.artist.isNullOrBlank() && normalize(it.artist) !in playedLately }
-            .mapNotNull { entry -> byName[normalize(entry.artist!!)]?.let { LibraryPick(it, "${entry.scrobbles} plays, none in 3 months") } }
+        val rediscover = everPlayed
+            .filter { normalize(it.artist) !in playedLately }
+            .mapNotNull { entry -> byName[normalize(entry.artist)]?.let { LibraryPick(it, "${entry.plays} plays, none in 3 months") } }
             .distinctBy { it.artist.id }
             .take(12)
 
         // Similar artists of what you play most, split into owned-but-unplayed and not owned.
-        val seedEntries = recentArtists.ifEmpty { allTime.await() }
-        val seeds = seedEntries.mapNotNull { e -> e.artist?.let { byName[normalize(it)] } }.distinctBy { it.id }.take(8)
+        val seedEntries = recentArtists.ifEmpty { everPlayed }
+        val seeds = seedEntries.mapNotNull { byName[normalize(it.artist)] }.distinctBy { it.id }.take(8)
         val infos = seeds.map { seed -> async { seed to api.artistInfo(seed.id, includeNotPresent = true, count = 20) } }.awaitAll()
         val similar = splitSimilar(infos, byName, playedLately, skip = (seeds.map { it.name } + rediscover.map { it.artist.name }).map(::normalize).toSet())
 
-        val fromHistory = (recentArtists + allTime.await())
-            .filter { !it.artist.isNullOrBlank() && normalize(it.artist) !in byName }
-            .distinctBy { normalize(it.artist!!) }
-            .sortedByDescending { it.scrobbles }
+        val fromHistory = (recentArtists + everPlayed)
+            .filter { normalize(it.artist) !in byName }
+            .distinctBy { normalize(it.artist) }
+            .sortedByDescending { it.plays }
             .take(if (byName.isEmpty()) 40 else 15)
-            .map { MissingArtist(it.artist!!, "${it.scrobbles} plays in your history", null) }
+            .map { MissingArtist(it.artist, "${it.plays} plays in your history", null) }
 
         // Every list is keyed by name or id on screen, and a repeated key crashes Compose: keep them unique.
         DiscoverData(
-            scrobblesLast30Days = count.await(),
+            scrobblesLast30Days = month.await().plays,
             rotation = rotation.distinctBy { it.name },
             rediscover = rediscover,
             similarInLibrary = similar.owned,
@@ -93,7 +99,7 @@ class Recommender(
     }
 
     /**
-     * "Maloja mix": songs similar to your most-played tracks of the last month, leaving out
+     * "Your mix": songs similar to your most-played tracks of the last month, leaving out
      * anything you played recently. Falls back to random songs when there's little to go on.
      */
     suspend fun mix(size: Int = 60): List<QueueSong> {
@@ -108,30 +114,31 @@ class Recommender(
     class SimilarPool(val songs: List<Song>, val recentlyHeard: Set<String>)
 
     suspend fun similarToFavourites(session: ServerSession): SimilarPool = coroutineScope {
-        val config = integrations.requireMaloja()
-        val top = async { maloja.topTracks(config, LocalDate.now().minusDays(30), 12) }
-        val heard = async { runCatching { maloja.recentScrobbles(config, 200) }.getOrDefault(emptyList()) }
-        val seeds = top.await().mapNotNull { it.track }.take(8)
-            .map { track -> async { findInLibrary(session, track) } }.awaitAll().filterNotNull()
+        val listening = connect.listening(30, artists = 0, songs = 12, recent = 200)
+        val seeds = listening.songs.take(8)
+            .map { song -> async { findInLibrary(session, song.artist, song.title) } }.awaitAll().filterNotNull()
         val similar = seeds.map { seed -> async { runCatching { api.similarSongs(seed.id, 20) }.getOrDefault(emptyList()) } }.awaitAll()
         SimilarPool(
             songs = (similar.flatten() + seeds).distinctBy { it.id },
-            recentlyHeard = heard.await().mapNotNull { it.track }.map { key(it.artists.firstOrNull().orEmpty(), it.title) }.toSet(),
+            recentlyHeard = listening.recent.map { key(it.artist, it.title) }.toSet(),
         )
     }
 
-    private suspend fun findInLibrary(session: ServerSession, track: MalojaTrack): Song? {
-        val artist = track.artists.firstOrNull() ?: return null
-        val results = runCatching { api.search(track.title, artistCount = 0, albumCount = 0, songCount = 15, session = session).song }
+    private suspend fun findInLibrary(session: ServerSession, artist: String, title: String): Song? {
+        val results = runCatching { api.search(title, artistCount = 0, albumCount = 0, songCount = 15, session = session).song }
             .getOrDefault(emptyList())
-        return results.firstOrNull { normalize(it.title) == normalize(track.title) && normalize(it.artist.orEmpty()).contains(normalize(artist)) }
-            ?: results.firstOrNull { normalize(it.title) == normalize(track.title) }
+        return results.firstOrNull { normalize(it.title) == normalize(title) && normalize(it.artist.orEmpty()).contains(normalize(artist)) }
+            ?: results.firstOrNull { normalize(it.title) == normalize(title) }
     }
 
     /** Similar artists of the seeds: ones in the library you haven't played lately, and ones you don't have. */
     data class SimilarSplit(val owned: List<LibraryPick>, val missing: List<MissingArtist>, val any: Boolean)
 
     companion object {
+        private const val DAY_MS = 24 * 3_600_000L
+
+        private fun millis(iso: String): Long? = runCatching { Instant.parse(iso).toEpochMilli() }.getOrNull()
+
         /**
          * Sorts the seeds' similar artists (from getArtistInfo2 with includeNotPresent) into library picks
          * and missing artists, most-shared first. Names in [skip] (the seeds, rediscover picks) are left out.

@@ -12,12 +12,12 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 
-/** An HTTP error from Maloja or Lidarr, with the server's own message when it sent one. */
+/** An HTTP error from Lidarr or the Tonearm server, with the server's own message when it sent one. */
 open class IntegrationHttpException(val code: Int, message: String, cause: Throwable? = null) : IOException(message, cause)
 
 /**
  * HTTP for the integrations. When asked to, requests go through the active music server's
- * client, which carries its mTLS client certificate and pinned CA: Maloja and Lidarr often sit
+ * client, which carries its mTLS client certificate and pinned CA: Lidarr and the Tonearm server often sit
  * behind the same reverse proxy.
  */
 class IntegrationHttp(
@@ -79,7 +79,7 @@ class IntegrationHttp(
     }
 
     private fun describe(code: Int, body: String): String {
-        // Lidarr validation errors: [{"propertyName": "...", "errorMessage": "..."}]; Maloja: {"error": "..."}.
+        // Lidarr validation errors: [{"propertyName": "...", "errorMessage": "..."}]; the Tonearm server: {"error": "..."}.
         val messages = Regex(""""(?:errorMessage|error|message)"\s*:\s*"([^"]+)"""").findAll(body).map { it.groupValues[1] }.toList()
         return when {
             messages.isNotEmpty() -> messages.distinct().joinToString("; ")

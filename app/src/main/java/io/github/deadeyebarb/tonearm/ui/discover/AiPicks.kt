@@ -11,7 +11,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Album
+import androidx.compose.material.icons.rounded.ThumbDown
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -29,6 +32,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.github.deadeyebarb.tonearm.AppContainer
 import io.github.deadeyebarb.tonearm.connect.AiPick
 import io.github.deadeyebarb.tonearm.connect.AiPicks
 import io.github.deadeyebarb.tonearm.connect.DiscoveryPick
@@ -45,10 +49,10 @@ import io.github.deadeyebarb.tonearm.ui.theme.HudPanel
 import io.github.deadeyebarb.tonearm.weekly.WeeklyBatch
 import io.github.deadeyebarb.tonearm.weekly.WeeklySettings
 import io.github.deadeyebarb.tonearm.weekly.WeeklyState
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.delay
 import java.text.DateFormat
 import java.util.Date
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 
 /**
  * Albums the Tonearm server's AI (Ollama) suggests from what you play and like, by artists you don't have.
@@ -108,7 +112,10 @@ fun AiPicksPanel(actions: AppActions, modifier: Modifier = Modifier) {
             }
             if (integrations.lidarr?.limited == false) WeeklyPicksRow(actions)
             current?.picks?.forEach { pick ->
-                AiPickRow(pick, canRequest = integrations.lidarr != null, onYouTube = settings.youtubeFallback, actions = actions)
+                AiPickRow(pick, canRequest = integrations.lidarr != null, onYouTube = settings.youtubeFallback, actions = actions) {
+                    picks = current.copy(picks = current.picks.filterNot { it.artist == pick.artist })
+                    notForMe(actions, c, pick.artist)
+                }
             }
         }
     }
@@ -166,13 +173,29 @@ fun DiscoveryPicksPanel(actions: AppActions, modifier: Modifier = Modifier) {
             (failed ?: current?.problem?.takeUnless { current.running })?.let {
                 Text(it, style = MaterialTheme.typography.bodySmall, color = hud.danger, modifier = Modifier.padding(top = 6.dp))
             }
-            current?.picks?.forEach { pick -> DiscoveryRow(pick, canRequest = integrations.lidarr != null, actions = actions) }
+            current?.picks?.forEach { pick ->
+                DiscoveryRow(pick, canRequest = integrations.lidarr != null, actions = actions) {
+                    picks = current.copy(picks = current.picks.filterNot { it.artist == pick.artist })
+                    notForMe(actions, c, pick.artist)
+                }
+            }
         }
     }
 }
 
+/** Tells the Tonearm server to leave [artist] out of the picks from now on (until they're played a few times). */
+private fun notForMe(actions: AppActions, c: AppContainer, artist: String) = actions.launch {
+    c.connect.dismiss(artist)
+    actions.message("No more $artist in your picks")
+}
+
 @Composable
-private fun DiscoveryRow(pick: DiscoveryPick, canRequest: Boolean, actions: AppActions) {
+private fun NotForMeButton(artist: String, onClick: () -> Unit) {
+    IconButton(onClick = onClick) { Icon(Icons.Rounded.ThumbDown, "Not for me: no more $artist", tint = Hud.colors.dim, modifier = Modifier.size(20.dp)) }
+}
+
+@Composable
+private fun DiscoveryRow(pick: DiscoveryPick, canRequest: Boolean, actions: AppActions, onNotForMe: () -> Unit) {
     val c = LocalContext.current.container
     val hud = Hud.colors
     val open = Modifier.clickable {
@@ -190,10 +213,11 @@ private fun DiscoveryRow(pick: DiscoveryPick, canRequest: Boolean, actions: AppA
                 (pick.artist + (pick.year?.let { " · $it" } ?: "")).uppercase(),
                 style = MaterialTheme.typography.labelSmall, color = hud.accent2, maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
-            if (pick.because.isNotEmpty()) {
-                Text("Because you play " + pick.because.joinToString(" and "), style = MaterialTheme.typography.bodySmall, color = hud.dim, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            (pick.reason ?: pick.because.takeIf { it.isNotEmpty() }?.let { "Because you play " + it.joinToString(" and ") })?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = hud.dim, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
         }
+        NotForMeButton(pick.artist, onNotForMe)
         if (canRequest) {
             Spacer(Modifier.width(10.dp))
             HudButton("Request", { pick.album?.let { actions.requestAlbum(it, pick.artist) } ?: actions.requestArtistByName(pick.artist) }, filled = false)
@@ -257,7 +281,7 @@ private fun WeeklyPicksRow(actions: AppActions) {
 }
 
 @Composable
-private fun AiPickRow(pick: AiPick, canRequest: Boolean, onYouTube: Boolean, actions: AppActions) {
+private fun AiPickRow(pick: AiPick, canRequest: Boolean, onYouTube: Boolean, actions: AppActions, onNotForMe: () -> Unit) {
     val c = LocalContext.current.container
     val hud = Hud.colors
     val open = Modifier.clickable(enabled = onYouTube) {
@@ -277,6 +301,7 @@ private fun AiPickRow(pick: AiPick, canRequest: Boolean, onYouTube: Boolean, act
                 Text(pick.why, style = MaterialTheme.typography.bodySmall, color = hud.dim, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
         }
+        NotForMeButton(pick.artist, onNotForMe)
         if (canRequest) {
             Spacer(Modifier.width(10.dp))
             HudButton("Request", { actions.requestAlbum(pick.album, pick.artist) }, filled = false)

@@ -117,7 +117,7 @@ class PlaybackService : MediaLibraryService() {
         c.volume.attach(player)
         c.sleepTimer.attach(player)
         c.effects.attach(player.audioSessionId)
-        scrobbler = Scrobbler(c.api, c.sessions, c.settings, c.integrations, scope).also(player::addListener)
+        scrobbler = Scrobbler(c.api, c.sessions, c.settings, c.connect, scope).also(player::addListener)
         cacheAhead = CacheAhead(player, c.media, c.settings, scope).also(player::addListener)
         player.addListener(listener)
 

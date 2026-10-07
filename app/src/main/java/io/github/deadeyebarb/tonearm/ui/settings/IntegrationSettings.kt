@@ -13,22 +13,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.ErrorOutline
-import androidx.compose.material.icons.rounded.Visibility
-import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -41,19 +36,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import io.github.deadeyebarb.tonearm.AppContainer
 import io.github.deadeyebarb.tonearm.container
 import io.github.deadeyebarb.tonearm.data.LidarrConfig
-import io.github.deadeyebarb.tonearm.data.MalojaConfig
-import io.github.deadeyebarb.tonearm.data.normalizeServerUrl
 import io.github.deadeyebarb.tonearm.integrations.IntegrationNotConfiguredException
 import io.github.deadeyebarb.tonearm.integrations.LidarrProfile
 import io.github.deadeyebarb.tonearm.integrations.LidarrRootFolder
@@ -67,41 +57,6 @@ import io.github.deadeyebarb.tonearm.ui.theme.HudSectionHeader
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
-import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
-
-class MalojaSettingsViewModel(private val c: AppContainer) : ViewModel() {
-    private val existing = c.integrations.repository.state.value.maloja
-    val isNew = existing == null
-    var url by mutableStateOf(existing?.url.orEmpty())
-    var key by mutableStateOf(existing?.let { c.integrations.decrypt(it.keyEnc) }.orEmpty())
-    var scrobble by mutableStateOf(existing?.scrobble ?: false)
-    var useServerTls by mutableStateOf(existing?.useServerTls ?: true)
-    var test by mutableStateOf<TestState>(TestState.Idle)
-        private set
-
-    val valid get() = normalizeServerUrl(url).toHttpUrlOrNull() != null
-
-    private fun config() = MalojaConfig(normalizeServerUrl(url), c.integrations.encrypt(key.trim()), scrobble, useServerTls)
-
-    fun runTest() {
-        if (!valid) return
-        test = TestState.Running
-        viewModelScope.launch {
-            test = try {
-                val name = c.integrations.maloja.test(config(), key.trim())
-                val count = runCatching { c.integrations.maloja.scrobbleCount(config(), null) }.getOrNull()
-                TestState.Passed("Connected to $name" + (count?.let { " · $it scrobbles" } ?: "") + if (key.isNotBlank()) " · API key accepted" else "")
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                TestState.Failed(e.userMessage())
-            }
-        }
-    }
-
-    suspend fun save() = c.integrations.repository.update { it.copy(maloja = config()) }
-    suspend fun remove() = c.integrations.repository.update { it.copy(maloja = null) }
-}
 
 /** Lidarr comes through the Tonearm server; what's kept here is how requests are made. */
 class LidarrSettingsViewModel(private val c: AppContainer) : ViewModel() {
@@ -154,62 +109,6 @@ class LidarrSettingsViewModel(private val c: AppContainer) : ViewModel() {
             ),
         )
     }
-}
-
-@Composable
-fun MalojaSettingsScreen() {
-    val c = LocalContext.current.container
-    val actions = LocalActions.current
-    val vm = viewModel { MalojaSettingsViewModel(c) }
-    val scope = rememberCoroutineScope()
-    DetailScaffold(title = "Maloja") {
-        Column(
-            Modifier.fillMaxSize().imePadding().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Text(
-                "Maloja is a self-hosted scrobble server. Tonearm reads your listening history from it to recommend " +
-                    "music: what you play most, favourites you've drifted away from, and similar artists.",
-                style = MaterialTheme.typography.bodyMedium, color = Hud.colors.dim,
-            )
-            val integrations by c.integrations.state.collectAsStateWithLifecycle()
-            if (integrations.maloja?.viaServer == true) ThroughServerNote("Maloja")
-            OutlinedTextField(
-                vm.url, { vm.url = it }, label = { Text("Maloja address") }, placeholder = { Text("https://maloja.example.com") },
-                singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), modifier = Modifier.fillMaxWidth(),
-            )
-            SecretInput(vm.key, { vm.key = it }, "API key (needed for scrobbling)")
-            ToggleRow(
-                "Send plays to Maloja",
-                "Only if your music server doesn't already forward scrobbles to Maloja (Navidrome can, through its ListenBrainz support), or you'd count every play twice.",
-                vm.scrobble,
-            ) { vm.scrobble = it }
-            ToggleRow(
-                "Use the music server's client certificate",
-                "For a Maloja behind the same mTLS reverse proxy as your music server.",
-                vm.useServerTls,
-            ) { vm.useServerTls = it }
-            TestResult(vm.test)
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(vertical = 8.dp)) {
-                HudButton("Test", vm::runTest, Modifier.weight(1f), filled = false, enabled = vm.valid && vm.test != TestState.Running)
-                HudButton("Save", { scope.launch { vm.save(); actions.back() } }, Modifier.weight(1f), enabled = vm.valid)
-            }
-            if (!vm.isNew) {
-                HudButton("Disconnect Maloja", { scope.launch { vm.remove(); actions.back() } }, Modifier.fillMaxWidth(), filled = false)
-            }
-            Spacer(Modifier.height(24.dp))
-        }
-    }
-}
-
-/** Shown when the Tonearm server provides [service] with its own key. */
-@Composable
-private fun ThroughServerNote(service: String, extra: String = "") {
-    Text(
-        "✓ $service comes through the Tonearm server on your music server, which holds its key: nothing to set up here. " +
-            "What you enter below is only used without it.$extra",
-        style = MaterialTheme.typography.bodyMedium, color = Hud.colors.accent,
-    )
 }
 
 private val MONITOR_OPTIONS = listOf(
@@ -289,22 +188,6 @@ fun LidarrSettingsScreen() {
         }
     }
     dialog?.invoke()
-}
-
-@Composable
-private fun SecretInput(value: String, onChange: (String) -> Unit, label: String) {
-    var visible by remember { mutableStateOf(false) }
-    OutlinedTextField(
-        value, onChange, label = { Text(label) }, singleLine = true,
-        visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(),
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-        trailingIcon = {
-            IconButton(onClick = { visible = !visible }) {
-                Icon(if (visible) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility, if (visible) "Hide" else "Show")
-            }
-        },
-        modifier = Modifier.fillMaxWidth(),
-    )
 }
 
 @Composable

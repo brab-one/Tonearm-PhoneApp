@@ -1,8 +1,5 @@
 package io.github.deadeyebarb.tonearm.ui.discover
 
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -14,19 +11,21 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.CloudDownload
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
@@ -35,7 +34,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -51,7 +54,6 @@ import io.github.deadeyebarb.tonearm.integrations.MissingArtist
 import io.github.deadeyebarb.tonearm.integrations.Recommender
 import io.github.deadeyebarb.tonearm.integrations.RotationEntry
 import io.github.deadeyebarb.tonearm.ui.LidarrSettingsRoute
-import io.github.deadeyebarb.tonearm.ui.MalojaSettingsRoute
 import io.github.deadeyebarb.tonearm.ui.RequestRoute
 import io.github.deadeyebarb.tonearm.ui.common.AppActions
 import io.github.deadeyebarb.tonearm.ui.common.CoverArt
@@ -64,14 +66,15 @@ import io.github.deadeyebarb.tonearm.ui.common.rememberLoader
 import io.github.deadeyebarb.tonearm.ui.request.RemoteCover
 import io.github.deadeyebarb.tonearm.ui.theme.Hud
 import io.github.deadeyebarb.tonearm.ui.theme.HudButton
+import io.github.deadeyebarb.tonearm.ui.theme.HudLoader
 import io.github.deadeyebarb.tonearm.ui.theme.HudSectionHeader
 import io.github.deadeyebarb.tonearm.ui.theme.HudTag
 import io.github.deadeyebarb.tonearm.ui.theme.HudTopBar
 import io.github.deadeyebarb.tonearm.ui.theme.glowBorder
+import java.text.NumberFormat
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
-import java.text.NumberFormat
 
 @Composable
 fun DiscoverScreen() {
@@ -79,30 +82,40 @@ fun DiscoverScreen() {
     val actions = LocalActions.current
     val integrations by c.integrations.state.collectAsStateWithLifecycle()
     val session by c.sessions.active.collectAsStateWithLifecycle()
-    val maloja = integrations.maloja
+    val server by c.tonearmServer.server.collectAsStateWithLifecycle()
     val lidarrReady = integrations.lidarr != null
+    // Until the Tonearm server has been looked for, "not there" would only be a guess.
+    var looked by remember(session?.id) { mutableStateOf(false) }
+    LaunchedEffect(session?.id) {
+        runCatching { c.tonearmServer.refresh(session) }
+        looked = true
+    }
 
     Scaffold(
         containerColor = Color.Transparent,
         topBar = {
             HudTopBar(
                 title = "Discover",
-                subtitle = if (maloja != null) "MALOJA // RECOMMENDATIONS FROM WHAT YOU PLAY" else "CONNECT MALOJA FOR RECOMMENDATIONS",
-                actions = { IconButton(onClick = { actions.navigate(MalojaSettingsRoute) }) { Icon(Icons.Rounded.Settings, "Maloja settings") } },
+                subtitle = when {
+                    server?.history == true -> "RECOMMENDATIONS FROM WHAT YOU PLAY"
+                    !looked -> "LOOKING FOR THE TONEARM SERVER…"
+                    else -> "NEEDS THE TONEARM SERVER FOR RECOMMENDATIONS"
+                },
             )
         },
     ) { padding ->
-        if (maloja == null) {
-            NotConnected(actions, lidarrReady, Modifier.padding(padding))
+        if (server?.history != true) {
+            if (looked) NotConnected(actions, lidarrReady, Modifier.padding(padding))
+            else Box(Modifier.padding(padding).fillMaxSize(), contentAlignment = Alignment.Center) { HudLoader() }
             return@Scaffold
         }
-        val vm = rememberLoader("discover", session?.id, maloja.url) { c.recommender.discover() }
+        val vm = rememberLoader("discover", session?.id, server?.baseUrl) { c.recommender.discover() }
         LoadContent(vm, Modifier.padding(padding)) { data ->
             LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
                 item {
                     Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
                         Text(
-                            "${NumberFormat.getIntegerInstance().format(data.scrobblesLast30Days)} SCROBBLES IN THE LAST 30 DAYS",
+                            "${NumberFormat.getIntegerInstance().format(data.scrobblesLast30Days)} PLAYS IN THE LAST 30 DAYS",
                             style = MaterialTheme.typography.labelMedium, color = Hud.colors.accent,
                         )
                         Spacer(Modifier.height(10.dp))
@@ -149,7 +162,7 @@ fun DiscoverScreen() {
                     item {
                         EmptyState(
                             Icons.Rounded.AutoAwesome, "Not enough history yet",
-                            "Play some music (with scrobbling to Maloja) and recommendations will appear here.",
+                            "Play some music (here, on the desktop, or from YouTube Music in either) and recommendations will appear here.",
                             Modifier.height(320.dp),
                         )
                     }
@@ -190,14 +203,12 @@ private fun NotConnected(actions: AppActions, lidarrReady: Boolean, modifier: Mo
         DiscoveryPicksPanel(actions, Modifier.padding(bottom = 8.dp))
         AiPicksPanel(actions, Modifier.padding(bottom = 8.dp))
         EmptyState(
-            Icons.Rounded.AutoAwesome, "Recommendations from Maloja",
-            "Connect your Maloja scrobble server and Tonearm turns your listening history into picks: " +
-                "what's in heavy rotation, favourites you haven't played in a while, similar artists in your library, " +
-                "and artists you don't have yet, ready to request through Lidarr.",
+            Icons.Rounded.AutoAwesome, "Recommendations from what you play",
+            "The Tonearm server on your music server (1.5 or later) keeps what you play in this app and on the desktop, " +
+                "YouTube Music included, and Tonearm turns it into picks: what's in heavy rotation, favourites you haven't " +
+                "played in a while, similar artists in your library, and artists you don't have yet, ready to request.",
             Modifier.heightIn(min = 280.dp),
         )
-        HudButton("Connect Maloja", { actions.navigate(MalojaSettingsRoute) }, Modifier.fillMaxWidth())
-        Spacer(Modifier.height(12.dp))
         HudButton(
             if (lidarrReady) "Request music" else "Connect Lidarr",
             { actions.navigate(if (lidarrReady) RequestRoute() else LidarrSettingsRoute) },

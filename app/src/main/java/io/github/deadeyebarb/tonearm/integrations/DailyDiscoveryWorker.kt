@@ -19,8 +19,9 @@ import java.util.concurrent.TimeUnit
 class DailyDiscoveryWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
         val c = applicationContext.container
-        val integrations = c.integrations.current()
-        if (integrations.maloja == null) return Result.success()
+        // Looks the Tonearm server up if that's due: the mix comes from its listening history.
+        c.integrations.current()
+        if (c.tonearmServer.server.value?.history != true) return Result.success()
         return try {
             c.daily.ensureToday()
             Result.success()

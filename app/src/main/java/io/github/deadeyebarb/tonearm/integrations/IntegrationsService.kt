@@ -4,7 +4,6 @@ import io.github.deadeyebarb.tonearm.connect.ConnectRouter
 import io.github.deadeyebarb.tonearm.data.Integrations
 import io.github.deadeyebarb.tonearm.data.IntegrationsRepository
 import io.github.deadeyebarb.tonearm.data.LidarrConfig
-import io.github.deadeyebarb.tonearm.data.MalojaConfig
 import io.github.deadeyebarb.tonearm.data.SecretBox
 import io.github.deadeyebarb.tonearm.subsonic.NoServerException
 import io.github.deadeyebarb.tonearm.subsonic.SessionManager
@@ -21,12 +20,11 @@ import java.io.IOException
 class IntegrationNotConfiguredException(message: String) : IOException(message)
 
 /**
- * Maloja and Lidarr plus their clients, with API keys decrypted on demand. When the Tonearm server at the
- * music server's address offers them, they go through it (it holds the keys); otherwise the settings here.
+ * Lidarr plus its client. It comes through the Tonearm server at the music server's address (which holds
+ * its key); the settings here only keep the request preferences.
  */
 class IntegrationsService(
     val repository: IntegrationsRepository,
-    val maloja: MalojaClient,
     val lidarr: LidarrClient,
     private val secrets: SecretBox,
     private val server: ConnectRouter,
@@ -59,11 +57,7 @@ class IntegrationsService(
         return repository.current().through(server.refresh(session))
     }
 
-    fun malojaKey(config: MalojaConfig): String = secrets.decrypt(config.keyEnc).orEmpty()
     fun lidarrKey(config: LidarrConfig): String = secrets.decrypt(config.keyEnc).orEmpty()
-
-    suspend fun requireMaloja(): MalojaConfig =
-        current().maloja ?: throw IntegrationNotConfiguredException("Connect Maloja in Settings → Integrations first")
 
     suspend fun requireLidarrOrNull(): Pair<LidarrConfig, String>? = current().lidarr?.let { it to lidarrKey(it) }
 

@@ -55,7 +55,7 @@ class ServerSession(val config: ServerConfig, private val secret: String, client
             for ((key, value) in params) if (value != null) addQueryParameter(key, value.toString())
         }.build()
 
-    /** Where the Tonearm server passes [service] ("lidarr", "maloja") on with its own key. */
+    /** Where the Tonearm server passes [service] ("lidarr") on with its own key. */
     fun tonearmServiceUrl(service: String): String = base.newBuilder().addPathSegment(CONNECT_PATH).addPathSegment(service).build().toString()
 
     private fun tonearmSalt(): String {

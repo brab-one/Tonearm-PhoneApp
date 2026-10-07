@@ -11,8 +11,9 @@ Usage:
 
 Log in with user "demo", password "demo". From the Android emulator the host is 10.0.2.2.
 
-The same address also serves a mock Maloja (API key "maloja-key", under /apis/mlj_1/) and a
-mock Lidarr (API key "lidarr-key", under /api/v1/) so recommendations and requests can be tried.
+The same address also serves a mock Lidarr (API key "lidarr-key", under /api/v1/) so requests can be
+tried, and a mock Maloja (API key "maloja-key", under /apis/mlj_1/) for the Tonearm server's one-time
+import of a Maloja's history (MALOJA_URL=http://127.0.0.1:8444).
 With --connect http://127.0.0.1:8790 and --plain-port 8444 it also stands in for the proxy in front of a
 Tonearm server (run that with NAVIDROME_URL=http://127.0.0.1:8444).
 Only Python's standard library is used.

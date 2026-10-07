@@ -92,7 +92,6 @@ import io.github.deadeyebarb.tonearm.ui.request.RequestScreen
 import io.github.deadeyebarb.tonearm.ui.search.SearchScreen
 import io.github.deadeyebarb.tonearm.ui.settings.EqualizerScreen
 import io.github.deadeyebarb.tonearm.ui.settings.LidarrSettingsScreen
-import io.github.deadeyebarb.tonearm.ui.settings.MalojaSettingsScreen
 import io.github.deadeyebarb.tonearm.ui.settings.ServerEditScreen
 import io.github.deadeyebarb.tonearm.ui.settings.ServersScreen
 import io.github.deadeyebarb.tonearm.ui.settings.SettingsScreen
@@ -189,7 +188,6 @@ fun TonearmRoot(container: AppContainer, openPlayerRequests: Int, requestNotific
                 composable<DailyRoute> { DailyScreen() }
                 composable<ConnectRoute> { ConnectScreen() }
                 composable<RequestRoute> { RequestScreen(it.toRoute<RequestRoute>().query) }
-                composable<MalojaSettingsRoute> { MalojaSettingsScreen() }
                 composable<LidarrSettingsRoute> { LidarrSettingsScreen() }
                 composable<LibraryRoute> { LibraryScreen() }
                 composable<SearchRoute> { SearchScreen() }

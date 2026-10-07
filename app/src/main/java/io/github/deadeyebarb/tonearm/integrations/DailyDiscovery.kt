@@ -48,7 +48,7 @@ private data class DailyState(val mix: DailyMix? = null)
 data class RequestSummary(val requested: Int, val alreadyThere: Int, val notFound: Int, val failed: Int)
 
 /**
- * "Daily Discovery": once a day, a fresh mix of library songs picked from your Maloja history
+ * "Daily Discovery": once a day, a fresh mix of library songs picked from your listening history
  * (forgotten favourites, similar artists you rarely play, songs like your current favourites),
  * plus the recommended artists you don't have yet, which can all be requested from Lidarr.
  * The songs are also kept as a "Daily Discovery" playlist on the music server.
@@ -133,7 +133,7 @@ class DailyDiscovery(
         val id = existingId?.takeIf { id -> runCatching { api.playlist(id, session) }.isSuccess }?.also { api.replacePlaylist(it, ids, session) }
             ?: api.createPlaylist(PLAYLIST_NAME, ids, session)?.id
             ?: api.playlists(session).firstOrNull { it.name == PLAYLIST_NAME }?.id
-        id?.let { runCatching { api.setPlaylistComment(it, "Tonearm: recommendations for $today, from your Maloja history", session) } }
+        id?.let { runCatching { api.setPlaylistComment(it, "Tonearm: recommendations for $today, from what you play", session) } }
         return id
     }
 

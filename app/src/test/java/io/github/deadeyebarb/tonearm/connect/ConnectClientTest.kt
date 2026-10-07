@@ -2,7 +2,6 @@ package io.github.deadeyebarb.tonearm.connect
 
 import io.github.deadeyebarb.tonearm.data.AuthMethod
 import io.github.deadeyebarb.tonearm.data.Integrations
-import io.github.deadeyebarb.tonearm.data.MalojaConfig
 import io.github.deadeyebarb.tonearm.data.TonearmServerInfo
 import io.github.deadeyebarb.tonearm.data.LidarrConfig
 import io.github.deadeyebarb.tonearm.data.ServerConfig
@@ -15,6 +14,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.long
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import okhttp3.OkHttpClient
@@ -136,34 +136,55 @@ class ConnectClientTest {
         val session = session()
         val http = session.client
         http.newCall(okhttp3.Request.Builder().url(server.url("/connect-tonearm/lidarr/api/v1/queue")).build()).execute().close()
-        http.newCall(okhttp3.Request.Builder().url(server.url("/connect-tonearm/maloja/apis/mlj_1/scrobbles")).build()).execute().close()
+        http.newCall(okhttp3.Request.Builder().url(server.url("/connect-tonearm/api/listening")).build()).execute().close()
         http.newCall(okhttp3.Request.Builder().url(server.url("/rest/ping.view")).build()).execute().close()
-        val (lidarr, maloja, other) = List(3) { server.takeRequest().url }
+        val (lidarr, api, other) = List(3) { server.takeRequest().url }
         assertEquals("alice", lidarr.queryParameter("u"))
-        assertEquals(lidarr.queryParameter("s"), maloja.queryParameter("s"))
+        assertEquals(lidarr.queryParameter("s"), api.queryParameter("s"))
         assertEquals(SubsonicAuth.token("wonderland", lidarr.queryParameter("s")!!), lidarr.queryParameter("t"))
         assertEquals(null, other.queryParameter("u"))
     }
 
     @Test
-    fun `the server's lidarr and maloja replace the app's own, keeping its request preferences`() {
-        val stored = Integrations(
-            lidarr = LidarrConfig(url = "http://lidarr.lan:8686", keyEnc = "secret", rootFolderPath = "/music", monitor = "latest"),
-            maloja = MalojaConfig(url = "http://maloja.lan", scrobble = true),
-        )
-        val info = TonearmServerInfo(baseUrl = "https://music.example/", lidarr = true, lidarrAdmin = false, maloja = true)
+    fun `the server's lidarr replaces the app's own, keeping its request preferences`() {
+        val stored = Integrations(lidarr = LidarrConfig(url = "http://lidarr.lan:8686", keyEnc = "secret", rootFolderPath = "/music", monitor = "latest"))
+        val info = TonearmServerInfo(baseUrl = "https://music.example/", lidarr = true, lidarrAdmin = false)
         val used = stored.through(info)
         assertEquals("https://music.example/connect-tonearm/lidarr", used.lidarr!!.url)
         assertEquals("", used.lidarr!!.keyEnc)
         assertEquals("/music", used.lidarr!!.rootFolderPath)
         assertEquals("latest", used.lidarr!!.monitor)
         assertTrue(used.lidarr!!.viaServer && used.lidarr!!.limited)
-        assertEquals("https://music.example/connect-tonearm/maloja", used.maloja!!.url)
-        assertTrue(used.maloja!!.scrobble)
-        // Lidarr only comes through the server; Maloja falls back to the app's own settings.
-        assertEquals(Integrations(maloja = stored.maloja), stored.through(null))
-        assertEquals(stored.maloja, stored.through(info.copy(maloja = false)).maloja)
+        // Lidarr only comes through the server.
+        assertEquals(Integrations(), stored.through(null))
         assertEquals(null, stored.through(info.copy(lidarr = false)).lidarr)
+    }
+
+    @Test
+    fun `plays go to the server's history and come back as listening`() = runTest {
+        respond("""{"server":"tonearm","protocol":2,"history":true,"ai":"Claude claude-opus-5-5"}""")
+        val info = client.findServer(session())!!
+        assertTrue(info.history)
+        assertEquals("Claude claude-opus-5-5", info.ai)
+        server.takeRequest()
+        respond("""{"ok":true,"added":1}""")
+        client.played(session(), listOf(Played(5, "Sia", "Rewrite", durationMs = 200_000, listenedMs = 150_000, source = "youtube")))
+        val sent = server.takeRequest()
+        assertEquals("/connect-tonearm/api/played", sent.url.encodedPath)
+        val play = Json.parseToJsonElement(sent.body!!.utf8()).jsonArray.single().jsonObject
+        assertEquals("youtube", play["source"]!!.jsonPrimitive.content)
+        assertEquals(150_000L, play["listenedMs"]!!.jsonPrimitive.long)
+        respond("""{"since":1,"plays":3,"artists":[{"artist":"Sia","plays":3,"skips":1,"lastPlayed":9}],"recent":[{"artist":"Sia","title":"Rewrite","at":9}]}""")
+        val listening = client.listening(session(), days = 30, artists = 10, recent = 5)
+        assertEquals(ArtistCount("Sia", 3, 1, 9), listening.artists.single())
+        assertEquals("Rewrite", listening.recent.single().title)
+        assertEquals("30", server.takeRequest().url.queryParameter("days"))
+        respond("""{"ok":true}""")
+        client.dismiss(session(), "Mazzy Star")
+        val dismissed = server.takeRequest().url
+        assertEquals("/connect-tonearm/api/dismiss", dismissed.encodedPath)
+        assertEquals("Mazzy Star", dismissed.queryParameter("artist"))
+        assertEquals(null, dismissed.queryParameter("album"))
     }
 
     @Test
