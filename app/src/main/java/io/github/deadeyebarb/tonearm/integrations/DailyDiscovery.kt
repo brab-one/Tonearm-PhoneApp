@@ -7,6 +7,10 @@ import io.github.deadeyebarb.tonearm.subsonic.ServerSession
 import io.github.deadeyebarb.tonearm.subsonic.SessionManager
 import io.github.deadeyebarb.tonearm.subsonic.Song
 import io.github.deadeyebarb.tonearm.subsonic.SubsonicApi
+import io.github.deadeyebarb.tonearm.subsonic.SubsonicApiException
+import java.io.IOException
+import java.time.LocalDate
+import kotlin.random.Random
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -20,8 +24,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import java.time.LocalDate
-import kotlin.random.Random
 
 /** A recommended artist that isn't in the library, as listed in the daily mix. */
 @Serializable
@@ -43,7 +45,11 @@ data class DailyMix(
 }
 
 @Serializable
-private data class DailyState(val mix: DailyMix? = null)
+private data class DailyState(
+    val mix: DailyMix? = null,
+    /** Keep the mix as a "Daily Discovery" playlist on the server. Deleting that playlist turns this off. */
+    val onServer: Boolean = true,
+)
 
 data class RequestSummary(val requested: Int, val alreadyThere: Int, val notFound: Int, val failed: Int)
 
@@ -66,6 +72,23 @@ class DailyDiscovery(
     private val mutex = Mutex()
 
     val state: StateFlow<DailyMix?> = store.data.map { it.mix }.stateIn(scope, SharingStarted.Eagerly, null)
+
+    /** Whether the mix is also kept as a playlist on the server. */
+    val onServer: StateFlow<Boolean> = store.data.map { it.onServer }.stateIn(scope, SharingStarted.Eagerly, true)
+
+    /** Keeps the mix as a server playlist again (made right away), or deletes that playlist and stops making it. */
+    suspend fun setOnServer(on: Boolean): Unit = mutex.withLock {
+        val session = sessions.awaitActive()
+        val mix = store.data.first().mix?.takeIf { it.serverId == session.id }
+        if (on) {
+            val id = mix?.songs?.takeIf { it.isNotEmpty() }?.let { syncPlaylist(session, it, null, mix.date) }
+            store.updateData { it.copy(onServer = true, mix = it.mix?.copy(playlistId = id ?: it.mix.playlistId)) }
+        } else {
+            mix?.playlistId?.let { id -> runCatching { api.deletePlaylist(id, session) } }
+            store.updateData { it.copy(onServer = false, mix = it.mix?.copy(playlistId = null)) }
+        }
+        Unit
+    }
 
     /** Today's mix for the active server, generating it on the first call of the day. */
     suspend fun ensureToday(force: Boolean = false): DailyMix = mutex.withLock {
@@ -109,7 +132,10 @@ class DailyDiscovery(
                 discover.historyNotInLibrary.map { DailyMissing(it.name, it.reason, it.imageUrl) }
             ).distinctBy { Recommender.normalize(it.name) }.take(12)
 
-        val playlistId = songs.takeIf { it.isNotEmpty() }
+        // A Daily Discovery playlist deleted on the server stays deleted: that turns keeping it off.
+        val onServer = store.data.first().onServer && previous?.playlistId?.let { gone(session, it) } != true
+        if (!onServer) store.updateData { it.copy(onServer = false) }
+        val playlistId = if (!onServer) null else songs.takeIf { it.isNotEmpty() }
             ?.let { runCatching { syncPlaylist(session, it, previous?.playlistId, today) }.getOrNull() } ?: previous?.playlistId
         DailyMix(
             date = today,
@@ -125,6 +151,16 @@ class DailyDiscovery(
     private suspend fun songsOf(session: ServerSession, artistId: String, count: Int, random: Random): List<Song> {
         val albums = api.artist(artistId, session).album.shuffled(random).take(2)
         return albums.flatMap { api.album(it.id, session).song }.shuffled(random).take(count)
+    }
+
+    /** Whether the playlist [id] was deleted on the server (and not just out of reach). */
+    private suspend fun gone(session: ServerSession, id: String): Boolean = try {
+        api.playlist(id, session)
+        false
+    } catch (e: SubsonicApiException) {
+        e.code == 70
+    } catch (_: IOException) {
+        false
     }
 
     /** Creates or refreshes the server playlist. Returns its id. */

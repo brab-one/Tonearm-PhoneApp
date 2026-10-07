@@ -30,6 +30,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -136,10 +137,16 @@ fun DailyScreen() {
                     }
                 }
                 item {
-                    Text(
-                        "A new mix arrives every day. It's also saved on your server as the “Daily Discovery” playlist, so other apps and Android Auto can play it.",
-                        style = MaterialTheme.typography.bodySmall, color = Hud.colors.dim, modifier = Modifier.padding(16.dp),
-                    )
+                    val onServer by c.daily.onServer.collectAsStateWithLifecycle()
+                    Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "A new mix arrives every day. Keep it as the “Daily Discovery” playlist on your server, so other apps can play it " +
+                                "(deleting that playlist turns this off)",
+                            style = MaterialTheme.typography.bodySmall, color = Hud.colors.dim, modifier = Modifier.weight(1f),
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Switch(onServer, { on -> actions.launch { c.daily.setOnServer(on) } })
+                    }
                 }
             }
             if (confirmRequestAll) {
