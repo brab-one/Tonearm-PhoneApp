@@ -86,7 +86,8 @@ class LidarrSettingsViewModel(private val c: AppContainer) : ViewModel() {
                 val r = async { lidarr.rootFolders(config, "") }
                 val q = async { lidarr.qualityProfiles(config, "") }
                 val m = async { lidarr.metadataProfiles(config, "") }
-                roots = r.await()
+                // Users' own picks folders aren't where requests go.
+                roots = r.await().filterNot { it.isPicks }
                 qualities = q.await()
                 metadatas = m.await()
                 TestState.Passed(
@@ -140,8 +141,13 @@ fun LidarrSettingsScreen() {
                 style = MaterialTheme.typography.bodyMedium, color = Hud.colors.dim,
             )
             val integrations by c.integrations.state.collectAsStateWithLifecycle()
+            val server by c.tonearmServer.server.collectAsStateWithLifecycle()
             if (integrations.lidarr?.limited == true) {
-                Text("You can request music and see downloads; weekly picks and removing music are for the server's admins.", style = MaterialTheme.typography.bodyMedium, color = Hud.colors.accent)
+                Text(
+                    if (server?.picksFolder != null) "You can request music, see downloads and get weekly picks of your own; removing music is for the server's admins."
+                    else "You can request music and see downloads; weekly picks and removing music are for the server's admins.",
+                    style = MaterialTheme.typography.bodyMedium, color = Hud.colors.accent,
+                )
             }
             TestResult(vm.test)
             if (vm.roots.isNotEmpty()) {

@@ -44,6 +44,8 @@ data class LidarrArtist(
     /** ISO-8601 time the artist was added to Lidarr. */
     val added: String? = null,
     val tags: List<Int> = emptyList(),
+    /** Where its files are (Lidarr's root folder and the artist's folder). */
+    val path: String? = null,
 )
 
 @Serializable
@@ -84,7 +86,15 @@ data class LidarrRootFolder(
     val defaultQualityProfileId: Int? = null,
     val defaultMetadataProfileId: Int? = null,
     val freeSpace: Long? = null,
-)
+) {
+    /** A user's own folder for their weekly picks, which the Tonearm server names so. */
+    val isPicks: Boolean get() = name?.startsWith(PICKS_NAME) == true
+
+    companion object {
+        /** How the Tonearm server names the root folders it makes for users' picks ("Tonearm picks: alice"). */
+        const val PICKS_NAME = "Tonearm picks:"
+    }
+}
 
 @Serializable
 data class LidarrProfile(val id: Int = 0, val name: String = "")
@@ -198,7 +208,17 @@ class LidarrClient(private val http: IntegrationHttp, private val json: Json) {
     }
 
     /** An album from Lidarr's album lookup ("artist album", or "lidarr:<release group id>"). */
-    class AlbumHit(val candidate: LidarrCandidate, val artistName: String?, val lidarrId: Int, val monitored: Boolean, val artistId: Int = 0) {
+    class AlbumHit(
+        val candidate: LidarrCandidate,
+        val artistName: String?,
+        val lidarrId: Int,
+        val monitored: Boolean,
+        val artistId: Int = 0,
+        /** The artist's MusicBrainz id, to find them in Lidarr when only they are there yet. */
+        val artistForeignId: String? = null,
+        /** Where Lidarr keeps the artist, when it has them. */
+        val artistPath: String? = null,
+    ) {
         val title get() = candidate.title
         val foreignId get() = candidate.foreignId
         val inLidarr get() = candidate.inLidarr
@@ -207,7 +227,7 @@ class LidarrClient(private val http: IntegrationHttp, private val json: Json) {
     suspend fun lookupAlbum(config: LidarrConfig, key: String, term: String): List<AlbumHit> =
         json.decodeFromString(ListSerializer(JsonObject.serializer()), get(config, key, "album/lookup", listOf("term" to term))).map { raw ->
             val album = json.decodeFromJsonElement<LidarrAlbum>(raw)
-            AlbumHit(albumCandidate(raw, emptySet()), album.artist?.artistName, album.id, raw["monitored"]?.jsonPrimitive?.booleanOrNull == true, album.artistId)
+            AlbumHit(albumCandidate(raw, emptySet()), album.artist?.artistName, album.id, raw["monitored"]?.jsonPrimitive?.booleanOrNull == true, album.artistId, album.artist?.foreignArtistId, album.artist?.path)
         }
 
     /** Monitors an album already in Lidarr and optionally searches for it. */
@@ -310,7 +330,8 @@ class LidarrClient(private val http: IntegrationHttp, private val json: Json) {
 
     /** Root folder, profiles and options for a new request: the saved choice, else Lidarr's defaults. */
     suspend fun resolveDefaults(config: LidarrConfig, key: String): LidarrAddDefaults {
-        val roots = rootFolders(config, key)
+        // Someone's own picks folder is never where everyone's requests go.
+        val roots = rootFolders(config, key).filterNot { it.isPicks }
         val root = roots.firstOrNull { it.path == config.rootFolderPath } ?: roots.firstOrNull()
             ?: throw IntegrationHttpException(0, "Lidarr has no root folder yet. Add one in Lidarr → Settings → Media Management.")
         val quality = config.qualityProfileId ?: root.defaultQualityProfileId ?: qualityProfiles(config, key).firstOrNull()?.id

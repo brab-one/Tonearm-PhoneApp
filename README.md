@@ -92,9 +92,11 @@ Related repositories:
 - **Similar artists** on artist pages, including ones you don't have (they open on YouTube Music), and
   **Instant mix** for any song: the server's similar songs, else YouTube Music's radio with your own copies
   played from the library
-- **Weekly picks** (in the AI picks panel): every week the first few AI picks are downloaded by Lidarr and arrive
-  as a "Weekly picks" playlist. A week later the playlist and its music are deleted again, except albums with a
-  song you liked or put in another playlist; like the playlist itself (and name it) to keep all of it
+- **Weekly picks** (in the AI picks panel): every week the first few AI picks are downloaded by Lidarr, and their
+  standout songs (named by the AI) arrive as a "Weekly picks" playlist, the albums taking turns. A week later the
+  playlist and its music are deleted again, except albums with a song you liked or put in another playlist; like
+  the playlist itself (and name it) to keep all of it. With the Tonearm server's picks folders, everyone's picks
+  go into a library only they see, and everyone gets them, not only admins
 - Every song you play (YouTube Music ones and skips too) goes to the Tonearm server's history, with *Scrobble
   plays* on; the server and Lidarr are reached with the music server's mTLS client certificate
 

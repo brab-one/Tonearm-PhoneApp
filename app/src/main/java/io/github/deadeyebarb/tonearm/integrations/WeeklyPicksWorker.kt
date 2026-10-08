@@ -23,7 +23,9 @@ import java.util.concurrent.TimeUnit
 class WeeklyPicksWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
         val c = applicationContext.container
-        val (config, key) = c.integrations.requireLidarrOrNull()?.takeUnless { it.first.limited } ?: return Result.success()
+        // Admins, and everyone with a picks folder of their own (the server keeps their picks apart).
+        val (config, key) = c.integrations.requireLidarrOrNull()?.takeUnless { it.first.limited && c.tonearmServer.server.value?.picksFolder == null }
+            ?: return Result.success()
         val session = c.sessions.active.value ?: return Result.success()
         return try {
             c.weekly.tick(config, key, session)?.let(c.messages::show)

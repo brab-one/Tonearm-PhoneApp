@@ -110,7 +110,8 @@ fun AiPicksPanel(actions: AppActions, modifier: Modifier = Modifier) {
             (failed ?: current?.problem)?.let {
                 Text(it, style = MaterialTheme.typography.bodySmall, color = hud.danger, modifier = Modifier.padding(top = 6.dp))
             }
-            if (integrations.lidarr?.limited == false) WeeklyPicksRow(actions)
+            // Admins, and everyone with a picks folder of their own.
+            if (integrations.lidarr?.let { !it.limited || server?.picksFolder != null } == true) WeeklyPicksRow(actions)
             current?.picks?.forEach { pick ->
                 AiPickRow(pick, canRequest = integrations.lidarr != null, onYouTube = settings.youtubeFallback, actions = actions) {
                     picks = current.copy(picks = current.picks.filterNot { it.artist == pick.artist })
@@ -233,12 +234,14 @@ private fun WeeklyPicksRow(actions: AppActions) {
     val hud = Hud.colors
     var settings by remember { mutableStateOf<WeeklySettings?>(null) }
     var current by remember { mutableStateOf<WeeklyBatch?>(null) }
+    var waiting by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     var changed by remember { mutableIntStateOf(0) }
     LaunchedEffect(changed) {
         val session = c.sessions.active.value ?: return@LaunchedEffect
         settings = runCatching { c.weekly.settings(session) }.getOrNull()
         current = runCatching { c.weekly.batches(session) }.getOrDefault(emptyList()).maxByOrNull { it.state.created }
+        waiting = c.weekly.waiting()
     }
     fun set(next: WeeklySettings) {
         val session = c.sessions.active.value ?: return
@@ -266,6 +269,8 @@ private fun WeeklyPicksRow(actions: AppActions) {
             }
             Switch(checked = settings?.on == true, onCheckedChange = { set((settings ?: WeeklySettings()).copy(on = it)) }, enabled = !busy && settings != null)
         }
+        // Waiting for the server's admin to set up this user's own picks folder.
+        if (settings?.on == true) waiting?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = hud.danger, modifier = Modifier.padding(top = 4.dp)) }
         settings?.takeIf { it.on }?.let { on ->
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 for (n in listOf(3, 5, 10)) {

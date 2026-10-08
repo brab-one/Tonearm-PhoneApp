@@ -123,7 +123,11 @@ data class ReceivedCommand(val seq: Long, val from: String, val command: Connect
 
 /** An album the Tonearm server's AI suggests, by an artist not in the library. */
 @Serializable
-data class AiPick(val artist: String, val album: String, val year: Int? = null, val why: String = "")
+data class AiPick(val artist: String, val album: String, val year: Int? = null, val why: String = "", val songs: List<String> = emptyList())
+
+/** This user's own folder for their weekly picks (as Lidarr sees it), and whether Lidarr has it yet or what's missing. */
+@Serializable
+data class PicksFolder(val path: String, val ready: Boolean = false, val problem: String? = null)
 
 @Serializable
 data class AiPicks(
@@ -266,6 +270,7 @@ class ConnectClient(private val http: IntegrationHttp, private val json: Json) {
             history = flag("history"),
             dislikes = flag("dislikes"),
             ai = response["ai"]?.jsonPrimitive?.contentOrNull,
+            picksFolder = response["picksFolder"]?.jsonPrimitive?.contentOrNull,
         )
     }
 
@@ -305,6 +310,13 @@ class ConnectClient(private val http: IntegrationHttp, private val json: Json) {
 
     /** The user's disliked songs and the artists they said no to. */
     suspend fun disliked(session: ServerSession): Disliked = json.decodeFromJsonElement(Disliked.serializer(), call(ConnectRoute.Server(session), "disliked"))
+
+    /** Makes sure Lidarr has this user's own picks folder; null when the server gives everyone's picks one library. */
+    suspend fun picksFolder(session: ServerSession): PicksFolder? = try {
+        json.decodeFromJsonElement(PicksFolder.serializer(), call(ConnectRoute.Server(session), "picksfolder"))
+    } catch (e: IntegrationHttpException) {
+        if (e.code == 404) null else throw e
+    }
 
     /** Artists like [artist], marked when the library has them. */
     suspend fun similarArtists(session: ServerSession, artist: String): List<SimilarArtist> =

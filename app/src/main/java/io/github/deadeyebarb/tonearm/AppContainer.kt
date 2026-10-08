@@ -130,7 +130,7 @@ class AppContainer(val app: Application) {
     val versions = LibraryVersions(api)
     val fetches = FetchTracker(LidarrClient(integrationHttp, json), api)
     val local = LocalMusic(app)
-    val songRequests = SongRequests(LidarrClient(integrationHttp, json))
+    val songRequests = SongRequests(LidarrClient(integrationHttp, json), ownPicks = { tonearmServer.server.value?.picksFolder })
     val likes = Likes(app, json, scope, api, sessions, starred, integrations, songRequests, LikesSync(connectClient, json), connect, settings, messages)
     val weekly = WeeklyPicks(api, LidarrClient(integrationHttp, json), connectClient, json, connect.deviceId, java.io.File(app.filesDir, "weekly-run.json"))
     val continuation = QueueContinuation(api, sessions, youtube, settings, dislikes)

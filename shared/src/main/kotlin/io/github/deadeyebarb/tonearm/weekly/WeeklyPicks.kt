@@ -2,6 +2,7 @@ package io.github.deadeyebarb.tonearm.weekly
 
 import io.github.deadeyebarb.tonearm.connect.AiPick
 import io.github.deadeyebarb.tonearm.connect.ConnectClient
+import io.github.deadeyebarb.tonearm.connect.PicksFolder
 import io.github.deadeyebarb.tonearm.connect.ConnectRoute
 import io.github.deadeyebarb.tonearm.data.LidarrConfig
 import io.github.deadeyebarb.tonearm.integrations.LidarrClient
@@ -29,6 +30,11 @@ data class WeeklyAlbum(
     val artistId: Int,
     /** The run added the artist too (so it can go again with the album). */
     val newArtist: Boolean,
+    /**
+     * The album's standout songs as the AI named them, which make the week's playlist; empty when it named none (its
+     * first few songs then). Null in weeks from before the playlist was made of songs: the whole album goes in.
+     */
+    val songs: List<String>? = null,
 )
 
 /** What a weekly playlist's comment carries after [WeeklyPicks.MARKER]. */
@@ -85,7 +91,14 @@ class WeeklyPicks(
         val route = ConnectRoute.Server(session)
         repeat(4) {
             val stored = connect.storeGet(route, SETTINGS_KEY)
-            if (connect.storePut(route, SETTINGS_KEY, json.encodeToString(WeeklySettings.serializer(), settings), stored.version) != null) return
+            if (connect.storePut(route, SETTINGS_KEY, json.encodeToString(WeeklySettings.serializer(), settings), stored.version) != null) {
+                // Switched on: the next check tries straight away, rather than after the pause between tries.
+                if (settings.on) {
+                    attemptFile.delete()
+                    waitingFile.delete()
+                }
+                return
+            }
         }
         throw IOException("Couldn't save the weekly picks setting; try again")
     }
@@ -100,7 +113,8 @@ class WeeklyPicks(
      */
     suspend fun tick(config: LidarrConfig, key: String, session: ServerSession, now: Long = System.currentTimeMillis()): String? {
         runFile.parentFile?.mkdirs()
-        val settings = moveFromBrainarr(config, key, session) ?: settings(session)
+        // Only admins had (and can remove) the Brainarr lists.
+        val settings = (if (config.limited) null else moveFromBrainarr(config, key, session)) ?: settings(session)
         var news: String? = finishRun(config, key, session, now)
         var batches = batches(session)
         // A run whose device went away doesn't block the next week forever.
@@ -113,7 +127,7 @@ class WeeklyPicks(
         val due = newest == null || now - newest.state.created >= WEEK - SLACK
         if (settings.on && due && !runFile.exists() && now - lastAttempt >= RETRY) {
             attemptFile.writeText(now.toString())
-            news = startRun(session, settings, now) ?: news
+            news = startRun(session, settings, now, config.limited) ?: news
             batches = batches(session)
         }
         val current = batches.maxByOrNull { it.state.created }
@@ -151,7 +165,23 @@ class WeeklyPicks(
         return settings
     }
 
-    private suspend fun startRun(session: ServerSession, settings: WeeklySettings, now: Long): String? {
+    private suspend fun startRun(session: ServerSession, settings: WeeklySettings, now: Long, limited: Boolean): String? {
+        // With a folder of their own for each user, it has to be there before the AI is asked.
+        // Checking costs next to nothing: it's asked again at the next check, not after the pause between tries. Only news
+        // when it's different from before.
+        val folder = try {
+            connect.picksFolder(session)
+        } catch (e: Exception) {
+            attemptFile.delete()
+            throw e
+        }
+        folderProblem(folder, limited)?.let { problem ->
+            val before = waiting()
+            waitFor(problem)
+            attemptFile.delete()
+            return problem.takeIf { it != before }
+        }
+        waitingFile.delete()
         val state = WeeklyState(created = now, by = deviceId)
         val playlist = api.createPlaylist(playlistName(now), emptyList(), session)
             ?: api.playlists(session).firstOrNull { it.name == playlistName(now) && parse(it, json) == null }
@@ -179,6 +209,8 @@ class WeeklyPicks(
         val fresh = picks != null && !picks.running && picks.madeAt >= run.started
         val failed = picks != null && !picks.running && picks.madeAt < run.started && picks.problem != null
         if (!fresh && !failed && now - run.started < ABANDONED) return null
+        // Asked before the run is let go: when Lidarr or the server is away for a moment, the next check finishes it.
+        val folder = if (fresh) connect.picksFolder(session) else null
         runFile.delete()
         val playlist = runCatching { api.playlist(run.playlistId, session) }.getOrNull() ?: return null
         val state = parse(playlist, json) ?: return null
@@ -186,7 +218,11 @@ class WeeklyPicks(
             api.deletePlaylist(playlist.id, session)
             return "This week's picks didn't work: ${picks?.problem ?: "the AI took too long"}"
         }
-        val added = request(config, key, picks.picks, run.albums)
+        folderProblem(folder, config.limited)?.let {
+            api.deletePlaylist(playlist.id, session)
+            return waitFor(it)
+        }
+        val added = request(config, key, picks.picks, run.albums, folder?.path)
         if (added.isEmpty()) {
             api.deletePlaylist(playlist.id, session)
             return "Nothing new to get from the AI picks this week"
@@ -195,10 +231,15 @@ class WeeklyPicks(
         return "This week's picks: ${added.size} albums are downloading"
     }
 
-    /** Has Lidarr get the first [count] picks it knows and doesn't already want. */
-    private suspend fun request(config: LidarrConfig, key: String, picks: List<AiPick>, count: Int): List<WeeklyAlbum> {
-        val artistsBefore = lidarr.artists(config, key).map { it.id }.toSet()
-        val defaults = lidarr.resolveDefaults(config, key).copy(search = true)
+    /**
+     * Has Lidarr get the first [count] picks it knows and doesn't already want, into [folder] when the user has a folder
+     * of their own: then only for artists that are new to Lidarr or already in that folder, since an album always goes
+     * where its artist is (the shared library, or someone else's picks).
+     */
+    private suspend fun request(config: LidarrConfig, key: String, picks: List<AiPick>, count: Int, folder: String? = null): List<WeeklyAlbum> {
+        val artists = lidarr.artists(config, key)
+        val artistsBefore = artists.map { it.id }.toSet()
+        val defaults = lidarr.resolveDefaults(config, key).copy(search = true).let { d -> folder?.let { d.copy(rootFolderPath = it) } ?: d }
         val added = mutableListOf<WeeklyAlbum>()
         for (pick in picks) {
             if (added.size >= count) break
@@ -208,22 +249,30 @@ class WeeklyPicks(
             } ?: continue
             // Already wanted: not this week's to delete later.
             if (hit.inLidarr && hit.monitored) continue
+            val there = folder?.let { artists.firstOrNull { (hit.artistId != 0 && it.id == hit.artistId) || (hit.artistForeignId != null && it.foreignArtistId == hit.artistForeignId) } }
+            if (folder != null && there != null && !isIn(there.path, folder)) continue
+            // An artist in the user's own folder came with earlier picks: they can go with this week's too, unless
+            // something else of theirs is kept (the clean-up checks).
+            val ownArtist = folder != null && there != null
             added += runCatching {
                 if (hit.inLidarr) {
                     lidarr.monitorAlbum(config, key, hit.lidarrId, search = true)
-                    WeeklyAlbum(hit.lidarrId, hit.title, hit.artistName ?: pick.artist, hit.artistId, newArtist = false)
+                    WeeklyAlbum(hit.lidarrId, hit.title, hit.artistName ?: pick.artist, hit.artistId, newArtist = ownArtist, songs = pick.songs)
                 } else {
                     val album = lidarr.addAlbum(config, key, hit.candidate, defaults)
-                    WeeklyAlbum(album.id, album.title, album.artist?.artistName ?: pick.artist, album.artistId, newArtist = album.artistId !in artistsBefore)
+                    WeeklyAlbum(album.id, album.title, album.artist?.artistName ?: pick.artist, album.artistId, newArtist = ownArtist || album.artistId !in artistsBefore, songs = pick.songs)
                 }
             }.getOrNull() ?: continue
         }
         return added
     }
 
-    /** Puts the downloaded songs of the batch's albums into its playlist, in album order. */
+    /**
+     * Puts the downloaded standout songs of the batch's albums into its playlist, the albums taking turns like on a
+     * mixtape (whole albums, in album order, for weeks from before).
+     */
     private suspend fun fill(session: ServerSession, batch: WeeklyBatch) {
-        val songs = batch.state.albums.flatMap { libraryAlbum(session, it) }
+        val songs = playlistOf(batch.state.albums.map { it to libraryAlbum(session, it) })
         val ids = songs.map { it.id }
         val current = runCatching { api.playlist(batch.playlist.id, session).entry.map { it.id } }.getOrDefault(emptyList())
         if (ids.isEmpty() || ids == current) return
@@ -233,6 +282,18 @@ class WeeklyPicks(
             api.setPlaylistComment(batch.playlist.id, comment(batch.state, json), session)
         }
     }
+
+    /**
+     * Why the week can't download: the user's own picks folder isn't set up yet, or there are no picks folders and only
+     * the server keeps a non-admin's picks apart (without, they'd land in everyone's library for good).
+     */
+    private fun folderProblem(folder: PicksFolder?, limited: Boolean): String? = when {
+        folder == null -> if (limited) "Weekly picks need a picks folder of your own on the Tonearm server (PICKS_FOLDER)" else null
+        !folder.ready -> "Weekly picks wait for your own picks folder: ${folder.problem}"
+        else -> null
+    }
+
+    private fun isIn(path: String?, folder: String) = path != null && path.trimEnd('/').startsWith(folder.trimEnd('/') + "/")
 
     private suspend fun libraryAlbum(session: ServerSession, album: WeeklyAlbum): List<Song> {
         val title = Names.normalize(SongMatch.cleanTitle(album.title))
@@ -279,6 +340,16 @@ class WeeklyPicks(
         }
     }
 
+    /** Why weekly picks are waiting (for a picks folder of the user's own), as the weekly picks screen shows it; null when they aren't. */
+    fun waiting(): String? = runCatching { waitingFile.takeIf { it.exists() }?.readText()?.trim()?.ifEmpty { null } }.getOrNull()
+
+    private fun waitFor(problem: String): String {
+        runCatching { waitingFile.writeText(problem) }
+        return problem
+    }
+
+    private val waitingFile get() = File(runFile.parentFile, runFile.name + ".waiting")
+
     /** When this device last started a run; a run that found nothing isn't retried right away. */
     private val attemptFile get() = File(runFile.parentFile, runFile.name + ".last")
 
@@ -315,6 +386,19 @@ class WeeklyPicks(
                 MARKER + compact.encodeToString(WeeklyState.serializer(), state)
 
         fun playlistName(created: Long) = "Weekly picks · ${date(created)}"
+
+        /** Songs of each album it has: the ones the AI named (or its first few), the albums taking turns. */
+        fun playlistOf(albums: List<Pair<WeeklyAlbum, List<Song>>>): List<Song> {
+            if (albums.any { it.first.songs == null }) return albums.flatMap { it.second }
+            val picked = albums.map { (album, songs) ->
+                val named = album.songs.orEmpty().map { Names.normalize(SongMatch.cleanTitle(it)) }.toSet()
+                songs.filter { Names.normalize(SongMatch.cleanTitle(it.title)) in named }.ifEmpty { songs.take(FIRST_SONGS) }
+            }
+            return (0 until (picked.maxOfOrNull { it.size } ?: 0)).flatMap { i -> picked.mapNotNull { it.getOrNull(i) } }
+        }
+
+        /** Songs an album gives the playlist when the AI named none that it has. */
+        private const val FIRST_SONGS = 3
 
         fun date(millis: Long): String =
             DateTimeFormatter.ofPattern("d MMM", Locale.ENGLISH).withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(millis))

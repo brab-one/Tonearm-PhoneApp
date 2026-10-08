@@ -57,6 +57,9 @@ class SongRequestsTest {
                 if (request.method != "GET") changes += Triple(request.method, path + (request.url.encodedQuery?.let { "?$it" } ?: ""), request.body?.utf8().orEmpty())
                 return when {
                     path == "/api/v1/album/lookup" && term == "Radiohead OK Computer" -> MockResponse(body = "[$album]")
+                    // Kept in someone's private weekly picks.
+                    path == "/api/v1/album/lookup" && term == "Slowdive Souvlaki" -> MockResponse(body = """[{"id":30,"title":"Souvlaki","foreignAlbumId":"rg-s",
+                        "monitored":true,"artistId":7,"artist":{"id":7,"artistName":"Slowdive","foreignArtistId":"a-s","path":"/picks/carol/Slowdive"}}]""")
                     path == "/api/v1/album/lookup" -> MockResponse(body = "[]")
                     path == "/api/v1/artist/lookup" && term == "Radiohead" ->
                         MockResponse(body = """[{"artistName":"Radiohead","foreignArtistId":"a-rh"${if (radioheadInLidarr) ""","id":4""" else ""}}]""")
@@ -64,7 +67,8 @@ class SongRequestsTest {
                     path == "/api/v1/artist" && request.method == "GET" ->
                         MockResponse(body = if (radioheadInLidarr) """[{"id":4,"artistName":"Radiohead","foreignArtistId":"a-rh"}]""" else "[]")
                     path == "/api/v1/artist" && request.method == "POST" -> MockResponse(body = """{"id":4,"artistName":"Radiohead","foreignArtistId":"a-rh"}""")
-                    path == "/api/v1/rootfolder" -> MockResponse(body = """[{"id":1,"path":"/music","defaultQualityProfileId":2,"defaultMetadataProfileId":3}]""")
+                    path == "/api/v1/rootfolder" -> MockResponse(body = """[{"id":1,"path":"/music","defaultQualityProfileId":2,"defaultMetadataProfileId":3},
+                        {"id":2,"path":"/picks/carol","name":"Tonearm picks: carol"},{"id":3,"path":"/picks/bob","name":"Tonearm picks: bob"}]""")
                     path == "/api/v1/track" -> MockResponse(body = tracks())
                     path == "/api/v1/album" && request.method == "GET" -> MockResponse(body = """[
                         {"id":10,"title":"OK Computer","artistId":4,"albumType":"Album","releaseDate":"1997-05-21T00:00:00Z","secondaryTypes":[]},
@@ -79,7 +83,7 @@ class SongRequestsTest {
         server.start()
         val http = IntegrationHttp(OkHttpClient()) { null }
         val base = server.url("/").toString()
-        requests = SongRequests(LidarrClient(http, json)) { }
+        requests = SongRequests(LidarrClient(http, json), pause = { })
         config = LidarrConfig(url = base.trimEnd('/'), keyEnc = "")
     }
 
@@ -136,5 +140,15 @@ class SongRequestsTest {
         val result = requests.request(config, "k", TrackRef("Unknown Song", "Nobody"))
         assertTrue(result is SongRequestResult.NotFound)
         assertTrue(changes.isEmpty())
+    }
+
+    @Test
+    fun `an album in someone else's private picks isn't "already there"`() = runTest {
+        val ref = TrackRef(title = "Alison", artist = "Slowdive", album = "Souvlaki")
+        val refused = runCatching { requests.request(config, "k", ref) }.exceptionOrNull()
+        assertTrue(refused is IntegrationHttpException && refused.code == 409 && "Slowdive" in refused.message.orEmpty())
+        // In carol's own picks it is: it's in her library.
+        val carol = SongRequests(LidarrClient(IntegrationHttp(OkHttpClient()) { null }, json), ownPicks = { "/picks/carol" }, pause = { })
+        assertEquals(SongRequestResult.AlreadyWanted("Souvlaki"), carol.request(config, "k", ref))
     }
 }

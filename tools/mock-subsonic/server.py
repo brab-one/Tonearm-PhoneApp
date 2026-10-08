@@ -146,6 +146,10 @@ class Library:
         self.lidarr_commands: dict[int, dict] = {}
         self.lidarr_albums: dict[str, dict] = {}
         self.lidarr_queue: list[dict] = []
+        self.lidarr_roots: list[dict] = [{"id": 1, "path": "/music", "name": "Music", "defaultQualityProfileId": 2,
+                                          "defaultMetadataProfileId": 1, "freeSpace": 2_400_000_000_000, "accessible": True}]
+        # Users whose picks folder (/picks/<user>) exists on the mock Lidarr's disk.
+        self.picks_dirs: set[str] = set()
         self.lock = threading.Lock()
         for album_id, title, artist_id, year, genre, depth, rate, tracks in ALBUMS:
             songs = []
@@ -525,6 +529,8 @@ class Handler(BaseHTTPRequestHandler):
             tracks = 10 * len(entry["albums"])
             monitored = added.get("monitored", True)
             out.update(monitored=monitored, added=added.get("added", "2026-01-01T00:00:00Z"), tags=added.get("tags", []),
+                       path=added.get("path", "/music/" + entry["artistName"]),
+                       rootFolderPath=added.get("path", "/music/" + entry["artistName"]).rsplit("/", 1)[0],
                        statistics={"albumCount": len(entry["albums"]), "trackFileCount": tracks if added.get("onDisk") else 0,
                                    "trackCount": tracks if monitored else 0, "totalTrackCount": tracks, "percentOfTracks": 100.0 if added.get("onDisk") else 0.0})
         return out
@@ -604,7 +610,7 @@ class Handler(BaseHTTPRequestHandler):
 
     # --- The library's own music as Lidarr manages it, so deleting songs/albums/artists can be tried ---
     def library_artists(self):
-        return [{"id": 100 + i, "artistName": name, "foreignArtistId": f"lib-{aid}", "monitored": True}
+        return [{"id": 100 + i, "artistName": name, "foreignArtistId": f"lib-{aid}", "monitored": True, "path": "/music/" + name, "rootFolderPath": "/music"}
                 for i, (aid, name) in enumerate(ARTISTS.items()) if any(a["artistId"] == aid for a in self.lib.albums.values())]
 
     def library_albums(self, lidarr_artist_id):
@@ -646,8 +652,17 @@ class Handler(BaseHTTPRequestHandler):
         if endpoint == "system/status":
             return self.send_raw({"appName": "Lidarr", "instanceName": "Lidarr", "version": "2.9.6.4552"})
         if endpoint == "rootfolder":
-            return self.send_raw([{"id": 1, "path": "/music", "name": "Music", "defaultQualityProfileId": 2,
-                                   "defaultMetadataProfileId": 1, "freeSpace": 2_400_000_000_000, "accessible": True}])
+            return self.send_raw(self.lib.lidarr_roots)
+        single = re.match(r"^(artist|album)/(\d+)$", endpoint)
+        if single:
+            kind, n = single.group(1), int(single.group(2))
+            if kind == "artist":
+                found = next((a for a in self.library_artists() if a["id"] == n), None) or \
+                    (lambda e: self.lidarr_artist(e) if e else None)(self.lidarr_entry(n))
+            else:
+                found = next((a for artist in self.library_artists() for a in self.library_albums(artist["id"]) if a["id"] == n), None) or \
+                    next((self.lidarr_album(e, a) for e in LIDARR_CATALOG for a in e["albums"] if self.lib.lidarr_albums.get(a[1], {}).get("id") == n), None)
+            return self.send_raw(found) if found else self.send_raw({"message": "NotFound"}, 404)
         if endpoint == "qualityprofile":
             return self.send_raw([{"id": 1, "name": "Any"}, {"id": 2, "name": "Lossless"}])
         if endpoint == "metadataprofile":
@@ -663,6 +678,10 @@ class Handler(BaseHTTPRequestHandler):
             # Monitored albums Lidarr hasn't got yet.
             records = [self.lidarr_album(e, a) for e in LIDARR_CATALOG for a in e["albums"] if self.lib.lidarr_albums.get(a[1], {}).get("monitored")]
             return self.send_raw({"page": 1, "pageSize": len(records), "totalRecords": len(records), "records": records})
+        if endpoint == "album/lookup" and term.startswith("lidarr:"):
+            # By MusicBrainz id, as Lidarr resolves "lidarr:<id>": the album with its artist (and their path, if added).
+            mbid = one("term")[len("lidarr:"):]
+            return self.send_raw([self.lidarr_album(e, a) for e in LIDARR_CATALOG for a in e["albums"] if a[1] == mbid])
         if endpoint == "album/lookup":
             # Lidarr's metadata knows the catalog's albums; "artist album" finds one.
             return self.send_raw([self.lidarr_album(e, a) for e in LIDARR_CATALOG for a in e["albums"]
@@ -723,6 +742,19 @@ class Handler(BaseHTTPRequestHandler):
         self.send_raw({"message": f"unknown endpoint {endpoint}"}, 404)
 
     def lidarr_post(self, endpoint, body):
+        if endpoint == "rootfolder":
+            # Like Lidarr, only a folder that exists (here: the users given with --picks-dirs).
+            path = body.get("path", "").rstrip("/")
+            if any(r["path"] == path for r in self.lib.lidarr_roots):
+                return self.send_raw([{"propertyName": "Path", "errorMessage": "Path is already configured as a root folder"}], 400)
+            if not path.startswith("/picks/") or path[len("/picks/"):] not in self.lib.picks_dirs:
+                return self.send_raw([{"propertyName": "Path", "errorMessage": "Path does not exist"}], 400)
+            root = {"id": 1 + max(r["id"] for r in self.lib.lidarr_roots), "path": path, "name": body.get("name"),
+                    "defaultQualityProfileId": body.get("defaultQualityProfileId"), "defaultMetadataProfileId": body.get("defaultMetadataProfileId"),
+                    "freeSpace": 2_400_000_000_000, "accessible": True}
+            self.lib.lidarr_roots.append(root)
+            print(f"    lidarr: root folder {path} ({root['name']})", flush=True)
+            return self.send_raw(root, 201)
         if endpoint == "tag":
             tag = {"id": len(self.lib.lidarr_tags) + 1, "label": body.get("label", "").lower()}
             self.lib.lidarr_tags.append(tag)
@@ -765,7 +797,8 @@ class Handler(BaseHTTPRequestHandler):
             if mbid in self.lib.lidarr_artists:
                 return self.send_raw([{"propertyName": "ForeignArtistId", "errorMessage": "This artist has already been added."}], 400)
             self.lib.lidarr_artists[mbid] = {"id": 1 + max([a["id"] for a in self.lib.lidarr_artists.values()] or [0]),
-                                             "monitored": body.get("addOptions", {}).get("monitor") != "none"}
+                                             "monitored": body.get("addOptions", {}).get("monitor") != "none",
+                                             "path": body["rootFolderPath"].rstrip("/") + "/" + entry["artistName"]}
             opts = body.get("addOptions", {})
             self.register_albums(entry, monitored=opts.get("monitor") not in (None, "none"))
             print(f"    lidarr: added artist {entry['artistName']} monitor={opts.get('monitor')} search={opts.get('searchForMissingAlbums')} "
@@ -779,10 +812,12 @@ class Handler(BaseHTTPRequestHandler):
             for e in LIDARR_CATALOG:
                 for album in e["albums"]:
                     if album[1] == mbid:
-                        self.lib.lidarr_artists.setdefault(e["foreignArtistId"], {"id": 1 + max([a["id"] for a in self.lib.lidarr_artists.values()] or [0])})
+                        self.lib.lidarr_artists.setdefault(e["foreignArtistId"], {"id": 1 + max([a["id"] for a in self.lib.lidarr_artists.values()] or [0]),
+                                                                                   "path": body["artist"]["rootFolderPath"].rstrip("/") + "/" + e["artistName"]})
                         self.register_albums(e)
                         self.lib.lidarr_albums[mbid]["monitored"] = True
-                        print(f"    lidarr: added album {album[0]} by {e['artistName']} search={body.get('addOptions', {}).get('searchForNewAlbum')}", flush=True)
+                        print(f"    lidarr: added album {album[0]} by {e['artistName']} search={body.get('addOptions', {}).get('searchForNewAlbum')} "
+                              f"into {self.lib.lidarr_artists[e['foreignArtistId']].get('path')}", flush=True)
                         self.lib.lidarr_queue.append({"title": f"{e['artistName']} - {album[0]}", "artist": e["artistName"], "album": album[0], "started": time.time()})
                         return self.send_raw(self.lidarr_album(e, album), 201)
             return self.send_raw([{"propertyName": "ForeignAlbumId", "errorMessage": "Album not found"}], 400)
@@ -1010,6 +1045,7 @@ def main():
     parser.add_argument("--plain", action="store_true", help="serve plain http")
     parser.add_argument("--empty-library", action="store_true", help="serve no music, like a freshly installed server")
     parser.add_argument("--brainarr-untagged", action="store_true", help="the Brainarr import list has no tag yet")
+    parser.add_argument("--picks-dirs", default="", help="users (comma-separated) whose picks folder /picks/<user> exists for Lidarr")
     parser.add_argument("--no-ranges", action="store_true",
                         help="stream songs without Content-Length or range support, like some reverse proxies")
     parser.add_argument("--stream-kbps", type=int, default=0, help="with --no-ranges: stream this slowly (KiB/s), like a remote server")
@@ -1030,6 +1066,7 @@ def main():
     Handler.stream_kbps = args.stream_kbps
     Handler.connect_url = args.connect
     Handler.lib.brainarr_tags = [] if args.brainarr_untagged else [BRAINARR_TAG["id"]]
+    Handler.lib.picks_dirs = {u.strip() for u in args.picks_dirs.split(",") if u.strip()}
     Handler.lib.lidarr_tags = [] if args.brainarr_untagged else [dict(BRAINARR_TAG)]
     Handler.add_lidarr_artist(Handler, "mb-signal-garden", tags=Handler.lib.brainarr_tags, days_ago=3, on_disk=True)
     Handler.add_lidarr_artist(Handler, "mb-kosmische", tags=Handler.lib.brainarr_tags, days_ago=1)

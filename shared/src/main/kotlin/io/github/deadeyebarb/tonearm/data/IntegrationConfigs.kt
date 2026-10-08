@@ -58,6 +58,8 @@ data class TonearmServerInfo(
     val dislikes: Boolean = false,
     /** Which AI answers ("Claude claude-opus-5-5"), when there is one. */
     val ai: String? = null,
+    /** This user's own folder for their weekly picks, when each user has one (server 1.6.0 and later). */
+    val picksFolder: String? = null,
 ) {
     fun serviceUrl(service: String) = baseUrl.trimEnd('/') + "/connect-tonearm/" + service
 }

@@ -32,6 +32,8 @@ sealed interface SongRequestResult {
  */
 class SongRequests(
     private val lidarr: LidarrClient,
+    /** This user's own picks folder on the Tonearm server, when each user has one. */
+    private val ownPicks: () -> String? = { null },
     /** Waits between looks while Lidarr fetches a new artist's albums. */
     private val pause: suspend (Long) -> Unit = { delay(it) },
 ) {
@@ -72,7 +74,7 @@ class SongRequests(
 
     private suspend fun want(config: LidarrConfig, key: String, album: LidarrClient.AlbumHit, artist: String): SongRequestResult {
         if (album.inLidarr) {
-            if (album.monitored) return SongRequestResult.AlreadyWanted(album.title)
+            if (album.monitored) return alreadyWanted(config, key, album.title, album.artistName ?: artist, album.artistPath)
             lidarr.monitorAlbum(config, key, album.lidarrId, search = config.searchOnAdd)
         } else {
             lidarr.addAlbum(config, key, album.candidate, lidarr.resolveDefaults(config, key))
@@ -99,9 +101,23 @@ class SongRequests(
             if (added != null) runCatching { lidarr.deleteArtist(config, key, added.id, deleteFiles = false, exclude = false) }
             return null
         }
-        if (album.monitored) return SongRequestResult.AlreadyWanted(album.title)
+        if (album.monitored) return alreadyWanted(config, key, album.title, existing?.artistName ?: artist.title, existing?.path)
         lidarr.monitorAlbum(config, key, album.id, search = config.searchOnAdd)
         return SongRequestResult.Album(album.title, (existing ?: added)?.artistName?.ifEmpty { null } ?: artist.title)
+    }
+
+    /**
+     * Lidarr has the album already, which is it for the user unless it's in someone else's private weekly picks: it
+     * would never show up in their library then (the Tonearm server refuses to put more there, too).
+     */
+    private suspend fun alreadyWanted(config: LidarrConfig, key: String, title: String, artist: String, artistPath: String?): SongRequestResult {
+        val path = artistPath?.trimEnd('/') ?: return SongRequestResult.AlreadyWanted(title)
+        val own = ownPicks()?.trimEnd('/')
+        val picks = runCatching { lidarr.rootFolders(config, key) }.getOrDefault(emptyList()).filter { it.isPicks }.map { it.path.trimEnd('/') }
+        if (picks.any { it != own && path.startsWith("$it/") }) {
+            throw IntegrationHttpException(409, "$artist is in someone else's private weekly picks, so “$title” won't reach your library; an admin can move $artist to a shared root folder in Lidarr")
+        }
+        return SongRequestResult.AlreadyWanted(title)
     }
 
     /** The artist's tracks; for a just-added artist, once Lidarr has stopped adding to them (or after a while). */

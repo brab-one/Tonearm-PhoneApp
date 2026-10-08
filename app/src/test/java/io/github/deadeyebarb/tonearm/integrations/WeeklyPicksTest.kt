@@ -48,6 +48,11 @@ class WeeklyPicksTest {
     private var oldLists = true
     /** Method and path(+query) of every change sent to Lidarr. */
     private val lidarrChanges = mutableListOf<Pair<String, String>>()
+    private val addedAlbums = mutableListOf<String>()
+    /** The Tonearm server's answer to "picksfolder"; none: everyone's picks share the library. */
+    private var picksFolder: String? = null
+    /** Lidarr's artists. */
+    private var artists = """[{"id":5,"artistName":"Tricky"}]"""
 
     private val T = 1_760_000_000_000L
 
@@ -95,6 +100,7 @@ class WeeklyPicksTest {
                 }
             }
             "recommendations" -> { if (q("refresh") == "true") refreshes++; MockResponse(body = picks) }
+            "picksfolder" -> picksFolder?.let { MockResponse(body = it) } ?: MockResponse(code = 404, body = """{"error":"no picks folders"}""")
             else -> MockResponse(code = 404)
         }
         val endpoint = path.removePrefix("/api/v1/")
@@ -106,7 +112,7 @@ class WeeklyPicksTest {
                     {"id":3,"name":"Tonearm more like this","implementation":"Brainarr"},
                     {"id":4,"name":"Tonearm weekly picks","implementation":"Brainarr","fields":[{"name":"maxRecommendations","value":3}]}]""")
             }
-            endpoint == "artist" -> MockResponse(body = """[{"id":5,"artistName":"Tricky"}]""")
+            endpoint == "artist" -> MockResponse(body = artists)
             endpoint == "rootfolder" -> MockResponse(body = """[{"id":1,"path":"/music","defaultQualityProfileId":1,"defaultMetadataProfileId":1}]""")
             endpoint == "album/lookup" -> MockResponse(body = when (q("term")) {
                 "Mazzy Star So Tonight That I Might See" -> """[{"id":0,"title":"So Tonight That I Might See","foreignAlbumId":"rg-m","artist":{"artistName":"Mazzy Star","foreignArtistId":"a-m"}}]"""
@@ -116,8 +122,10 @@ class WeeklyPicksTest {
                 else -> """[{"id":0,"title":"Something Else","artist":{"artistName":"Somebody"}}]"""
             })
             endpoint == "album" && request.method == "POST" -> MockResponse(
-                body = if ("rg-h" in request.body!!.utf8()) """{"id":51,"title":"Homogenic","artistId":10,"artist":{"artistName":"Björk"}}"""
-                else """{"id":50,"title":"So Tonight That I Might See","artistId":9,"artist":{"artistName":"Mazzy Star"}}""",
+                body = request.body!!.utf8().also { addedAlbums += it }.let { sent ->
+                    if ("rg-h" in sent) """{"id":51,"title":"Homogenic","artistId":10,"artist":{"artistName":"Björk"}}"""
+                    else """{"id":50,"title":"So Tonight That I Might See","artistId":9,"artist":{"artistName":"Mazzy Star"}}"""
+                },
             )
             else -> MockResponse(body = "{}")
         }
@@ -168,9 +176,9 @@ class WeeklyPicksTest {
         assertEquals(WeeklyState.READY, state.status)
         assertEquals(
             listOf(
-                WeeklyAlbum(50, "So Tonight That I Might See", "Mazzy Star", 9, newArtist = true),
-                WeeklyAlbum(60, "Maxinquaye", "Tricky", 5, newArtist = false),
-                WeeklyAlbum(51, "Homogenic", "Björk", 10, newArtist = true),
+                WeeklyAlbum(50, "So Tonight That I Might See", "Mazzy Star", 9, newArtist = true, songs = emptyList()),
+                WeeklyAlbum(60, "Maxinquaye", "Tricky", 5, newArtist = false, songs = emptyList()),
+                WeeklyAlbum(51, "Homogenic", "Björk", 10, newArtist = true, songs = emptyList()),
             ),
             state.albums,
         )
@@ -212,4 +220,64 @@ class WeeklyPicksTest {
         assertNull(WeeklyPicks.parse(Playlist("p3")))
     }
 
+
+    private val week = """{"running":false,"madeAt":${T + 120_000},"picks":[
+        {"artist":"Portishead","album":"Dummy"},{"artist":"Mazzy Star","album":"So Tonight That I Might See"},
+        {"artist":"Tricky","album":"Maxinquaye"},{"artist":"Björk","album":"Homogenic","songs":["Jóga","Bachelorette"]}]}"""
+
+    @Test
+    fun `with a folder of their own, picks go there and leave out artists that live elsewhere`() = runTest {
+        oldLists = false
+        picksFolder = """{"path":"/picks/alice","ready":true}"""
+        // Tricky is in the shared library and Mazzy Star in someone else's picks: an album goes where its artist is.
+        artists = """[{"id":5,"artistName":"Tricky","path":"/music/Tricky"},{"id":7,"artistName":"Mazzy Star","foreignArtistId":"a-m","path":"/picks/bob/Mazzy Star"}]"""
+        weekly.tick(config.copy(limited = true), "k", session, now = T)
+        picks = week
+        assertEquals("This week's picks: 1 albums are downloading", weekly.tick(config.copy(limited = true), "k", session, now = T + 180_000))
+        assertTrue("\"rootFolderPath\":\"/picks/alice\"" in addedAlbums.single())
+        assertEquals(listOf("Jóga", "Bachelorette"), batch()!!.albums.single().songs)
+        // Not an admin: Tonearm's old Brainarr lists aren't theirs to look at.
+        assertEquals(0, importListLooks)
+    }
+
+    @Test
+    fun `a picks folder that isn't set up yet holds the week back`() = runTest {
+        oldLists = false
+        picksFolder = """{"path":"/picks/alice","ready":false,"problem":"Lidarr can't use /picks/alice yet (Path does not exist)."}"""
+        assertEquals(
+            "Weekly picks wait for your own picks folder: Lidarr can't use /picks/alice yet (Path does not exist).",
+            weekly.tick(config, "k", session, now = T),
+        )
+        assertTrue(playlists.isEmpty())
+        assertEquals(0, refreshes)
+        // The weekly picks screen shows why.
+        assertEquals("Weekly picks wait for your own picks folder: Lidarr can't use /picks/alice yet (Path does not exist).", weekly.waiting())
+    }
+
+    @Test
+    fun `the week's playlist is the albums' standout songs, taking turns`() {
+        fun song(id: String, title: String) = io.github.deadeyebarb.tonearm.subsonic.Song(id, title = title)
+        val homogenic = WeeklyAlbum(51, "Homogenic", "Björk", 10, newArtist = true, songs = listOf("Jóga", "Bachelorette (Remastered)"))
+        val dummy = WeeklyAlbum(61, "Dummy", "Portishead", 6, newArtist = true, songs = listOf("A Song It Doesn't Have"))
+        val playlist = WeeklyPicks.playlistOf(listOf(
+            homogenic to listOf(song("h1", "Hunter"), song("h2", "Jóga"), song("h3", "Bachelorette")),
+            dummy to listOf(song("d1", "Mysterons"), song("d2", "Sour Times"), song("d3", "Strangers"), song("d4", "It Could Be Sweet")),
+        ))
+        // Björk's named songs, Portishead's first three since the AI named one it doesn't have; the albums take turns.
+        assertEquals(listOf("h2", "d1", "h3", "d2", "d3"), playlist.map { it.id })
+        // Weeks from before keep whole albums.
+        assertEquals(4, WeeklyPicks.playlistOf(listOf(dummy.copy(songs = null) to playlist.take(4))).size)
+    }
+
+    @Test
+    fun `without picks folders, only admins get weekly picks`() = runTest {
+        oldLists = false
+        assertEquals(
+            "Weekly picks need a picks folder of your own on the Tonearm server (PICKS_FOLDER)",
+            weekly.tick(config.copy(limited = true), "k", session, now = T),
+        )
+        assertTrue(playlists.isEmpty())
+        // An admin's go (after the half-day pause between tries) starts the week.
+        assertEquals("Picking this week's albums from what you play", weekly.tick(config, "k", session, now = T + 13 * 3_600_000L))
+    }
 }
