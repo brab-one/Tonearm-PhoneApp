@@ -288,7 +288,10 @@ class PlaybackService : MediaLibraryService() {
         val entry = player.currentMediaItem?.toQueueSong() ?: return
         val liked = c.likes.isLiked(entry)
         scope.launch {
-            runCatching { c.likes.set(entry, !liked) }.onFailure { c.messages.show(it.userMessage()) }
+            runCatching {
+                c.likes.set(entry, !liked)
+                if (!liked) c.undislike(entry.song)
+            }.onFailure { c.messages.show(it.userMessage()) }
         }
     }
 

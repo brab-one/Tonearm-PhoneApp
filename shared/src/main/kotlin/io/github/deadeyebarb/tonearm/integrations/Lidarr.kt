@@ -64,7 +64,17 @@ data class LidarrAlbum(
 )
 
 @Serializable
-data class LidarrTrack(val id: Int = 0, val title: String = "", val albumId: Int = 0, val artistId: Int = 0)
+data class LidarrTrack(
+    val id: Int = 0,
+    val title: String = "",
+    val albumId: Int = 0,
+    val artistId: Int = 0,
+    /** The number on its disc ("1", sometimes "A1" for vinyl). */
+    val trackNumber: String = "",
+    val mediumNumber: Int = 0,
+    val hasFile: Boolean = false,
+    val trackFileId: Int = 0,
+)
 
 @Serializable
 data class LidarrRootFolder(
@@ -223,6 +233,24 @@ class LidarrClient(private val http: IntegrationHttp, private val json: Json) {
     /** The tracks Lidarr knows for an artist's albums (from its metadata, whether or not they're monitored). */
     suspend fun tracks(config: LidarrConfig, key: String, artistId: Int): List<LidarrTrack> =
         json.decodeFromString(ListSerializer(LidarrTrack.serializer()), get(config, key, "track", listOf("artistId" to artistId)))
+
+    /** One album's tracks, with the file each has. */
+    suspend fun albumTracks(config: LidarrConfig, key: String, albumId: Int): List<LidarrTrack> =
+        json.decodeFromString(ListSerializer(LidarrTrack.serializer()), get(config, key, "track", listOf("albumId" to albumId)))
+
+    /** Deletes one track's file from disk. */
+    suspend fun deleteTrackFile(config: LidarrConfig, key: String, trackFileId: Int) {
+        http.send("DELETE", url(config, "trackfile/$trackFileId"), "", config.useServerTls, headers(key), service = "Lidarr")
+    }
+
+    /** Stops watching an album, so Lidarr doesn't fetch what's missing from it again. */
+    suspend fun unmonitorAlbum(config: LidarrConfig, key: String, albumId: Int) {
+        val body = buildJsonObject {
+            put("albumIds", JsonArray(listOf(JsonPrimitive(albumId))))
+            put("monitored", JsonPrimitive(false))
+        }
+        http.send("PUT", url(config, "album/monitor"), body.toString(), config.useServerTls, headers(key), service = "Lidarr")
+    }
 
     /** Removes an artist (with its files unless told otherwise); an exclusion keeps import lists from adding it again. */
     suspend fun deleteArtist(config: LidarrConfig, key: String, artistId: Int, deleteFiles: Boolean = true, exclude: Boolean = true) {

@@ -1,14 +1,5 @@
 package io.github.deadeyebarb.tonearm
 
-import io.github.deadeyebarb.tonearm.media.LibraryVersions
-import io.github.deadeyebarb.tonearm.integrations.FetchTracker
-import io.github.deadeyebarb.tonearm.likes.LikesSync
-import io.github.deadeyebarb.tonearm.local.LocalMusic
-import io.github.deadeyebarb.tonearm.youtube.YouTubeCatalog
-import io.github.deadeyebarb.tonearm.data.Likes
-import io.github.deadeyebarb.tonearm.integrations.SongRequests
-import io.github.deadeyebarb.tonearm.playback.QueueContinuation
-import io.github.deadeyebarb.tonearm.weekly.WeeklyPicks
 import android.app.Application
 import coil3.ImageLoader
 import coil3.disk.DiskCache
@@ -19,6 +10,7 @@ import io.github.deadeyebarb.tonearm.connect.ConnectClient
 import io.github.deadeyebarb.tonearm.connect.ConnectRouter
 import io.github.deadeyebarb.tonearm.connect.PhoneConnect
 import io.github.deadeyebarb.tonearm.data.IntegrationsRepository
+import io.github.deadeyebarb.tonearm.data.Likes
 import io.github.deadeyebarb.tonearm.data.Messages
 import io.github.deadeyebarb.tonearm.data.SecretBox
 import io.github.deadeyebarb.tonearm.data.ServerRepository
@@ -26,11 +18,17 @@ import io.github.deadeyebarb.tonearm.data.SettingsRepository
 import io.github.deadeyebarb.tonearm.data.StarredStore
 import io.github.deadeyebarb.tonearm.download.DownloadRepository
 import io.github.deadeyebarb.tonearm.integrations.DailyDiscovery
+import io.github.deadeyebarb.tonearm.integrations.FetchTracker
 import io.github.deadeyebarb.tonearm.integrations.IntegrationHttp
 import io.github.deadeyebarb.tonearm.integrations.IntegrationImageCalls
 import io.github.deadeyebarb.tonearm.integrations.IntegrationsService
 import io.github.deadeyebarb.tonearm.integrations.LidarrClient
 import io.github.deadeyebarb.tonearm.integrations.Recommender
+import io.github.deadeyebarb.tonearm.integrations.SongRequests
+import io.github.deadeyebarb.tonearm.likes.Dislikes
+import io.github.deadeyebarb.tonearm.likes.LikesSync
+import io.github.deadeyebarb.tonearm.local.LocalMusic
+import io.github.deadeyebarb.tonearm.media.LibraryVersions
 import io.github.deadeyebarb.tonearm.media.MediaEngine
 import io.github.deadeyebarb.tonearm.media.MediaItemFactory
 import io.github.deadeyebarb.tonearm.net.NetworkMonitor
@@ -38,20 +36,27 @@ import io.github.deadeyebarb.tonearm.net.TlsFactory
 import io.github.deadeyebarb.tonearm.net.UserAgentInterceptor
 import io.github.deadeyebarb.tonearm.playback.AudioEffects
 import io.github.deadeyebarb.tonearm.playback.PlayerConnection
+import io.github.deadeyebarb.tonearm.playback.QueueContinuation
 import io.github.deadeyebarb.tonearm.playback.QueueStore
 import io.github.deadeyebarb.tonearm.playback.SleepTimer
 import io.github.deadeyebarb.tonearm.playback.SpectrumAnalyzer
 import io.github.deadeyebarb.tonearm.playback.VolumeMixer
 import io.github.deadeyebarb.tonearm.subsonic.SessionManager
+import io.github.deadeyebarb.tonearm.subsonic.Song
 import io.github.deadeyebarb.tonearm.subsonic.SubsonicApi
+import io.github.deadeyebarb.tonearm.weekly.WeeklyPicks
+import io.github.deadeyebarb.tonearm.youtube.YouTubeCatalog
 import io.github.deadeyebarb.tonearm.youtube.YouTubeMusic
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import okio.Path.Companion.toOkioPath
-import java.util.concurrent.TimeUnit
 
 /** Process-wide singletons, shared by the UI, the playback service and the download service. */
 class AppContainer(val app: Application) {
@@ -85,6 +90,13 @@ class AppContainer(val app: Application) {
     private val connectClient = ConnectClient(integrationHttp, json)
     /** The Tonearm server at the music server's address: Connect, Lidarr with its key, history and picks. */
     val tonearmServer = ConnectRouter(connectClient)
+    /** Disliked songs and artists said no to, from the Tonearm server. */
+    val dislikes = Dislikes(connectClient, tonearmServer) { sessions.active.value }
+
+    /** A liked song isn't disliked anymore. */
+    suspend fun undislike(song: Song) {
+        if (dislikes.isDisliked(song.artist, song.title)) dislikes.set(song.artist.orEmpty(), song.title, song.album, false)
+    }
     val integrations = IntegrationsService(
         IntegrationsRepository(app, json, scope),
         LidarrClient(integrationHttp, json),
@@ -94,8 +106,20 @@ class AppContainer(val app: Application) {
         scope,
     )
     val connect = PhoneConnect(app, sessions, integrations, connectClient, tonearmServer)
-    val recommender = Recommender(api, sessions, connect)
-    val daily = DailyDiscovery(app, json, scope, api, sessions, integrations, recommender)
+    val recommender = Recommender(api, sessions, connect, dislikes)
+    val daily = DailyDiscovery(app, json, scope, api, sessions, integrations, recommender, dislikes)
+
+    init {
+        // What the desktop disliked shows up here within a few minutes.
+        scope.launch {
+            sessions.active.collectLatest {
+                while (true) {
+                    dislikes.refresh()
+                    delay(5 * 60_000L)
+                }
+            }
+        }
+    }
     val mediaItems = MediaItemFactory(app)
     val queueStore = QueueStore(app, json, mediaItems)
 
@@ -109,7 +133,7 @@ class AppContainer(val app: Application) {
     val songRequests = SongRequests(LidarrClient(integrationHttp, json))
     val likes = Likes(app, json, scope, api, sessions, starred, integrations, songRequests, LikesSync(connectClient, json), connect, settings, messages)
     val weekly = WeeklyPicks(api, LidarrClient(integrationHttp, json), connectClient, json, connect.deviceId, java.io.File(app.filesDir, "weekly-run.json"))
-    val continuation = QueueContinuation(api, sessions, youtube, settings)
+    val continuation = QueueContinuation(api, sessions, youtube, settings, dislikes)
     val media by lazy { MediaEngine(app, sessions, settings, network, youtube, youtubeHttpClient) }
 
     /** Touch first on the main thread: DownloadManager binds to the creating thread's looper. */

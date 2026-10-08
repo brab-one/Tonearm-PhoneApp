@@ -1,15 +1,5 @@
 package io.github.deadeyebarb.tonearm.ui.common
 
-import io.github.deadeyebarb.tonearm.likes.findSong
-import io.github.deadeyebarb.tonearm.integrations.TrackRef
-import io.github.deadeyebarb.tonearm.integrations.SearchRank
-import io.github.deadeyebarb.tonearm.ui.MoreLikeRoute
-import io.github.deadeyebarb.tonearm.local.LocalMusic
-import io.github.deadeyebarb.tonearm.integrations.IntegrationsService
-import io.github.deadeyebarb.tonearm.ui.YtAlbumRoute
-import io.github.deadeyebarb.tonearm.ui.YtArtistRoute
-import io.github.deadeyebarb.tonearm.youtube.YtAlbum
-import io.github.deadeyebarb.tonearm.youtube.YtArtist
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -17,20 +7,33 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.navigation.NavHostController
 import io.github.deadeyebarb.tonearm.AppContainer
 import io.github.deadeyebarb.tonearm.download.DownloadEntry
+import io.github.deadeyebarb.tonearm.integrations.IntegrationsService
+import io.github.deadeyebarb.tonearm.integrations.MusicRemoval
+import io.github.deadeyebarb.tonearm.integrations.SearchRank
+import io.github.deadeyebarb.tonearm.integrations.TrackRef
+import io.github.deadeyebarb.tonearm.likes.findSong
+import io.github.deadeyebarb.tonearm.local.LocalMusic
 import io.github.deadeyebarb.tonearm.media.ArtworkCache
 import io.github.deadeyebarb.tonearm.media.QueueSong
+import io.github.deadeyebarb.tonearm.media.toQueueSong
 import io.github.deadeyebarb.tonearm.subsonic.Song
 import io.github.deadeyebarb.tonearm.subsonic.StarKind
 import io.github.deadeyebarb.tonearm.subsonic.userMessage
 import io.github.deadeyebarb.tonearm.ui.AlbumRoute
 import io.github.deadeyebarb.tonearm.ui.ArtistRoute
 import io.github.deadeyebarb.tonearm.ui.GenreRoute
+import io.github.deadeyebarb.tonearm.ui.MoreLikeRoute
 import io.github.deadeyebarb.tonearm.ui.NowPlayingRoute
 import io.github.deadeyebarb.tonearm.ui.PlaylistRoute
+import io.github.deadeyebarb.tonearm.ui.YtAlbumRoute
+import io.github.deadeyebarb.tonearm.ui.YtArtistRoute
 import io.github.deadeyebarb.tonearm.youtube.YouTubeMusic
+import io.github.deadeyebarb.tonearm.youtube.YtAlbum
+import io.github.deadeyebarb.tonearm.youtube.YtArtist
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** Everything a screen can ask the app to do, so rows and menus don't need to know about services. */
@@ -47,6 +50,12 @@ class AppActions(
 
     /** An artist name waiting for the Lidarr request dialog. */
     var lidarrRequest by mutableStateOf<String?>(null)
+
+    /** A yes/no question waiting to be answered. */
+    var confirm by mutableStateOf<Confirm?>(null)
+
+    /** Whether music can be deleted from the server: Lidarr through the Tonearm server, with full rights there. */
+    val canDeleteMusic: Boolean get() = container.integrations.state.value.lidarr?.limited == false
 
     /** Normalized names of artists requested from Lidarr during this session. */
     val requestedArtists = androidx.compose.runtime.mutableStateListOf<String>()
@@ -234,6 +243,79 @@ class AppActions(
     /** The like button: stars a library song, or requests a YouTube Music one and likes it when it arrives. */
     fun setLiked(entry: QueueSong, liked: Boolean) = launch {
         container.likes.set(entry, liked)
+        if (liked) container.undislike(entry.song)
+    }
+
+    /**
+     * Dislikes a song or takes that back. A disliked song goes to the end of searches and out of mixes and picks; it isn't liked
+     * anymore, and when it's the one playing, the player moves on.
+     */
+    fun setDisliked(entry: QueueSong, disliked: Boolean) = launch {
+        val song = entry.song
+        container.dislikes.set(song.artist.orEmpty(), song.title, song.album, disliked)
+        if (!disliked) return@launch message("“${song.title}” isn't disliked anymore")
+        val now = player.state.value.current?.toQueueSong()
+        if (now != null && now.serverId == entry.serverId && now.song.id == song.id) player.next()
+        message("Disliked “${song.title}”: it goes to the end of searches and out of mixes and picks")
+        // The dislike is saved; not liking it anymore may fail on its own.
+        if (container.likes.isLiked(entry)) runCatching { container.likes.set(entry, false) }
+    }
+
+    /**
+     * Deletes a library song from the server for good, after asking: Lidarr deletes its file, Navidrome drops it at its scan.
+     * It leaves the queue, so the player doesn't stop at it.
+     */
+    fun deleteFromServer(entry: QueueSong) {
+        val title = entry.song.title
+        confirm = Confirm(
+            "Delete “$title” from the server?",
+            "Lidarr deletes the file and stops watching the album, so the song isn't downloaded again (the album's other songs stay). " +
+                "Navidrome drops it after its next scan. This can't be undone.",
+        ) {
+            launch {
+                val (config, key) = container.integrations.requireLidarr()
+                if (!MusicRemoval(container.integrations.lidarr).librarySong(config, key, container.api, entry.song.id)) {
+                    return@launch message("Lidarr can't tell which file “$title” is, or doesn't manage it, so nothing was deleted; delete the file on the server")
+                }
+                player.removeWhere { item -> item.toQueueSong()?.let { it.serverId == entry.serverId && it.song.id == entry.song.id } == true }
+                message("Deleted “$title”; Navidrome drops it after its scan")
+                rescanSoon()
+            }
+        }
+    }
+
+    /**
+     * Deletes an album ([album] set, [year] telling same-titled ones apart) or everything by an artist from the server, after
+     * asking. Its songs leave the queue ([queued] picks them out), and the page that asked closes when it's still showing.
+     */
+    fun deleteFromServer(artist: String, album: String?, year: Int?, queued: (Song) -> Boolean) {
+        val name = album ?: artist
+        val page = nav.currentBackStackEntry?.id
+        val server = activeServerId
+        confirm = Confirm(
+            "Delete “$name” from the server?",
+            (if (album != null) "The album by $artist" else "Everything by $artist") +
+                " is deleted from disk by Lidarr, which won't download it again unless you ask for it. Navidrome drops it after its next scan. This can't be undone.",
+        ) {
+            launch {
+                val (config, key) = container.integrations.requireLidarr()
+                val removal = MusicRemoval(container.integrations.lidarr)
+                val done = if (album != null) removal.album(config, key, artist, album, year) else removal.artist(config, key, artist)
+                if (!done) return@launch message("Lidarr doesn't have “$name” under this very name, or has more than one, so nothing was deleted; delete it in Lidarr")
+                player.removeWhere { item -> item.toQueueSong()?.let { it.serverId == server && queued(it.song) } == true }
+                message("Deleted “$name”; Navidrome drops it after its scan")
+                if (page != null && nav.currentBackStackEntry?.id == page) back()
+                rescanSoon()
+            }
+        }
+    }
+
+    /** Has Navidrome look at its folders once Lidarr is done deleting (it deletes in the background). */
+    private fun rescanSoon() {
+        container.scope.launch {
+            delay(10_000)
+            runCatching { container.api.startScan() }
+        }
     }
 
     fun addToPlaylist(items: List<QueueSong>) {
@@ -273,3 +355,6 @@ val LocalPlaying = staticCompositionLocalOf { false }
 
 /** The song that is playing, as serverId to songId. */
 val LocalNowPlaying = staticCompositionLocalOf<Pair<String?, String?>?> { null }
+
+/** A yes/no question before something that can't be undone; [action] names the yes. */
+data class Confirm(val title: String, val text: String, val action: String = "Delete", val onConfirm: () -> Unit)

@@ -305,6 +305,36 @@ class Handler(BaseHTTPRequestHandler):
         if self.connect_url and url.path.startswith("/connect-tonearm"):
             return self.forward_connect("DELETE")
         with self.lib.lock:
+            if self.headers.get("X-Api-Key") == LIDARR_KEY:
+                track_file = re.match(r"^/api/v1/trackfile/(\d+)$", url.path)
+                if track_file:
+                    n = int(track_file.group(1)) - 5000
+                    ids = list(self.lib.songs)
+                    if 0 <= n < len(ids):
+                        song = self.library_remove_song(ids[n])
+                        print(f"    lidarr: deleted the file of {song['artist']} - {song['title']}", flush=True)
+                        return self.send_raw({})
+                    return self.send_raw({"message": "NotFound"}, 404)
+                lib_album = re.match(r"^/api/v1/album/(\d+)$", url.path)
+                if lib_album and int(lib_album.group(1)) >= 1000:
+                    album_id, album = self.library_album_by_lidarr_id(int(lib_album.group(1)))
+                    if album is not None:
+                        for song in list(album["_songs"]):
+                            self.library_remove_song(song["id"])
+                        self.lib.albums.pop(album_id, None)
+                        print(f"    lidarr: deleted library album {album['name']} ({url.query})", flush=True)
+                        return self.send_raw({})
+                lib_artist = re.match(r"^/api/v1/artist/(\d+)$", url.path)
+                if lib_artist and 100 <= int(lib_artist.group(1)) < 1000:
+                    artist = next((a for a in self.library_artists() if a["id"] == int(lib_artist.group(1))), None)
+                    if artist:
+                        aid = artist["foreignArtistId"][4:]
+                        for album_id in [k for k, a in self.lib.albums.items() if a["artistId"] == aid]:
+                            for song in list(self.lib.albums[album_id]["_songs"]):
+                                self.library_remove_song(song["id"])
+                            self.lib.albums.pop(album_id, None)
+                        print(f"    lidarr: deleted library artist {artist['artistName']} ({url.query})", flush=True)
+                        return self.send_raw({})
             album = re.match(r"^/api/v1/album/(\d+)$", url.path)
             if album and self.headers.get("X-Api-Key") == LIDARR_KEY:
                 for mbid, state in list(self.lib.lidarr_albums.items()):
@@ -536,6 +566,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def lidarr_put(self, endpoint, body):
         if endpoint == "album/monitor":
+            for album_id in body.get("albumIds", []):
+                lib_id, album = self.library_album_by_lidarr_id(album_id)
+                if album is not None:
+                    album["_monitored"] = bool(body.get("monitored"))
+                    print(f"    lidarr: library album {album['name']} monitored={body.get('monitored')}", flush=True)
             changed = []
             for state in self.lib.lidarr_albums.values():
                 if state["id"] in body.get("albumIds", []):
@@ -567,8 +602,47 @@ class Handler(BaseHTTPRequestHandler):
     def lidarr_entry(self, artist_id):
         return next((e for e in LIDARR_CATALOG if self.lib.lidarr_artists.get(e["foreignArtistId"], {}).get("id") == artist_id), None)
 
+    # --- The library's own music as Lidarr manages it, so deleting songs/albums/artists can be tried ---
+    def library_artists(self):
+        return [{"id": 100 + i, "artistName": name, "foreignArtistId": f"lib-{aid}", "monitored": True}
+                for i, (aid, name) in enumerate(ARTISTS.items()) if any(a["artistId"] == aid for a in self.lib.albums.values())]
+
+    def library_albums(self, lidarr_artist_id):
+        artist = next((a for a in self.library_artists() if a["id"] == lidarr_artist_id), None)
+        if not artist:
+            return []
+        aid = artist["foreignArtistId"][4:]
+        return [{"id": 1000 + i, "title": album["name"], "artistId": lidarr_artist_id, "monitored": album.get("_monitored", True),
+                 "foreignAlbumId": f"lib-{album_id}", "albumType": "Album", "secondaryTypes": []}
+                for i, (album_id, album) in enumerate(self.lib.albums.items()) if album["artistId"] == aid]
+
+    def library_album_by_lidarr_id(self, lidarr_album_id):
+        for i, (album_id, album) in enumerate(self.lib.albums.items()):
+            if 1000 + i == lidarr_album_id:
+                return album_id, album
+        return None, None
+
+    def library_remove_song(self, song_id):
+        song = self.lib.songs.pop(song_id, None)
+        if song:
+            album = self.lib.albums.get(song["albumId"])
+            if album:
+                album["_songs"] = [s for s in album["_songs"] if s["id"] != song_id]
+                album["songCount"] = len(album["_songs"])
+        return song
+
     def lidarr_get(self, endpoint, one):
         term = (one("term") or "").lower()
+        if endpoint == "album" and one("artistId") and int(one("artistId")) >= 100:
+            return self.send_raw(self.library_albums(int(one("artistId"))))
+        if endpoint == "track" and one("albumId") and int(one("albumId")) >= 1000:
+            album_id, album = self.library_album_by_lidarr_id(int(one("albumId")))
+            tracks = []
+            for song in (album or {}).get("_songs", []):
+                n = list(self.lib.songs).index(song["id"])
+                tracks.append({"id": len(tracks) + 1, "title": song["title"], "albumId": int(one("albumId")), "trackNumber": str(song["track"]),
+                               "mediumNumber": song.get("discNumber", 1), "hasFile": True, "trackFileId": 5000 + n, "_song": song["id"]})
+            return self.send_raw([{k: v for k, v in t.items() if not k.startswith("_")} for t in tracks])
         if endpoint == "system/status":
             return self.send_raw({"appName": "Lidarr", "instanceName": "Lidarr", "version": "2.9.6.4552"})
         if endpoint == "rootfolder":
@@ -579,7 +653,7 @@ class Handler(BaseHTTPRequestHandler):
         if endpoint == "metadataprofile":
             return self.send_raw([{"id": 1, "name": "Standard"}])
         if endpoint == "artist":
-            return self.send_raw([self.lidarr_artist(e) for e in LIDARR_CATALOG if e["foreignArtistId"] in self.lib.lidarr_artists])
+            return self.send_raw([self.lidarr_artist(e) for e in LIDARR_CATALOG if e["foreignArtistId"] in self.lib.lidarr_artists] + self.library_artists())
         if endpoint == "album" and one("artistId"):
             entry = self.lidarr_entry(int(one("artistId")))
             if entry:

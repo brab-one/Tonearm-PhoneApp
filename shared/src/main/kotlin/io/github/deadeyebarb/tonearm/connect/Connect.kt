@@ -153,6 +153,13 @@ data class DiscoveryPick(
     val reason: String? = null,
 )
 
+@Serializable
+data class DislikedSong(val artist: String, val title: String, val album: String? = null, val at: Long = 0)
+
+/** What the user doesn't want: disliked songs, and artists they said "not for me" to. */
+@Serializable
+data class Disliked(val songs: List<DislikedSong> = emptyList(), val artists: List<String> = emptyList())
+
 /** One song as an app played it, for the Tonearm server's listening history; skipped ones too. */
 @Serializable
 data class Played(
@@ -257,6 +264,7 @@ class ConnectClient(private val http: IntegrationHttp, private val json: Json) {
             recommendations = flag("recommendations"),
             discovery = flag("discovery"),
             history = flag("history"),
+            dislikes = flag("dislikes"),
             ai = response["ai"]?.jsonPrimitive?.contentOrNull,
         )
     }
@@ -289,6 +297,14 @@ class ConnectClient(private val http: IntegrationHttp, private val json: Json) {
     suspend fun dismiss(session: ServerSession, artist: String, album: String? = null) {
         call(ConnectRoute.Server(session), "dismiss", listOf("artist" to artist, "album" to album))
     }
+
+    /** Dislikes a song on the Tonearm server, or ([on] false) takes that back. */
+    suspend fun dislike(session: ServerSession, artist: String, title: String, album: String?, on: Boolean) {
+        call(ConnectRoute.Server(session), "dislike", listOf("artist" to artist, "title" to title, "album" to album, "on" to on))
+    }
+
+    /** The user's disliked songs and the artists they said no to. */
+    suspend fun disliked(session: ServerSession): Disliked = json.decodeFromJsonElement(Disliked.serializer(), call(ConnectRoute.Server(session), "disliked"))
 
     /** Artists like [artist], marked when the library has them. */
     suspend fun similarArtists(session: ServerSession, artist: String): List<SimilarArtist> =

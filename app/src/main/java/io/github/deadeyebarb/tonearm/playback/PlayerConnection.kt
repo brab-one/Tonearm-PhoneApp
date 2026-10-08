@@ -226,6 +226,11 @@ class PlayerConnection(private val context: Context, private val factory: MediaI
     fun move(from: Int, to: Int) = withController { it.moveMediaItem(from, to) }
     fun remove(index: Int) = withController { it.removeMediaItem(index) }
 
+    /** Takes every song [match] picks out of the queue; when the one playing goes, the next one plays. */
+    fun removeWhere(match: (MediaItem) -> Boolean) = withController { c ->
+        for (i in c.mediaItemCount - 1 downTo 0) if (match(c.getMediaItemAt(i))) c.removeMediaItem(i)
+    }
+
     fun skipTo(index: Int) = withController {
         it.seekToDefaultPosition(index)
         Util.handlePlayButtonAction(it)

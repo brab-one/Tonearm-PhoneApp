@@ -101,7 +101,7 @@ private fun YouTubeSearching() {
 }
 
 /** Songs that aren't on the server, playable from YouTube Music. */
-private fun LazyListScope.youtubeResults(state: Load<List<Song>>?, onPlay: (List<QueueSong>, Int) -> Unit) {
+private fun LazyListScope.youtubeResults(state: Load<List<Song>>?, order: (List<Song>) -> List<Song>, onPlay: (List<QueueSong>, Int) -> Unit) {
     when (state) {
         null -> Unit
         Load.Loading -> item { YouTubeSearching() }
@@ -121,8 +121,9 @@ private fun LazyListScope.youtubeResults(state: Load<List<Song>>?, onPlay: (List
                     )
                 }
             }
-            val queue = state.value.map { QueueSong(YouTubeMusic.SOURCE_ID, it) }
-            itemsIndexed(state.value, key = { _, s -> "yt:" + s.id }) { i, song ->
+            val songs = order(state.value)
+            val queue = songs.map { QueueSong(YouTubeMusic.SOURCE_ID, it) }
+            itemsIndexed(songs, key = { _, s -> "yt:" + s.id }) { i, song ->
                 SongRow(song, serverId = YouTubeMusic.SOURCE_ID, showAlbum = false, onClick = { onPlay(queue, i) })
             }
         }
@@ -367,8 +368,15 @@ fun SearchScreen() {
                             RequestPrompt(query.trim())
                         }
                     } else {
-                        val best = remember(result, youtubeHits, vm.web) {
-                            bestMatches(query.trim(), result.song, actions.activeServerId, youtubeHits, vm.web?.songs.orEmpty())
+                        // Disliked songs (and songs by artists said no to) go last, and never into the best matches.
+                        val dislikes by c.dislikes.state.collectAsStateWithLifecycle()
+                        val songs = remember(result, dislikes) { c.dislikes.demote(result.song, { it.artist }, { it.title }) }
+                        val best = remember(result, youtubeHits, vm.web, dislikes) {
+                            fun ok(artist: String?, title: String) = !c.dislikes.isDisliked(artist, title)
+                            bestMatches(
+                                query.trim(), result.song.filter { ok(it.artist, it.title) }, actions.activeServerId,
+                                youtubeHits.filter { ok(it.artist, it.title) }, vm.web?.songs.orEmpty().filter { ok(it.artist, it.title) },
+                            )
                         }
                         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
                             if (best.isNotEmpty()) {
@@ -394,10 +402,10 @@ fun SearchScreen() {
                                     }
                                 }
                             }
-                            if (result.song.isNotEmpty()) {
+                            if (songs.isNotEmpty()) {
                                 item { SectionHeader("Songs") }
-                                itemsIndexed(result.song, key = { _, s -> s.id }) { i, song ->
-                                    SongRow(song, onClick = { actions.play(result.song, i) })
+                                itemsIndexed(songs, key = { _, s -> s.id }) { i, song ->
+                                    SongRow(song, onClick = { actions.play(songs, i) })
                                 }
                             }
                             if (vm.phone.isNotEmpty()) {
@@ -423,7 +431,7 @@ fun SearchScreen() {
                                     }
                                 }
                             }
-                            youtubeResults(youtube) { queue, index -> actions.playEntries(queue, index) }
+                            youtubeResults(youtube, { c.dislikes.demote(it, { s -> s.artist }, { s -> s.title }) }) { queue, index -> actions.playEntries(queue, index) }
                             item { RequestPrompt(query.trim()) }
                         }
                     }

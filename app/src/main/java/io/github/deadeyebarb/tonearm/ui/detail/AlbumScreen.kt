@@ -19,6 +19,7 @@ import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 import androidx.compose.material.icons.automirrored.rounded.PlaylistPlay
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.DeleteForever
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material3.Icon
@@ -163,6 +164,9 @@ private fun AlbumMenu(album: Album) {
                     )
                 })
                 album.artistId?.let { add(MenuAction("Go to artist", Icons.Rounded.Person) { actions.openArtist(it) }) }
+                if (actions.canDeleteMusic && album.artistLabel.isNotEmpty()) {
+                    add(MenuAction("Delete from server", Icons.Rounded.DeleteForever) { actions.deleteFromServer(album.artistLabel, album.name, album.year) { it.albumId == album.id } })
+                }
             },
         )
     }

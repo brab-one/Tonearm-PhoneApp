@@ -22,8 +22,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 import androidx.compose.material.icons.automirrored.rounded.PlaylistPlay
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
+import androidx.compose.material.icons.outlined.ThumbDown
 import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.DeleteForever
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.DownloadDone
 import androidx.compose.material.icons.rounded.Favorite
@@ -34,6 +36,7 @@ import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Radio
 import androidx.compose.material.icons.rounded.RemoveCircleOutline
 import androidx.compose.material.icons.rounded.Shuffle
+import androidx.compose.material.icons.rounded.ThumbDown
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -53,15 +56,19 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.github.deadeyebarb.tonearm.container
 import io.github.deadeyebarb.tonearm.download.DownloadEntry
 import io.github.deadeyebarb.tonearm.local.LocalMusic
 import io.github.deadeyebarb.tonearm.media.QueueSong
@@ -112,9 +119,11 @@ fun SongRow(
     val playing = LocalPlaying.current
     val download = downloadOf(sid, song.id)
     val fetch = rememberFetchState(song, sid)
+    val disliked = rememberDisliked(song)
     ListItem(
         modifier = modifier
             .clickable(onClick = onClick)
+            .alpha(if (disliked && !isCurrent) 0.45f else 1f)
             .then(
                 if (isCurrent) {
                     Modifier.drawBehind {
@@ -198,11 +207,16 @@ fun SongMenuButton(song: Song, serverId: String?, extraActions: List<MenuAction>
     val starred = isStarred(serverId, song.id, song.starred != null)
     val download = downloadOf(serverId, song.id)
     val sameServer = serverId == actions.activeServerId
+    val disliked = rememberDisliked(song)
+    val canDislike = rememberCanDislike()
     val items = buildList {
         add(MenuAction("Play next", Icons.AutoMirrored.Rounded.PlaylistPlay) { actions.playNext(listOf(entry)) })
         add(MenuAction("Add to queue", Icons.AutoMirrored.Rounded.QueueMusic) { actions.enqueue(listOf(entry)) })
         if (sameServer) add(MenuAction("Add to playlist", Icons.AutoMirrored.Rounded.PlaylistAdd) { actions.addToPlaylist(listOf(entry)) })
         add(MenuAction(if (starred) "Unlike" else "Like", if (starred) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder) { actions.setLiked(entry, !starred) })
+        if (canDislike) {
+            add(MenuAction(if (disliked) "Remove dislike" else "Dislike", if (disliked) Icons.Rounded.ThumbDown else Icons.Outlined.ThumbDown) { actions.setDisliked(entry, !disliked) })
+        }
         // A YouTube Music song or one stored on the phone isn't on any server: nothing to download.
         if (!LocalMusic.isLocal(serverId)) {
             if (download == null || download.failed) {
@@ -216,6 +230,7 @@ fun SongMenuButton(song: Song, serverId: String?, extraActions: List<MenuAction>
             add(MenuAction("Instant mix", Icons.Rounded.Radio) { actions.instantMix(entry) })
             song.albumId?.let { add(MenuAction("Go to album", Icons.Rounded.Album) { actions.openAlbum(it) }) }
             song.artistId?.let { add(MenuAction("Go to artist", Icons.Rounded.Person) { actions.openArtist(it) }) }
+            if (actions.canDeleteMusic) add(MenuAction("Delete from server", Icons.Rounded.DeleteForever) { actions.deleteFromServer(entry) })
         }
         addAll(extraActions)
     }
@@ -399,6 +414,35 @@ fun StarButton(serverId: String?, kind: StarKind, id: String, fromServer: Boolea
 }
 
 /** The like button for a song, library or YouTube Music. */
+/** Whether the user disliked [song]; follows changes. */
+@Composable
+fun rememberDisliked(song: Song): Boolean {
+    val c = LocalContext.current.container
+    val state by c.dislikes.state.collectAsStateWithLifecycle()
+    return remember(state, song.id) { c.dislikes.isDisliked(song.artist, song.title) }
+}
+
+/** Whether songs can be disliked, following the Tonearm server as it's found. */
+@Composable
+fun rememberCanDislike(): Boolean {
+    val c = LocalContext.current.container
+    val server by c.tonearmServer.server.collectAsStateWithLifecycle()
+    return server?.dislikes == true
+}
+
+@Composable
+fun DislikeButton(entry: QueueSong, modifier: Modifier = Modifier) {
+    val actions = LocalActions.current
+    val disliked = rememberDisliked(entry.song)
+    IconButton(onClick = { actions.setDisliked(entry, !disliked) }, modifier = modifier) {
+        Icon(
+            if (disliked) Icons.Rounded.ThumbDown else Icons.Outlined.ThumbDown,
+            if (disliked) "Remove dislike" else "Dislike",
+            tint = if (disliked) Hud.colors.danger else Hud.colors.dim,
+        )
+    }
+}
+
 @Composable
 fun LikeButton(entry: QueueSong, modifier: Modifier = Modifier) {
     val actions = LocalActions.current

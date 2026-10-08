@@ -78,6 +78,12 @@ Related repositories:
 - **AI picks** (with the Tonearm server and its AI): albums by artists you don't have, from what you play,
   like and skip, under Discover; tap one to open it on YouTube Music, or request it
 - **Not for me**: the thumbs-down on a pick keeps that artist out of the picks (until you play them a few times)
+- **Dislike** a song (thumbs-down on Now Playing or in its menu, with the Tonearm server 1.5.4 or later): it's
+  skipped when it plays, goes to the end of searches and out of mixes, Daily Discovery and Android Auto's mix,
+  and the server's AI steers away from it. The desktop app sees the same dislikes; liking a song takes it back
+- **Delete from server** (Lidarr with full rights): a song from its menu, an album or an artist from its page,
+  after a yes. Lidarr deletes the files and won't download them again unless you ask; Navidrome drops them after
+  its scan. Nothing is deleted when Lidarr has more than one match for it
 - **More like this** on songs, albums and artists: similar songs to pick from (play them or put them in a
   playlist), similar artists and, with the server's AI, albums like it
 - **Search** across the library, YouTube Music and Deezer at once, best matches first whatever the source,

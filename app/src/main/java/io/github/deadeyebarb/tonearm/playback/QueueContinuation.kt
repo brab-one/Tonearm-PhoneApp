@@ -3,6 +3,7 @@ package io.github.deadeyebarb.tonearm.playback
 import io.github.deadeyebarb.tonearm.data.QueueEnd
 import io.github.deadeyebarb.tonearm.data.SettingsRepository
 import io.github.deadeyebarb.tonearm.integrations.Continuation
+import io.github.deadeyebarb.tonearm.likes.Dislikes
 import io.github.deadeyebarb.tonearm.media.QueueSong
 import io.github.deadeyebarb.tonearm.subsonic.SessionManager
 import io.github.deadeyebarb.tonearm.subsonic.SubsonicApi
@@ -14,8 +15,9 @@ class QueueContinuation(
     private val sessions: SessionManager,
     youtube: YouTubeMusic,
     private val settings: SettingsRepository,
+    dislikes: Dislikes,
 ) {
-    private val continuation = Continuation(api, youtube)
+    private val continuation = Continuation(api, youtube, dislikes::isDisliked)
 
     suspend fun next(last: QueueSong, played: Set<String>): List<QueueSong> {
         val s = settings.state.value

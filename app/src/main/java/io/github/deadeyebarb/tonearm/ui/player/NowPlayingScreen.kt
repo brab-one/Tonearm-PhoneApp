@@ -86,6 +86,8 @@ import io.github.deadeyebarb.tonearm.ui.EqualizerRoute
 import io.github.deadeyebarb.tonearm.ui.common.ActionMenu
 import io.github.deadeyebarb.tonearm.ui.common.CoverArt
 import io.github.deadeyebarb.tonearm.ui.common.CoverSize
+import io.github.deadeyebarb.tonearm.ui.common.DislikeButton
+import io.github.deadeyebarb.tonearm.ui.common.rememberCanDislike
 import io.github.deadeyebarb.tonearm.ui.common.LikeButton
 import io.github.deadeyebarb.tonearm.ui.common.LocalActions
 import io.github.deadeyebarb.tonearm.ui.common.MenuAction
@@ -258,6 +260,7 @@ private fun TrackInfo(entry: QueueSong?) {
                 },
             )
         }
+        if (rememberCanDislike()) DislikeButton(entry)
         LikeButton(entry)
     }
 }

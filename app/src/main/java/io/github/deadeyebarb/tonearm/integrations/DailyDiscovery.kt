@@ -2,6 +2,7 @@ package io.github.deadeyebarb.tonearm.integrations
 
 import android.content.Context
 import io.github.deadeyebarb.tonearm.data.jsonDataStore
+import io.github.deadeyebarb.tonearm.likes.Dislikes
 import io.github.deadeyebarb.tonearm.media.QueueSong
 import io.github.deadeyebarb.tonearm.subsonic.ServerSession
 import io.github.deadeyebarb.tonearm.subsonic.SessionManager
@@ -67,6 +68,7 @@ class DailyDiscovery(
     private val sessions: SessionManager,
     private val integrations: IntegrationsService,
     private val recommender: Recommender,
+    private val dislikes: Dislikes,
 ) {
     private val store = jsonDataStore(context, "daily", DailyState.serializer(), DailyState(), json)
     private val mutex = Mutex()
@@ -117,13 +119,13 @@ class DailyDiscovery(
         val buckets = artistBuckets.awaitAll() + listOf(similar?.songs.orEmpty().shuffled(random).take(12))
 
         val songs = interleave(buckets)
-            .filter { Recommender.key(it.artist.orEmpty(), it.title) !in recentlyHeard }
+            .filter { Recommender.key(it.artist.orEmpty(), it.title) !in recentlyHeard && !dislikes.isDisliked(it.artist, it.title) }
             .distinctBy { it.id }
             .take(SIZE)
             .toMutableList()
         if (songs.size < SIZE / 2 && !discover.libraryEmpty) {
             songs += runCatching { api.randomSongs(SIZE - songs.size, session) }.getOrDefault(emptyList())
-                .filter { s -> songs.none { it.id == s.id } }
+                .filter { s -> songs.none { it.id == s.id } && !dislikes.isDisliked(s.artist, s.title) }
         }
 
         val missing = (

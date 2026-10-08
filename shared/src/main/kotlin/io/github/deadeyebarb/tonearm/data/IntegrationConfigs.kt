@@ -54,6 +54,8 @@ data class TonearmServerInfo(
     val discovery: Boolean = false,
     /** It keeps the listening history: the apps tell it what they played. */
     val history: Boolean = false,
+    /** It keeps disliked songs (server 1.5.4 and later). */
+    val dislikes: Boolean = false,
     /** Which AI answers ("Claude claude-opus-5-5"), when there is one. */
     val ai: String? = null,
 ) {

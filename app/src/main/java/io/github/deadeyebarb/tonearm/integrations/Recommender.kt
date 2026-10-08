@@ -2,6 +2,7 @@ package io.github.deadeyebarb.tonearm.integrations
 
 import io.github.deadeyebarb.tonearm.connect.ArtistCount
 import io.github.deadeyebarb.tonearm.connect.PhoneConnect
+import io.github.deadeyebarb.tonearm.likes.Dislikes
 import io.github.deadeyebarb.tonearm.media.QueueSong
 import io.github.deadeyebarb.tonearm.subsonic.AlbumListType
 import io.github.deadeyebarb.tonearm.subsonic.Artist
@@ -10,10 +11,10 @@ import io.github.deadeyebarb.tonearm.subsonic.ServerSession
 import io.github.deadeyebarb.tonearm.subsonic.SessionManager
 import io.github.deadeyebarb.tonearm.subsonic.Song
 import io.github.deadeyebarb.tonearm.subsonic.SubsonicApi
+import java.time.Instant
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
-import java.time.Instant
 
 data class RotationEntry(val name: String, val scrobbles: Int, val artist: Artist?)
 
@@ -45,6 +46,7 @@ class Recommender(
     private val api: SubsonicApi,
     private val sessions: SessionManager,
     private val connect: PhoneConnect,
+    private val dislikes: Dislikes,
 ) {
     suspend fun discover(): DiscoverData = coroutineScope {
         val month = async { connect.listening(30, artists = 25) }
@@ -105,8 +107,9 @@ class Recommender(
     suspend fun mix(size: Int = 60): List<QueueSong> {
         val session = sessions.awaitActive()
         val pool = similarToFavourites(session)
-        val picks = pool.songs.filter { key(it.artist.orEmpty(), it.title) !in pool.recentlyHeard }.shuffled().take(size).toMutableList()
-        if (picks.size < 15) picks += api.randomSongs(size - picks.size, session).filter { s -> picks.none { it.id == s.id } }
+        val picks = pool.songs.filter { key(it.artist.orEmpty(), it.title) !in pool.recentlyHeard && !dislikes.isDisliked(it.artist, it.title) }
+            .shuffled().take(size).toMutableList()
+        if (picks.size < 15) picks += api.randomSongs(size - picks.size, session).filter { s -> picks.none { it.id == s.id } && !dislikes.isDisliked(s.artist, s.title) }
         return picks.shuffled().map { QueueSong(session.id, it) }
     }
 

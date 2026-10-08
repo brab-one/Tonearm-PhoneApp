@@ -23,6 +23,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.DeleteForever
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -95,6 +96,11 @@ fun ArtistScreen(id: String) {
                     Icon(Icons.Rounded.AutoAwesome, "More like this")
                 }
                 StarButton(serverId, StarKind.ARTIST, p.artist.id, p.artist.starred != null)
+                if (actions.canDeleteMusic) {
+                    IconButton(onClick = { actions.deleteFromServer(p.artist.name, null, null) { it.artistId == p.artist.id } }) {
+                        Icon(Icons.Rounded.DeleteForever, "Delete from server", tint = Hud.colors.dim)
+                    }
+                }
             }
         },
     ) {

@@ -18,12 +18,18 @@ data class NextSong(val song: Song, val youtube: Boolean)
  * What to play when the queue runs out: music like the last song (the server's similar songs, then
  * YouTube Music's radio with library copies swapped in), or another of your playlists.
  */
-class Continuation(private val api: SubsonicApi, private val youtube: YouTubeMusic) {
+class Continuation(
+    private val api: SubsonicApi,
+    private val youtube: YouTubeMusic,
+    /** Songs to leave out of what's appended (the user disliked them). */
+    private val disliked: (artist: String?, title: String) -> Boolean = { _, _ -> false },
+) {
 
     /** Songs like [last]. [played] holds keys from [key] to leave out. */
     suspend fun similar(last: Song, lastIsYouTube: Boolean, session: ServerSession?, played: Set<String>, allowYouTube: Boolean): List<NextSong> {
         val fromLibrary = if (session != null && !lastIsYouTube) {
-            runCatching { api.similarSongs(last.id, 40) }.getOrDefault(emptyList()).map { NextSong(it, false) }.filterNot { key(it) in played }
+            runCatching { api.similarSongs(last.id, 40) }.getOrDefault(emptyList()).map { NextSong(it, false) }
+                .filterNot { key(it) in played || disliked(it.song.artistLabel, it.song.title) }
         } else {
             emptyList()
         }
@@ -49,7 +55,7 @@ class Continuation(private val api: SubsonicApi, private val youtube: YouTubeMus
                 }
             }.awaitAll()
         }
-        return (fromLibrary + swapped).filterNot { key(it) in played }.distinctBy(::key).take(MAX_SONGS)
+        return (fromLibrary + swapped).filterNot { key(it) in played || disliked(it.song.artistLabel, it.song.title) }.distinctBy(::key).take(MAX_SONGS)
     }
 
     /** Another playlist that isn't mostly what just played. */

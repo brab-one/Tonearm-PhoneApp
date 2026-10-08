@@ -1,12 +1,5 @@
 package io.github.deadeyebarb.tonearm.ui
 
-import io.github.deadeyebarb.tonearm.ui.library.PhoneAlbumScreen
-import io.github.deadeyebarb.tonearm.ui.common.LocalPhoneLikes
-import io.github.deadeyebarb.tonearm.youtube.YtAlbum
-import io.github.deadeyebarb.tonearm.youtube.YtArtist
-import io.github.deadeyebarb.tonearm.ui.detail.YouTubeAlbumScreen
-import io.github.deadeyebarb.tonearm.ui.detail.YouTubeArtistScreen
-import io.github.deadeyebarb.tonearm.ui.common.LocalPendingLikes
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -33,6 +26,7 @@ import androidx.compose.material.icons.rounded.DownloadForOffline
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -40,6 +34,7 @@ import androidx.compose.material3.SnackbarData
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -71,6 +66,8 @@ import io.github.deadeyebarb.tonearm.ui.common.AppActions
 import io.github.deadeyebarb.tonearm.ui.common.LocalActions
 import io.github.deadeyebarb.tonearm.ui.common.LocalDownloads
 import io.github.deadeyebarb.tonearm.ui.common.LocalNowPlaying
+import io.github.deadeyebarb.tonearm.ui.common.LocalPendingLikes
+import io.github.deadeyebarb.tonearm.ui.common.LocalPhoneLikes
 import io.github.deadeyebarb.tonearm.ui.common.LocalPlaying
 import io.github.deadeyebarb.tonearm.ui.common.LocalStarOverrides
 import io.github.deadeyebarb.tonearm.ui.connect.ConnectScreen
@@ -79,12 +76,15 @@ import io.github.deadeyebarb.tonearm.ui.detail.AlbumScreen
 import io.github.deadeyebarb.tonearm.ui.detail.ArtistScreen
 import io.github.deadeyebarb.tonearm.ui.detail.GenreScreen
 import io.github.deadeyebarb.tonearm.ui.detail.PlaylistScreen
+import io.github.deadeyebarb.tonearm.ui.detail.YouTubeAlbumScreen
+import io.github.deadeyebarb.tonearm.ui.detail.YouTubeArtistScreen
 import io.github.deadeyebarb.tonearm.ui.discover.DailyScreen
 import io.github.deadeyebarb.tonearm.ui.discover.DiscoverScreen
 import io.github.deadeyebarb.tonearm.ui.discover.MoreLikeScreen
 import io.github.deadeyebarb.tonearm.ui.downloads.DownloadsScreen
 import io.github.deadeyebarb.tonearm.ui.home.HomeScreen
 import io.github.deadeyebarb.tonearm.ui.library.LibraryScreen
+import io.github.deadeyebarb.tonearm.ui.library.PhoneAlbumScreen
 import io.github.deadeyebarb.tonearm.ui.player.MiniPlayer
 import io.github.deadeyebarb.tonearm.ui.player.NowPlayingScreen
 import io.github.deadeyebarb.tonearm.ui.request.LidarrRequestDialog
@@ -99,6 +99,8 @@ import io.github.deadeyebarb.tonearm.ui.theme.Hud
 import io.github.deadeyebarb.tonearm.ui.theme.HudBackground
 import io.github.deadeyebarb.tonearm.ui.theme.glow
 import io.github.deadeyebarb.tonearm.ui.theme.glowBorder
+import io.github.deadeyebarb.tonearm.youtube.YtAlbum
+import io.github.deadeyebarb.tonearm.youtube.YtArtist
 
 private enum class Tab(val route: Any, val label: String, val icon: ImageVector) {
     HOME(HomeRoute, "Home", Icons.Rounded.Home),
@@ -229,6 +231,15 @@ fun TonearmRoot(container: AppContainer, openPlayerRequests: Int, requestNotific
         }
         actions.playlistPicker?.let { items -> PlaylistPickerDialog(items) { actions.playlistPicker = null } }
         actions.lidarrRequest?.let { name -> LidarrRequestDialog(name) { actions.lidarrRequest = null } }
+        actions.confirm?.let { confirm ->
+            AlertDialog(
+                onDismissRequest = { actions.confirm = null },
+                title = { Text(confirm.title) },
+                text = { Text(confirm.text) },
+                confirmButton = { TextButton(onClick = { actions.confirm = null; confirm.onConfirm() }) { Text(confirm.action, color = Hud.colors.danger) } },
+                dismissButton = { TextButton(onClick = { actions.confirm = null }) { Text("Cancel") } },
+            )
+        }
     }
 }
 
