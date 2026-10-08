@@ -17,3 +17,6 @@
 -dontwarn java.beans.**
 -dontwarn javax.script.**
 -dontwarn jdk.dynalink.**
+# Its protobuf messages (how YouTube Music albums and playlists go on past the first page) are read field by field,
+# by name, at runtime: R8 mustn't rename or drop their fields ("Field browseId_ for … not found" otherwise).
+-keepclassmembers class * extends com.google.protobuf.GeneratedMessageLite { <fields>; }
