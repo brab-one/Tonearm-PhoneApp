@@ -39,6 +39,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -206,7 +207,7 @@ private fun HistoryList(page: StatsPage, period: Period, offset: Int, actions: A
 private fun Totals(plays: Int, minutes: Int) {
     Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Tile("Plays", plays.toString(), Modifier.weight(1f))
-        Tile("Hours", String.format(Locale.getDefault(), "%.1f", minutes / 60.0), Modifier.weight(1f))
+        Tile("Hours", String.format(LocalConfiguration.current.locales[0], "%.1f", minutes / 60.0), Modifier.weight(1f))
     }
 }
 

@@ -12,6 +12,7 @@ import android.graphics.BitmapFactory
 import android.view.KeyEvent
 import android.view.View
 import android.widget.RemoteViews
+import androidx.core.graphics.scale
 import io.github.deadeyebarb.tonearm.AppContainer
 import io.github.deadeyebarb.tonearm.MainActivity
 import io.github.deadeyebarb.tonearm.R
@@ -117,7 +118,7 @@ object PlayerWidgets {
                 while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= MAX_COVER) sample *= 2
                 BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sample })?.let {
                     val scale = MAX_COVER.toFloat() / maxOf(it.width, it.height)
-                    if (scale < 1) Bitmap.createScaledBitmap(it, (it.width * scale).toInt(), (it.height * scale).toInt(), true) else it
+                    if (scale < 1) it.scale((it.width * scale).toInt(), (it.height * scale).toInt()) else it
                 }
             }.getOrNull()
         }
