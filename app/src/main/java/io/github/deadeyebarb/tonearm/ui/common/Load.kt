@@ -32,6 +32,9 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import io.github.deadeyebarb.tonearm.subsonic.userMessage
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 
 sealed interface Load<out T> {
@@ -40,20 +43,24 @@ sealed interface Load<out T> {
     data class Failed(val error: Throwable) : Load<Nothing>
 }
 
-/** Loads one value for a screen and keeps it across configuration changes. */
-class LoaderViewModel<T>(private val loader: suspend () -> T) : ViewModel() {
+/** Loads one value for a screen and keeps it across configuration changes; again, quietly, each time [reloadOn] moves on. */
+class LoaderViewModel<T>(private val loader: suspend () -> T, reloadOn: Flow<*>? = null) : ViewModel() {
     var state: Load<T> by mutableStateOf(Load.Loading)
         private set
     var refreshing by mutableStateOf(false)
         private set
 
+    private var loading: Job? = null
+
     init {
         reload()
+        if (reloadOn != null) viewModelScope.launch { reloadOn.drop(1).collect { reload(silent = true) } }
     }
 
-    /** With [silent], keeps showing the current value while reloading (pull to refresh). */
+    /** With [silent], keeps showing the current value while reloading (pull to refresh). A newer reload replaces an older one. */
     fun reload(silent: Boolean = false) {
-        viewModelScope.launch {
+        loading?.cancel()
+        loading = viewModelScope.launch {
             if (silent) refreshing = true else if (state !is Load.Ready) state = Load.Loading
             state = try {
                 Load.Ready(loader())
@@ -75,8 +82,8 @@ class LoaderViewModel<T>(private val loader: suspend () -> T) : ViewModel() {
 }
 
 @Composable
-fun <T> rememberLoader(vararg keys: Any?, loader: suspend () -> T): LoaderViewModel<T> =
-    viewModel(key = keys.joinToString("|")) { LoaderViewModel(loader) }
+fun <T> rememberLoader(vararg keys: Any?, reloadOn: Flow<*>? = null, loader: suspend () -> T): LoaderViewModel<T> =
+    viewModel(key = keys.joinToString("|")) { LoaderViewModel(loader, reloadOn) }
 
 @Composable
 fun <T> LoadContent(

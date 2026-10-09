@@ -179,7 +179,8 @@ private fun AlbumsPage() {
 private fun PlaylistsPage() {
     val c = LocalContext.current.container
     val actions = LocalActions.current
-    val vm = rememberLoader("playlists", serverKey()) { c.api.playlists() }
+    // Playlists made, renamed, deleted or filled elsewhere in the app show here too, also when this page isn't showing.
+    val vm = rememberLoader("playlists", serverKey(), reloadOn = c.playlistsChanged) { c.api.playlists() }
     var creating by remember { mutableStateOf(false) }
     LoadContent(vm) { playlists ->
         LazyColumn(Modifier.fillMaxSize()) {
@@ -201,7 +202,7 @@ private fun PlaylistsPage() {
                 creating = false
                 actions.launch {
                     c.api.createPlaylist(name, emptyList())
-                    vm.reload(silent = true)
+                    actions.playlistsChanged()
                 }
             },
             onDismiss = { creating = false },

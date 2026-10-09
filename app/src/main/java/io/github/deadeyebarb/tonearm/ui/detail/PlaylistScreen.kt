@@ -38,9 +38,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.deadeyebarb.tonearm.container
 import io.github.deadeyebarb.tonearm.media.MediaIds
 import io.github.deadeyebarb.tonearm.subsonic.Playlist
+import io.github.deadeyebarb.tonearm.subsonic.Song
 import io.github.deadeyebarb.tonearm.ui.common.ActionMenu
 import io.github.deadeyebarb.tonearm.ui.theme.Hud
 import io.github.deadeyebarb.tonearm.ui.theme.cornerBrackets
@@ -58,6 +60,9 @@ import io.github.deadeyebarb.tonearm.ui.common.SongRow
 import io.github.deadeyebarb.tonearm.ui.common.TextInputDialog
 import io.github.deadeyebarb.tonearm.ui.common.formatTotal
 import io.github.deadeyebarb.tonearm.ui.common.rememberLoader
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 @Composable
 fun PlaylistScreen(id: String) {
@@ -66,16 +71,20 @@ fun PlaylistScreen(id: String) {
     val serverId = actions.activeServerId
     val vm = rememberLoader("playlist", serverId, id) { c.api.playlist(id) }
     val playlist = vm.value
+    val session by c.sessions.active.collectAsStateWithLifecycle()
+    // Someone else's playlist (or a smart one) can be played but not changed.
+    val editable = playlist?.editableBy(session?.config?.username) == true
     var menu by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
     var keeping by remember { mutableStateOf(false) }
+    val removing = remember { Mutex() }
     val weekly = playlist?.let { WeeklyPicks.parse(it) }
     DetailScaffold(
         title = playlist?.name.orEmpty(),
         actions = {
             if (playlist != null) {
-                if (weekly != null) {
+                if (weekly != null && editable) {
                     IconButton(onClick = { keeping = true }) { Icon(Icons.Rounded.FavoriteBorder, "Like and keep this playlist", tint = Hud.colors.accent2) }
                 }
                 DownloadAllButton(actions.entries(playlist.entry))
@@ -83,12 +92,14 @@ fun PlaylistScreen(id: String) {
                     IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, "More") }
                     ActionMenu(
                         menu, { menu = false },
-                        listOf(
-                            MenuAction("Play next", Icons.AutoMirrored.Rounded.PlaylistPlay) { actions.playNext(actions.entries(playlist.entry)) },
-                            MenuAction("Add to queue", Icons.AutoMirrored.Rounded.QueueMusic) { actions.enqueue(actions.entries(playlist.entry)) },
-                            MenuAction("Rename", Icons.Rounded.Edit) { renaming = true },
-                            MenuAction("Delete playlist", Icons.Rounded.Delete) { deleting = true },
-                        ),
+                        buildList {
+                            add(MenuAction("Play next", Icons.AutoMirrored.Rounded.PlaylistPlay) { actions.playNext(actions.entries(playlist.entry)) })
+                            add(MenuAction("Add to queue", Icons.AutoMirrored.Rounded.QueueMusic) { actions.enqueue(actions.entries(playlist.entry)) })
+                            if (editable) {
+                                add(MenuAction("Rename", Icons.Rounded.Edit) { renaming = true })
+                                add(MenuAction("Delete playlist", Icons.Rounded.Delete) { deleting = true })
+                            }
+                        },
                     )
                 }
             }
@@ -123,11 +134,24 @@ fun PlaylistScreen(id: String) {
                 itemsIndexed(pl.entry, key = { i, s -> "$i:${s.id}" }) { i, song ->
                     SongRow(
                         song, onClick = { actions.play(pl.entry, i, context = context) },
-                        extraActions = listOf(
+                        extraActions = if (!editable) emptyList() else listOf(
                             MenuAction("Remove from playlist", Icons.Rounded.RemoveCircleOutline) {
+                                // Which copy of the song this row is: a playlist can hold a song twice.
+                                val copy = pl.entry.take(i + 1).count { it.id == song.id } - 1
                                 actions.launch {
-                                    c.api.removeFromPlaylist(pl.id, listOf(i))
-                                    vm.reload(silent = true)
+                                    // The server removes by position, so one removal at a time, each on the list as it is by then.
+                                    removing.withLock {
+                                        val index = vm.value?.entry?.indexOfCopy(song.id, copy) ?: return@withLock
+                                        vm.mutate { it.withoutEntry(index) }
+                                        try {
+                                            c.api.removeFromPlaylist(pl.id, listOf(index))
+                                        } catch (e: Exception) {
+                                            // Nothing was removed there: back in step with the server before the next one.
+                                            if (e !is CancellationException) runCatching { c.api.playlist(pl.id) }.onSuccess { fresh -> vm.mutate { fresh } }
+                                            throw e
+                                        }
+                                        actions.playlistsChanged()
+                                    }
                                 }
                             },
                         ),
@@ -145,9 +169,10 @@ fun PlaylistScreen(id: String) {
             onConfirm = { name ->
                 keeping = false
                 actions.launch {
-                    val session = c.sessions.active.value ?: return@launch
-                    c.weekly.keep(session, WeeklyBatch(playlist, weekly), name)
+                    val active = c.sessions.active.value ?: return@launch
+                    c.weekly.keep(active, WeeklyBatch(playlist, weekly), name)
                     vm.reload(silent = true)
+                    actions.playlistsChanged()
                     actions.message("Kept as “${name.trim()}”")
                 }
             },
@@ -162,6 +187,7 @@ fun PlaylistScreen(id: String) {
                 actions.launch {
                     c.api.renamePlaylist(playlist.id, name)
                     vm.mutate { it.copy(name = name) }
+                    actions.playlistsChanged()
                 }
             },
             onDismiss = { renaming = false },
@@ -177,6 +203,7 @@ fun PlaylistScreen(id: String) {
                     deleting = false
                     actions.launch {
                         c.api.deletePlaylist(playlist.id)
+                        actions.playlistsChanged()
                         actions.message("Playlist deleted")
                         actions.back()
                     }
@@ -204,4 +231,22 @@ private fun PlaylistHeader(playlist: Playlist, onPlay: (Boolean) -> Unit) {
         if (playlist.entry.isNotEmpty()) PlayShuffleButtons(onPlay = { onPlay(false) }, onShuffle = { onPlay(true) }, modifier = Modifier.fillMaxWidth())
         Spacer(Modifier.height(8.dp))
     }
+}
+
+/** Whether [username] may change this playlist: their own, and not one the server marks read-only (like a smart playlist). */
+fun Playlist.editableBy(username: String?): Boolean =
+    readonly != true && (owner.isNullOrBlank() || username.isNullOrBlank() || owner.equals(username, ignoreCase = true))
+
+/** Where the [copy]th copy (from 0) of song [id] is in this list, or null when there aren't that many. */
+fun List<Song>.indexOfCopy(id: String, copy: Int): Int? =
+    withIndex().filter { it.value.id == id }.getOrNull(copy)?.index
+
+/** The playlist without the song at [index], its count and length to match. */
+fun Playlist.withoutEntry(index: Int): Playlist {
+    val gone = entry.getOrNull(index) ?: return this
+    return copy(
+        entry = entry.filterIndexed { i, _ -> i != index },
+        songCount = (songCount - 1).coerceAtLeast(0),
+        duration = (duration - (gone.duration ?: 0)).coerceAtLeast(0),
+    )
 }

@@ -34,6 +34,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 /** Everything a screen can ask the app to do, so rows and menus don't need to know about services. */
@@ -321,6 +322,9 @@ class AppActions(
     fun addToPlaylist(items: List<QueueSong>) {
         playlistPicker = items
     }
+
+    /** Tells lists of playlists that one was made, renamed, deleted or had songs added or removed. */
+    fun playlistsChanged() = container.playlistsChanged.update { it + 1 }
 
     fun message(text: String) = container.messages.show(text)
 
