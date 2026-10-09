@@ -10,7 +10,13 @@ import io.github.deadeyebarb.tonearm.weekly.WeeklyAlbum
 import io.github.deadeyebarb.tonearm.weekly.WeeklyPicks
 import io.github.deadeyebarb.tonearm.weekly.WeeklySettings
 import io.github.deadeyebarb.tonearm.weekly.WeeklyState
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
@@ -30,6 +36,9 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /** A week of AI picks against one fake host playing Navidrome, the Tonearm server and Lidarr. */
 class WeeklyPicksTest {
@@ -61,6 +70,10 @@ class WeeklyPicksTest {
     private var homogenicAnswer = 200
     /** Lidarr can't be reached. */
     private var lidarrDown = false
+    /** Lidarr can't look these terms up (its metadata server is down, or Lidarr is restarting). */
+    private var lookupsDown: (String) -> Boolean = { false }
+    /** Adding Homogenic keeps Lidarr busy: the first latch opens once it's asked, the answer waits for the second. */
+    @Volatile private var homogenicHangs: Pair<CountDownLatch, CountDownLatch>? = null
     /** The music server fails to save the next ready week's comment. */
     private var failReadyOnce = false
 
@@ -73,7 +86,14 @@ class WeeklyPicksTest {
     @Before
     fun setUp() {
         server.dispatcher = object : Dispatcher() {
-            override fun dispatch(request: RecordedRequest): MockResponse = synchronized(this@WeeklyPicksTest) { answer(request) }
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                val response = synchronized(this@WeeklyPicksTest) { answer(request) }
+                homogenicHangs?.takeIf { request.method == "POST" && "rg-h" in request.body?.utf8().orEmpty() }?.let { (asked, answer) ->
+                    asked.countDown()
+                    answer.await(10, TimeUnit.SECONDS)
+                }
+                return response
+            }
         }
         server.start()
     }
@@ -119,6 +139,7 @@ class WeeklyPicksTest {
         }
         val endpoint = path.removePrefix("/api/v1/")
         if (lidarrDown) return MockResponse(code = 503)
+        if (endpoint == "album/lookup" && lookupsDown(q("term")!!)) return MockResponse(code = 503, body = """{"message":"metadata server unavailable"}""")
         if (request.method != "GET") lidarrChanges += request.method to endpoint + (url.encodedQuery?.let { "?$it" } ?: "")
         return when {
             endpoint == "importlist" -> {
@@ -470,5 +491,100 @@ class WeeklyPicksTest {
         // The server's clock is an hour behind the phone's.
         picks = week.replace("${T + 120_000}", "${T - 3_600_000}")
         assertEquals("This week's picks: 3 albums are downloading", weekly.tick(config, "k", session, now = T + 180_000))
+    }
+
+    @Test
+    fun `two checks at once ask lidarr for the run's albums only once`() = runTest {
+        weekly.tick(config, "k", session, now = T)
+        picks = six
+        // The hourly check and one asked for now.
+        val news = listOf(T + 180_000, T + 181_000).map { now -> async { weekly.tick(config, "k", session, now = now) } }.awaitAll()
+        assertEquals(listOf("This week's picks: 3 albums are downloading", null), news)
+        assertEquals(listOf(50, 60, 51), batch()!!.albums.map { it.lidarrId })
+        assertEquals(2, lidarrChanges.count { it == "POST" to "album" })
+        assertEquals(1, lidarrChanges.count { it == "PUT" to "album/monitor" })
+    }
+
+    @Test
+    fun `an album a check was cut off asking for is the week's once lidarr has it`() = runTest {
+        weekly.tick(config, "k", session, now = T)
+        picks = six
+        val asked = CountDownLatch(1)
+        val answer = CountDownLatch(1)
+        homogenicHangs = asked to answer
+        val check = launch { weekly.tick(config, "k", session, now = T + 180_000) }
+        withContext(Dispatchers.IO) { assertTrue(asked.await(10, TimeUnit.SECONDS)) }
+        check.cancelAndJoin()
+        homogenicHangs = null
+        answer.countDown()
+        // Lidarr went on with it all the same.
+        lidarrHas["rg-h"] = """[{"id":51,"title":"Homogenic","artistId":10,"foreignAlbumId":"rg-h","monitored":true,"artist":{"artistName":"Björk"}}]"""
+        // Meanwhile the AI was asked again: the run waits for its picks rather than ending short.
+        picks = """{"picks":[],"madeAt":${T + 120_000},"running":true}"""
+        assertNull(weekly.tick(config, "k", session, now = T + 240_000))
+        assertEquals(WeeklyState.RUNNING, batch()!!.status)
+        picks = six
+        assertEquals("This week's picks: 3 albums are downloading", weekly.tick(config, "k", session, now = T + 300_000))
+        val state = batch()!!
+        assertEquals(listOf(50, 60, 51), state.albums.map { it.lidarrId })
+        assertTrue(state.albums.last().newArtist)
+        // Asked for once, and nothing else in its place.
+        assertEquals(2, lidarrChanges.count { it == "POST" to "album" })
+    }
+
+    @Test
+    fun `lookups lidarr can't do hold the week back instead of ending it`() = runTest {
+        weekly.tick(config, "k", session, now = T)
+        picks = six
+        // Lidarr answers, but its metadata server is down.
+        lookupsDown = { true }
+        assertTrue(runCatching { weekly.tick(config, "k", session, now = T + 180_000) }.isFailure)
+        assertEquals(WeeklyState.RUNNING, batch()!!.status)
+        assertTrue(runFile.exists())
+        lookupsDown = { false }
+        assertEquals("This week's picks: 3 albums are downloading", weekly.tick(config, "k", session, now = T + 240_000))
+    }
+
+    @Test
+    fun `lookups that keep failing end the week after a day`() = runTest {
+        weekly.tick(config, "k", session, now = T)
+        picks = six
+        lookupsDown = { true }
+        assertTrue(runCatching { weekly.tick(config, "k", session, now = T + 180_000) }.isFailure)
+        // A day on, the week is what it got: nothing.
+        weekly.tick(config, "k", session, now = T + 25 * 3_600_000L)
+        assertFalse(runFile.exists())
+        assertTrue(playlists.isEmpty())
+        assertFalse(lidarrChanges.any { it == "POST" to "album" })
+    }
+
+    @Test
+    fun `an add lidarr couldn't be asked about is settled by the next check`() = runTest {
+        weekly.tick(config, "k", session, now = T)
+        picks = six
+        // The proxy gives up on the add, and Lidarr can't be reached to say whether it went through.
+        homogenicAnswer = 502
+        lookupsDown = { it.startsWith("lidarr:") }
+        assertTrue(runCatching { weekly.tick(config, "k", session, now = T + 180_000) }.isFailure)
+        assertEquals(WeeklyState.RUNNING, batch()!!.status)
+        // Back again: it didn't get there, so it's asked for once more.
+        homogenicAnswer = 200
+        lookupsDown = { false }
+        assertEquals("This week's picks: 3 albums are downloading", weekly.tick(config, "k", session, now = T + 240_000))
+        assertEquals(listOf(50, 60, 51), batch()!!.albums.map { it.lidarrId })
+        assertTrue(batch()!!.unsure.isEmpty())
+        assertEquals(3, lidarrChanges.count { it == "POST" to "album" })
+    }
+
+    @Test
+    fun `a run file cut off while written doesn't hold back the weeks after`() = runTest {
+        weekly.tick(config, "k", session, now = T)
+        assertFalse(File(runFile.parentFile, runFile.name + ".tmp").exists())
+        runFile.writeText("""{"playlistId":"pl""")
+        assertNull(weekly.tick(config, "k", session, now = T + 60_000))
+        assertFalse(runFile.exists())
+        // Its playlist goes once it's abandoned, and the week starts again.
+        assertEquals("Picking this week's albums from what you play", weekly.tick(config, "k", session, now = T + 25 * 3_600_000L))
+        assertEquals(2, refreshes)
     }
 }

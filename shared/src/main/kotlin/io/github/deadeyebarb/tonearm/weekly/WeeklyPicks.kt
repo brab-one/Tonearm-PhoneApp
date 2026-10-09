@@ -15,6 +15,8 @@ import io.github.deadeyebarb.tonearm.subsonic.Song
 import io.github.deadeyebarb.tonearm.subsonic.SubsonicApi
 import io.github.deadeyebarb.tonearm.subsonic.SubsonicApiException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
@@ -88,9 +90,11 @@ private data class RunInProgress(
     /** What the run has had Lidarr get so far, so a check after a failure carries on from there. */
     val added: List<WeeklyAlbum> = emptyList(),
     val unsure: List<WeeklyAlbum> = emptyList(),
+    /** The album Lidarr is being asked for: when the check is cut off meanwhile, the next one asks Lidarr whether it got it. */
+    val pending: WeeklyAlbum? = null,
 ) {
     /** It has had Lidarr get albums: the week is on, whatever the AI does now. */
-    val underway: Boolean get() = added.isNotEmpty() || unsure.isNotEmpty()
+    val underway: Boolean get() = added.isNotEmpty() || unsure.isNotEmpty() || pending != null
 }
 
 /**
@@ -156,7 +160,16 @@ class WeeklyPicks(
      * deletes the weeks before it, and fills the playlists with what has downloaded. Returns news for
      * the user, if any.
      */
-    suspend fun tick(config: LidarrConfig, key: String, session: ServerSession, now: Long = System.currentTimeMillis()): String? {
+    suspend fun tick(config: LidarrConfig, key: String, session: ServerSession, now: Long = System.currentTimeMillis()): String? =
+        ticking.withLock { checkNow(config, key, session, now) }
+
+    /**
+     * One check at a time: the hourly one, the one soon after a run started and one asked for now can meet, and would
+     * both ask Lidarr for the same run's albums.
+     */
+    private val ticking = Mutex()
+
+    private suspend fun checkNow(config: LidarrConfig, key: String, session: ServerSession, now: Long): String? {
         runFile.parentFile?.mkdirs()
         // Only admins had (and can remove) the Brainarr lists.
         val settings = (if (config.limited) null else moveFromBrainarr(config, key, session)) ?: settings(session)
@@ -282,12 +295,21 @@ class WeeklyPicks(
      * playlist, so when Lidarr or the music server is away for a moment the next check carries on.
      */
     private suspend fun finishRun(config: LidarrConfig, key: String, session: ServerSession, now: Long): String? {
-        val run = readRun() ?: return null
+        if (!runFile.exists()) return null
+        val run = readRun()
+        if (run == null) {
+            // Cut off while it was written: nothing to carry on from, and it would hold back every week after. Its
+            // playlist goes with the abandoned ones.
+            runFile.delete()
+            return null
+        }
         val picks = runCatching { connect.aiPicks(session) }.getOrNull()
         val since = run.since ?: run.started
         val fresh = picks != null && !picks.running && picks.madeAt > since
         val failed = picks != null && !picks.running && picks.madeAt <= since && picks.problem != null
-        if (!fresh && !failed && !run.underway && now - run.started < ABANDONED) return null
+        // Waits for the AI. A run a check was cut off in waits for the picks to carry on with, unless they're gone.
+        val waiting = if (run.underway) picks == null || picks.running else !fresh && !failed
+        if (waiting && now - run.started < ABANDONED) return null
         val folder = if (fresh) connect.picksFolder(session) else null
         val playlist = try {
             api.playlist(run.playlistId, session)
@@ -301,7 +323,8 @@ class WeeklyPicks(
             runFile.delete()
             return null
         }
-        if (!run.underway) {
+        val settled = settlePending(config, key, run, now)
+        if (!settled.underway) {
             val problem = when {
                 !fresh -> "This week's picks didn't work: ${picks?.problem ?: "the AI took too long"}"
                 else -> folderProblem(folder, config.limited)?.let(::waitFor)
@@ -312,7 +335,7 @@ class WeeklyPicks(
                 return problem
             }
         }
-        val done = if (fresh) request(config, key, picks.picks, run, folder?.path) else run
+        val done = if (fresh) request(config, key, picks.picks, settled, now, folder?.path) else settled
         if (!done.underway) {
             api.deletePlaylist(playlist.id, session)
             runFile.delete()
@@ -327,17 +350,28 @@ class WeeklyPicks(
      * Has Lidarr get the first picks it knows and doesn't already want, up to the run's count, into [folder] when the user
      * has a folder of their own: then only for artists that are new to Lidarr or already in that folder, since an album
      * always goes where its artist is (the shared library, or someone else's picks). Carries on from what the run got
-     * before, and notes each album in the run file as it goes.
+     * before, and notes each album in the run file as it goes. When Lidarr can't be asked, the check stops there and the
+     * next one carries on, for a day; after that the week is what it got.
      */
-    private suspend fun request(config: LidarrConfig, key: String, picks: List<AiPick>, run: RunInProgress, folder: String? = null): RunInProgress {
+    private suspend fun request(config: LidarrConfig, key: String, picks: List<AiPick>, run: RunInProgress, now: Long, folder: String? = null): RunInProgress {
         var progress = run
+        val retrying = now - run.started < ABANDONED
         val artists = lidarr.artists(config, key)
         val artistsBefore = artists.map { it.id }.toSet()
         val defaults = lidarr.resolveDefaults(config, key).copy(search = true).let { d -> folder?.let { d.copy(rootFolderPath = it) } ?: d }
         for (pick in picks) {
             if (progress.added.size + progress.unsure.size >= run.albums) break
             if ((progress.added + progress.unsure).any { it.isPick(pick) }) continue
-            val hit = orNull { lidarr.lookupAlbum(config, key, "${pick.artist} ${pick.album}") }.orEmpty().firstOrNull {
+            val found = try {
+                lidarr.lookupAlbum(config, key, "${pick.artist} ${pick.album}")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Lidarr's metadata server is down, say: not the same as finding nothing.
+                if (retrying && e is IntegrationHttpException && e.code !in 400..499) throw e
+                emptyList()
+            }
+            val hit = found.firstOrNull {
                 Names.normalize(SongMatch.cleanTitle(it.title)) == Names.normalize(SongMatch.cleanTitle(pick.album)) &&
                     Names.normalize(it.artistName.orEmpty()) == Names.normalize(pick.artist)
             } ?: continue
@@ -349,6 +383,9 @@ class WeeklyPicks(
             // something else of theirs is kept (the clean-up checks).
             val ownArtist = folder != null && artist != null
             val album = WeeklyAlbum(hit.lidarrId, hit.title, hit.artistName ?: pick.artist, hit.artistId, newArtist = ownArtist, songs = pick.songs, foreignId = hit.foreignId.ifEmpty { null })
+            // Noted before it's sent: Lidarr may get it although the check is cut off before the answer.
+            val asked = album.copy(newArtist = ownArtist || artist == null)
+            progress = progress.copy(pending = asked).also(::writeRun)
             val wanted = try {
                 if (hit.inLidarr) {
                     lidarr.monitorAlbum(config, key, hit.lidarrId, search = false)
@@ -364,33 +401,64 @@ class WeeklyPicks(
                 throw e
             } catch (e: Exception) {
                 // Lidarr said no.
-                if (e is IntegrationHttpException && e.code in 400..499) continue
-                // No answer isn't a no: Lidarr goes on with an add after the proxy has given up waiting.
-                val there = wantedNow(config, key, album)
+                if (e is IntegrationHttpException && e.code in 400..499) {
+                    progress = progress.copy(pending = null).also(::writeRun)
+                    continue
+                }
+                // No answer isn't a no: Lidarr goes on with an add after the proxy has given up waiting. When Lidarr can't
+                // say either, the album stays pending for the next check to ask about.
+                val there = try {
+                    wantedNow(config, key, album)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    if (retrying) throw e
+                    null
+                }
                 if (there == null) {
                     // Looked for again on the next checks; it counts toward the week's albums meanwhile.
-                    if (album.foreignId != null) {
-                        progress = progress.copy(unsure = progress.unsure + album.copy(newArtist = ownArtist || artist == null)).also(::writeRun)
-                    }
+                    val unsure = if (album.foreignId != null) progress.unsure + asked else progress.unsure
+                    progress = progress.copy(pending = null, unsure = unsure).also(::writeRun)
                     continue
                 }
                 album.copy(lidarrId = there.lidarrId, artistId = there.artistId, newArtist = ownArtist || there.artistId !in artistsBefore)
             }
-            progress = progress.copy(added = progress.added + wanted).also(::writeRun)
+            progress = progress.copy(pending = null, added = progress.added + wanted).also(::writeRun)
         }
         return progress
     }
 
-    /** [album] as Lidarr has it, when it wants it: monitored, or there at all when it wasn't before ([WeeklyAlbum.lidarrId] 0). */
+    /**
+     * [album] as Lidarr has it, when it wants it: monitored, or there at all when it wasn't before ([WeeklyAlbum.lidarrId] 0).
+     * Null when Lidarr says it doesn't; throws when Lidarr can't be asked.
+     */
     private suspend fun wantedNow(config: LidarrConfig, key: String, album: WeeklyAlbum): LidarrClient.AlbumHit? {
         val id = album.foreignId?.takeIf { it.isNotEmpty() } ?: return null
-        val now = orNull { lidarr.lookupAlbum(config, key, "lidarr:$id") }?.firstOrNull { it.foreignId == id } ?: return null
+        val now = lidarr.lookupAlbum(config, key, "lidarr:$id").firstOrNull { it.foreignId == id } ?: return null
         return now.takeIf { it.inLidarr && (it.monitored || album.lidarrId == 0) }
+    }
+
+    /**
+     * Settles the album a check was cut off asking for: the week's when Lidarr has it, else asked for again. While Lidarr
+     * can't say, the check stops here and the next one asks; after a day it's one of the unsure ones.
+     */
+    private suspend fun settlePending(config: LidarrConfig, key: String, run: RunInProgress, now: Long): RunInProgress {
+        val album = run.pending ?: return run
+        val there = try {
+            wantedNow(config, key, album)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (now - run.started < ABANDONED) throw e
+            return run.copy(pending = null, unsure = run.unsure + album).also(::writeRun)
+        }
+        val added = listOfNotNull(there?.let { album.copy(lidarrId = it.lidarrId, artistId = it.artistId) })
+        return run.copy(pending = null, added = run.added + added).also(::writeRun)
     }
 
     /** Makes the batch's unsure albums that Lidarr has after all its own, and saves that. */
     private suspend fun settle(config: LidarrConfig, key: String, session: ServerSession, batch: WeeklyBatch): WeeklyBatch {
-        val arrived = batch.state.unsure.mapNotNull { album -> wantedNow(config, key, album)?.let { album to album.copy(lidarrId = it.lidarrId, artistId = it.artistId) } }
+        val arrived = batch.state.unsure.mapNotNull { album -> orNull { wantedNow(config, key, album) }?.let { album to album.copy(lidarrId = it.lidarrId, artistId = it.artistId) } }
         if (arrived.isEmpty()) return batch
         val state = batch.state.copy(albums = batch.state.albums + arrived.map { it.second }, unsure = batch.state.unsure - arrived.map { it.first }.toSet())
         api.setPlaylistComment(batch.playlist.id, comment(state, json), session)
@@ -517,8 +585,14 @@ class WeeklyPicks(
 
     private fun readRun(): RunInProgress? = runCatching { json.decodeFromString(RunInProgress.serializer(), runFile.readText()) }.getOrNull()
 
+    /** Through a file of its own first, so a check cut off while writing leaves the run as it was. */
     private fun writeRun(run: RunInProgress) {
-        runFile.writeText(json.encodeToString(RunInProgress.serializer(), run))
+        val tmp = File(runFile.parentFile, runFile.name + ".tmp")
+        tmp.writeText(json.encodeToString(RunInProgress.serializer(), run))
+        if (!tmp.renameTo(runFile)) {
+            runFile.delete()
+            tmp.renameTo(runFile)
+        }
     }
 
     companion object {

@@ -64,7 +64,6 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.navigation.NavDestination.Companion.hasRoute
-import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -176,7 +175,8 @@ fun TonearmRoot(container: AppContainer, openPlayerRequests: Int, requestNotific
             nav.popBackStack(tab.route, inclusive = false)
         } else {
             nav.navigate(tab.route) {
-                popUpTo(nav.graph.findStartDestination().id) { saveState = true }
+                // Home, not the graph's start: after the first setup that's the welcome page, which is gone.
+                popUpTo<HomeRoute> { saveState = true }
                 launchSingleTop = true
                 restoreState = true
             }

@@ -1,5 +1,6 @@
 package io.github.deadeyebarb.tonearm.playback
 
+import io.github.deadeyebarb.tonearm.connect.ConnectRouter
 import io.github.deadeyebarb.tonearm.data.QueueEnd
 import io.github.deadeyebarb.tonearm.data.SettingsRepository
 import io.github.deadeyebarb.tonearm.integrations.Continuation
@@ -16,6 +17,8 @@ class QueueContinuation(
     youtube: YouTubeMusic,
     private val settings: SettingsRepository,
     dislikes: Dislikes,
+    /** Says who an API key belongs to, so someone else's private playlist doesn't play. */
+    private val tonearmServer: ConnectRouter,
 ) {
     private val continuation = Continuation(api, youtube, dislikes::isDisliked)
 
@@ -24,7 +27,7 @@ class QueueContinuation(
         val session = sessions.active.value
         val songs = when (s.whenQueueEnds) {
             QueueEnd.STOP -> emptyList()
-            QueueEnd.PLAYLIST -> session?.let { continuation.anotherPlaylist(it, played) }.orEmpty()
+            QueueEnd.PLAYLIST -> session?.let { continuation.anotherPlaylist(it, played, tonearmServer.user(it)) }.orEmpty()
             QueueEnd.SIMILAR -> continuation.similar(last.song, YouTubeMusic.isYouTube(last.serverId), session, played, s.youtubeFallback)
         }
         return songs.mapNotNull { next ->

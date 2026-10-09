@@ -40,9 +40,9 @@ fun PlaylistPickerDialog(items: List<QueueSong>, onDismiss: () -> Unit) {
     // Only playlists this account may change; null while loading.
     val playlists by produceState<Result<List<Playlist>>?>(null, attempt) {
         value = null
-        val username = actions.container.sessions.active.value?.config?.username
+        val user = actions.container.sessions.active.value?.let { actions.container.tonearmServer.user(it) }
         value = try {
-            Result.success(api.playlists().filter { it.editableBy(username) })
+            Result.success(api.playlists().filter { it.editableBy(user) })
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

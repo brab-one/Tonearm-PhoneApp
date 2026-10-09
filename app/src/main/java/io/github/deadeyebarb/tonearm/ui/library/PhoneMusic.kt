@@ -69,11 +69,21 @@ fun PhonePage() {
     val actions = LocalActions.current
     val activity = LocalActivity.current
     var granted by remember { mutableStateOf(c.local.hasPermission()) }
-    // Once access was refused for good, Android doesn't ask anymore: the button opens the app's settings instead.
+    // Once access was refused for good, Android doesn't ask anymore: the button opens the app's settings instead. That's
+    // only sure when Android stops offering an explanation across a refusal. A dismissed dialog, and access refused for
+    // good earlier, both come back refused with no explanation before or after: then both buttons are offered.
     var blocked by rememberSaveable { mutableStateOf(false) }
+    var maybeBlocked by rememberSaveable { mutableStateOf(false) }
+    var explainBefore by rememberSaveable { mutableStateOf(false) }
+    fun explain() = activity != null && ActivityCompat.shouldShowRequestPermissionRationale(activity, LocalMusic.PERMISSION)
     val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         granted = ok
-        blocked = !ok && activity != null && !ActivityCompat.shouldShowRequestPermissionRationale(activity, LocalMusic.PERMISSION)
+        val explainAfter = explain()
+        blocked = !ok && explainBefore && !explainAfter
+        maybeBlocked = !ok && !explainBefore && !explainAfter
+    }
+    val openSettings = {
+        context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null)))
     }
     // Access given in Android's settings counts as soon as you're back.
     LifecycleResumeEffect(Unit) {
@@ -84,19 +94,25 @@ fun PhonePage() {
         Column(Modifier.fillMaxSize().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             EmptyState(
                 Icons.Rounded.PhoneAndroid, "Music on this phone",
-                if (blocked) {
-                    "Access to music is turned off for Tonearm. Turn on “Music and audio” under Permissions in the app's settings."
-                } else {
-                    "Tonearm can play the music files stored on this phone too, next to your server's library. Android asks first whether it may see them."
+                when {
+                    blocked -> "Access to music is turned off for Tonearm. Turn on “Music and audio” under Permissions in the app's settings."
+                    maybeBlocked -> "Tonearm can play the music files stored on this phone too, next to your server's library. If Android doesn't " +
+                        "ask anymore, turn on “Music and audio” under Permissions in the app's settings."
+                    else -> "Tonearm can play the music files stored on this phone too, next to your server's library. Android asks first whether it may see them."
                 },
                 Modifier.weight(1f),
             )
             if (blocked) {
-                HudButton("Open app settings", {
-                    context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null)))
-                }, Modifier.fillMaxWidth())
+                HudButton("Open app settings", openSettings, Modifier.fillMaxWidth())
             } else {
-                HudButton("Allow access to music", { ask.launch(LocalMusic.PERMISSION) }, Modifier.fillMaxWidth())
+                HudButton("Allow access to music", {
+                    explainBefore = explain()
+                    ask.launch(LocalMusic.PERMISSION)
+                }, Modifier.fillMaxWidth())
+                if (maybeBlocked) {
+                    Spacer(Modifier.height(8.dp))
+                    HudButton("Open app settings", openSettings, Modifier.fillMaxWidth(), filled = false)
+                }
             }
         }
         return
