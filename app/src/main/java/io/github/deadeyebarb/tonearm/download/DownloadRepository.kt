@@ -32,8 +32,9 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
+/** What a download is of; [replaces] is the download it's the better file of, removed once this one is there. */
 @Serializable
-data class DownloadMeta(val serverId: String, val song: io.github.deadeyebarb.tonearm.subsonic.Song)
+data class DownloadMeta(val serverId: String, val song: io.github.deadeyebarb.tonearm.subsonic.Song, val replaces: String? = null)
 
 data class DownloadEntry(
     val id: String,
@@ -41,6 +42,8 @@ data class DownloadEntry(
     val state: Int,
     val percent: Float,
     val bytes: Long,
+    /** The download this one is the better file of (see [DownloadRepository.replace]). */
+    val replaces: String? = null,
 ) {
     val completed get() = state == Download.STATE_COMPLETED
     val failed get() = state == Download.STATE_FAILED
@@ -69,8 +72,6 @@ class DownloadRepository(
     val entries: StateFlow<Map<String, DownloadEntry>> = _entries
 
     private val completed = ConcurrentHashMap.newKeySet<String>()
-    /** Downloads to start again once their old copy is gone (the same song id with a better file). */
-    private val readd = ConcurrentHashMap<String, QueueSong>()
     private val loaded = CountDownLatch(1)
     private val listed = CompletableDeferred<Unit>()
     private var progressJob: Job? = null
@@ -83,23 +84,31 @@ class DownloadRepository(
         }
         manager.addListener(object : DownloadManager.Listener {
             override fun onDownloadChanged(manager: DownloadManager, download: Download, finalException: Exception?) {
-                put(download)
+                put(download)?.let(::dropReplaced)
                 watchProgress()
             }
 
             override fun onDownloadRemoved(manager: DownloadManager, download: Download) {
                 completed -= download.request.id
                 _entries.value -= download.request.id
-                readd.remove(download.request.id)?.let { add(listOf(it)) }
             }
         })
+        // Set before downloads may run, so one meant for Wi-Fi doesn't start on mobile data. The settings may not be
+        // read yet: then it's Wi-Fi only, the default, until the collector below has them.
+        manager.requirements = requirementsOf(settings.state.value.downloadOnWifiOnly)
+        // The manager starts paused, and only the download service resumes it. Changes that reach it directly (the
+        // app was in the background) would otherwise wait for the next download started from the app.
+        manager.resumeDownloads()
         scope.launch(Dispatchers.IO) {
             try {
                 val all = mutableListOf<Download>()
                 manager.downloadIndex.getDownloads().use { cursor ->
                     while (cursor.moveToNext()) all += cursor.download
                 }
-                withContext(Dispatchers.Main) { all.forEach(::put) }
+                withContext(Dispatchers.Main) {
+                    // An old copy whose better file finished while the app wasn't running goes now.
+                    all.mapNotNull(::put).forEach(::dropReplaced)
+                }
             } finally {
                 // Even when the index can't be read, nobody waits for it forever.
                 listed.complete(Unit)
@@ -108,7 +117,7 @@ class DownloadRepository(
         }
         scope.launch(Dispatchers.Main) {
             settings.state.map { it.downloadOnWifiOnly }.distinctUntilChanged().collect { wifiOnly ->
-                val requirements = Requirements(if (wifiOnly) Requirements.NETWORK_UNMETERED else Requirements.NETWORK)
+                val requirements = requirementsOf(wifiOnly)
                 // Set on the manager directly: starting the service from here could happen in the background.
                 if (manager.requirements != requirements) manager.requirements = requirements
             }
@@ -132,41 +141,72 @@ class DownloadRepository(
 
     private fun add(items: List<QueueSong>) {
         for (item in items) {
-            val existing = _entries.value[key(item.serverId, item.song.id)]
+            val id = key(item.serverId, item.song.id)
+            val existing = _entries.value[id]
             if (existing != null && !existing.failed) continue
-            val request = request(item)
-            send({ DownloadService.sendAddDownload(context, TonearmDownloadService::class.java, request, false) }) { manager.addDownload(request) }
+            addRequest(request(item))
         }
     }
 
-    /** What the download manager gets for [item]: the original file, kept under the song's download key. */
-    fun request(item: QueueSong): DownloadRequest {
+    private fun addRequest(request: DownloadRequest) =
+        send({ DownloadService.sendAddDownload(context, TonearmDownloadService::class.java, request, false) }) { manager.addDownload(request) }
+
+    /**
+     * What the download manager gets for [item]: the original file, kept under the song's download key. Tried again
+     * after it failed, it still [replaces] the old copy it did.
+     */
+    fun request(item: QueueSong, replaces: String? = null): DownloadRequest {
         val id = key(item.serverId, item.song.id)
+        val meta = DownloadMeta(item.serverId, item.song, replaces ?: _entries.value[id]?.takeIf { it.failed }?.replaces)
         return DownloadRequest.Builder(id, SongUri.build(item.serverId, item.song.id, SongUri.RAW))
             .setCustomCacheKey(engine.downloadKey(item.serverId, item.song.id))
-            .setData(json.encodeToString(DownloadMeta.serializer(), DownloadMeta(item.serverId, item.song)).encodeToByteArray())
+            .setData(json.encodeToString(DownloadMeta.serializer(), meta).encodeToByteArray())
             .build()
     }
 
     /**
-     * Swaps a downloaded song for [newer], the server's better file. Under a new id the new download
-     * starts right away; under the same id the old copy has to be removed first (its bytes share the key).
+     * Swaps a downloaded song for [newer], the server's better file; false when that has to wait. The old copy stays
+     * until the new one is there. Under a new id the new one downloads beside it, and the old one is removed once it's
+     * done. Under the same id the two share their bytes, so the old copy goes first: only when the new one downloads
+     * straight away, through the download service (which an app in the background can't start) on a network
+     * downloads may use. Main thread.
      */
-    fun replace(old: DownloadEntry, newer: QueueSong) {
+    fun replace(old: DownloadEntry, newer: QueueSong): Boolean {
         val newId = key(newer.serverId, newer.song.id)
-        if (newId == old.id) {
-            readd[old.id] = newer
-            delete(listOf(old.id))
-        } else {
-            add(listOf(newer))
-            delete(listOf(old.id))
+        if (newId != old.id) {
+            val existing = _entries.value[newId]
+            when {
+                existing?.completed == true -> delete(listOf(old.id))
+                existing == null || existing.failed -> addRequest(request(newer, replaces = old.id))
+            }
+            return true
         }
+        if (manager.requirements.getNotMetRequirements(context) != 0) return false
+        try {
+            DownloadService.sendRemoveDownload(context, TonearmDownloadService::class.java, old.id, false)
+        } catch (_: IllegalStateException) {
+            return false
+        }
+        // Added while it's being removed, the manager downloads it again with the new file once the old bytes are gone,
+        // and keeps that in its index.
+        addRequest(request(newer))
+        return true
     }
 
-    /** Removes downloads for the user: Keep offline doesn't bring kept ones back while they're in its lists. */
+    /** Once [entry] is downloaded, the old copy it's the better file of goes. */
+    private fun dropReplaced(entry: DownloadEntry) {
+        val old = entry.replaces?.let { _entries.value[it] } ?: return
+        if (entry.completed && old.state != Download.STATE_REMOVING) delete(listOf(old.id))
+    }
+
+    /**
+     * Removes downloads for the user, and the better files still on their way for them: Keep offline doesn't bring kept
+     * ones back while they're in its lists.
+     */
     fun remove(ids: Collection<String>) {
-        offline.skip(ids)
-        delete(ids)
+        val upgrades = _entries.value.values.filter { entry -> !entry.completed && entry.replaces?.let { it in ids } == true }.map { it.id }
+        offline.skip(ids + upgrades)
+        delete(ids + upgrades)
     }
 
     private fun delete(ids: Collection<String>) {
@@ -193,19 +233,22 @@ class DownloadRepository(
 
     fun bytesUsed(): Long = engine.downloadCache.cacheSpace
 
-    private fun put(download: Download) {
+    private fun put(download: Download): DownloadEntry? {
         val meta = runCatching {
             json.decodeFromString(DownloadMeta.serializer(), download.request.data.decodeToString())
-        }.getOrNull() ?: return
+        }.getOrNull() ?: return null
         val id = download.request.id
         if (download.state == Download.STATE_COMPLETED) completed += id else completed -= id
-        _entries.value += id to DownloadEntry(
+        val entry = DownloadEntry(
             id = id,
             item = QueueSong(meta.serverId, meta.song),
             state = download.state,
             percent = download.percentDownloaded.coerceAtLeast(0f),
             bytes = download.bytesDownloaded,
+            replaces = meta.replaces,
         )
+        _entries.value += id to entry
+        return entry
     }
 
     /** DownloadManager only reports state changes, so poll progress while something is downloading. */
@@ -226,6 +269,8 @@ class DownloadRepository(
 
         /** A song's download id. */
         fun keyOf(serverId: String, songId: String) = "$serverId/$songId"
+
+        private fun requirementsOf(wifiOnly: Boolean) = Requirements(if (wifiOnly) Requirements.NETWORK_UNMETERED else Requirements.NETWORK)
 
         /** On kept downloads a Keep offline run couldn't finish: they only carry on in the next run, on Wi-Fi. */
         const val STOP_REASON_KEEP_OFFLINE = 7

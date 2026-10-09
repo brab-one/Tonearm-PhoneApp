@@ -20,10 +20,10 @@ class OfflinePlannerTest {
         downloads: Set<String> = emptySet(),
         failed: Set<String> = emptySet(),
         state: OfflineState = OfflineState(),
-        playing: Set<String> = emptySet(),
+        spared: Set<String> = emptySet(),
         budget: Long = 1024 * mb,
         disliked: Set<String> = emptySet(),
-    ) = OfflinePlanner.plan(sources, "s1", downloads, failed, state, playing, budget) { it.id in disliked }
+    ) = OfflinePlanner.plan(sources, "s1", downloads, failed, state, spared, budget) { it.id in disliked }
 
     @Test
     fun `weekly picks come before likes, and each song is kept once`() {
@@ -77,11 +77,20 @@ class OfflinePlannerTest {
     fun `kept songs nobody wants anymore go, except the one playing`() {
         val state = OfflineState(kept = setOf(id("p1"), id("old"), id("playing"), "s2/elsewhere"))
         val downloads = setOf(id("p1"), id("old"), id("playing"), "s2/elsewhere")
-        val plan = plan(listOf(listOf(song("p1")), emptyList()), downloads = downloads, state = state, playing = setOf(id("playing")))
+        val plan = plan(listOf(listOf(song("p1")), emptyList()), downloads = downloads, state = state, spared = setOf(id("playing")))
         // Already there: nothing to add.
         assertEquals(emptyList<QueueSong>(), plan.add)
         // Another server's are left alone.
         assertEquals(listOf(id("old")), plan.remove)
+    }
+
+    @Test
+    fun `an old copy stays until its better file is downloaded`() {
+        // The server's id changed with the upgrade: the likes have the new one, which is on its way.
+        val state = OfflineState(kept = setOf(id("mp3"), id("flac")))
+        val plan = plan(listOf(emptyList(), listOf(song("flac"))), downloads = setOf(id("mp3"), id("flac")), state = state, spared = setOf(id("mp3")))
+        assertEquals(emptyList<String>(), plan.remove)
+        assertEquals(setOf(id("flac")), plan.wanted)
     }
 
     @Test

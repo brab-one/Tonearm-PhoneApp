@@ -71,7 +71,8 @@ object OfflinePlanner {
      * read, which keeps everything that's kept (nothing is removed that run). Songs fill [budgetBytes] in that order, each
      * once; YouTube Music songs, files on the phone, disliked and skipped songs are left out. [downloads] are all there
      * are, [failed] the failed ones of them; the user's own (not in [OfflineState.kept]) are never touched or counted.
-     * Kept songs of [serverId] nobody wants anymore are removed, except the ones in the queue ([playing]).
+     * Kept songs of [serverId] nobody wants anymore are removed, except [spared] ones (in the queue, or waiting for
+     * their better file to download).
      */
     fun plan(
         sources: List<List<QueueSong>?>,
@@ -79,7 +80,7 @@ object OfflinePlanner {
         downloads: Set<String>,
         failed: Set<String>,
         state: OfflineState,
-        playing: Set<String>,
+        spared: Set<String>,
         budgetBytes: Long,
         isDisliked: (Song) -> Boolean,
     ): OfflinePlan {
@@ -108,7 +109,7 @@ object OfflinePlanner {
             remove = if (!complete) {
                 emptyList()
             } else {
-                state.kept.filter { it in downloads && it.startsWith("$serverId/") && it !in wanted && it !in playing }
+                state.kept.filter { it in downloads && it.startsWith("$serverId/") && it !in wanted && it !in spared }
             },
             wanted = wanted.keys,
             skipped = if (complete) state.skipped.filterTo(HashSet()) { it in listed } else state.skipped,
@@ -144,8 +145,11 @@ class OfflineSync(private val c: AppContainer) {
     /** Every download was removed. */
     fun cleared() = update { it.copy(kept = emptySet()) }
 
-    /** A kept download was swapped for a better file with another id. */
-    fun renamed(old: String, new: String) = update { s -> if (old in s.kept) s.copy(kept = s.kept - old + new) else s }
+    /**
+     * A kept download is being swapped for a better file with another id: the new one is kept too. The old one stays
+     * until the new one is downloaded, then the download repository removes it.
+     */
+    fun renamed(old: String, new: String) = update { s -> if (old in s.kept && new !in s.kept) s.copy(kept = s.kept + new) else s }
 
     private fun update(change: (OfflineState) -> OfflineState) {
         c.scope.launch { store.updateData(change) }
@@ -166,8 +170,10 @@ class OfflineSync(private val c: AppContainer) {
         val before = store.data.first()
         val entries = downloads.entries.value
         val playing = c.queueStore.load()?.items.orEmpty().map { DownloadRepository.keyOf(it.serverId, it.song.id) }.toSet()
+        // Old copies stay until their better file is downloaded (see DownloadRepository.replace).
+        val replaced = entries.values.filterNot { it.completed }.mapNotNullTo(HashSet()) { it.replaces }
         val plan = OfflinePlanner.plan(
-            listOf(picks, liked), session.id, entries.keys, entries.filterValues { it.failed }.keys, before, playing,
+            listOf(picks, liked), session.id, entries.keys, entries.filterValues { it.failed }.keys, before, playing + replaced,
             settings.keepOfflineGb * GB, isDisliked = { c.dislikes.isDisliked(it.artistLabel, it.title) },
         )
         val kept = (before.kept.filter { it in entries } - plan.remove.toSet()) + plan.add.map { DownloadRepository.keyOf(it.serverId, it.song.id) }
@@ -176,8 +182,6 @@ class OfflineSync(private val c: AppContainer) {
             for (item in plan.add) downloads.manager.addDownload(downloads.request(item))
             // Held by the last run: they carry on now.
             for (id in plan.wanted) if (entries[id]?.state == Download.STATE_STOPPED) downloads.manager.setStopReason(id, Download.STOP_REASON_NONE)
-            // A process started for this run never started the download service, which is what lets downloads run.
-            downloads.manager.resumeDownloads()
         }
         store.updateData { it.copy(kept = kept.toSet(), skipped = plan.skipped) }
         Log.i(TAG, "Keeping ${plan.wanted.size} songs: ${plan.add.size} to download, ${plan.remove.size} removed, ${plan.leftOut} didn't fit")

@@ -20,30 +20,44 @@ import java.util.concurrent.TimeUnit
  * AAC (Lidarr upgraded it), or a hi-res FLAC where it was CD quality.
  */
 object DownloadUpgrades {
-    suspend fun run(context: Context): Int {
+    /** How a check went: downloads being upgraded now, and ones that have to wait (see [DownloadRepository.replace]). */
+    data class Outcome(val started: Int, val waiting: Int)
+
+    suspend fun run(context: Context): Outcome {
         val c = context.container
         val session = c.sessions.active.value ?: c.sessions.awaitActive()
         // In a process started for the worker this creates the repository, which lists the downloads a moment later.
         val downloads = withContext(Dispatchers.Main) { c.downloads }
         downloads.awaitListed()
-        var upgraded = 0
+        var started = 0
+        var waiting = 0
         for (entry in downloads.entries.value.values.filter { it.completed && it.item.serverId == session.id }) {
             val newer = c.versions.better(entry.item, session, force = true) ?: continue
             if (!LibraryVersions.isUpgrade(entry.item.song, newer.song)) continue
-            withContext(Dispatchers.Main) { downloads.replace(entry, newer) }
+            val newId = downloads.key(newer.serverId, newer.song.id)
+            // On its way already: the old copy goes once it's there.
+            val pending = downloads.entries.value[newId]?.takeIf { newId != entry.id && !it.completed && !it.failed }
+            if (pending != null) continue
+            if (!withContext(Dispatchers.Main) { downloads.replace(entry, newer) }) {
+                waiting++
+                continue
+            }
             // A song Keep offline keeps stays kept.
-            c.offline.renamed(entry.id, downloads.key(newer.serverId, newer.song.id))
-            upgraded++
+            c.offline.renamed(entry.id, newId)
+            started++
         }
-        return upgraded
+        return Outcome(started, waiting)
     }
+
+    fun message(n: Int) = if (n == 1) "Upgrading a download to a better file" else "Upgrading $n downloads to better files"
 }
 
 class DownloadUpgradeWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result = try {
-        val n = DownloadUpgrades.run(applicationContext)
-        if (n > 0) applicationContext.container.messages.show(if (n == 1) "Upgrading a download to a better file" else "Upgrading $n downloads to better files")
-        Result.success()
+        val outcome = DownloadUpgrades.run(applicationContext)
+        if (outcome.started > 0) applicationContext.container.messages.show(DownloadUpgrades.message(outcome.started))
+        // Ones that wait for the app (or Wi-Fi) are tried again a little later, and then less and less often.
+        if (outcome.waiting > 0) Result.retry() else Result.success()
     } catch (e: CancellationException) {
         throw e
     } catch (_: Exception) {

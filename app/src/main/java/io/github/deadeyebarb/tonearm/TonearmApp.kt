@@ -29,8 +29,8 @@ class TonearmApp : Application(), SingletonImageLoader.Factory {
         // Downloads whose file got better on the server, checked soon after start too (not only every 12 hours).
         container.scope.launch {
             kotlinx.coroutines.delay(20_000)
-            runCatching { DownloadUpgrades.run(this@TonearmApp) }.getOrNull()?.takeIf { it > 0 }?.let { n ->
-                container.messages.show(if (n == 1) "Upgrading a download to a better file" else "Upgrading $n downloads to better files")
+            runCatching { DownloadUpgrades.run(this@TonearmApp) }.getOrNull()?.started?.takeIf { it > 0 }?.let { n ->
+                container.messages.show(DownloadUpgrades.message(n))
             }
         }
     }
