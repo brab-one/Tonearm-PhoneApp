@@ -42,4 +42,13 @@ class SongMatchTest {
         val song = Song("1", title = "Get Lucky (feat. Pharrell Williams)", artist = "Daft Punk")
         assertEquals("1", SongMatch.best(listOf(song), ref)?.id)
     }
+
+    @Test
+    fun `a song without an artist doesn't match whoever has the title`() {
+        val intro = Song("1", title = "Intro", artist = "The xx", duration = 127)
+        assertNull(SongMatch.score(intro, TrackRef("Intro", "")))
+        assertNull(SongMatch.best(listOf(intro), TrackRef("Intro", "", duration = 130)))
+        // Unless the library doesn't know the artist either.
+        assertEquals("2", SongMatch.best(listOf(intro, Song("2", title = "Intro", duration = 128)), TrackRef("Intro", ""))?.id)
+    }
 }

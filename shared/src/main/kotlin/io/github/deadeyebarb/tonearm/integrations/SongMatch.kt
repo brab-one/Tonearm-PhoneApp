@@ -59,7 +59,8 @@ object SongMatch {
         val refPrimary = Names.normalize(primaryArtist(cleanArtist(ref.artist)))
         val artistScore = when {
             songArtist == refArtist -> 3
-            songArtist.isNotEmpty() && (songArtist.contains(refPrimary) || refPrimary.contains(songArtist)) -> 2
+            // A blank artist on either side says nothing: it only matches another blank one (above).
+            songArtist.isNotEmpty() && refPrimary.isNotEmpty() && (songArtist.contains(refPrimary) || refPrimary.contains(songArtist)) -> 2
             else -> return null
         }
         val albumScore = if (ref.album != null && song.album != null && Names.normalize(ref.album) == Names.normalize(song.album)) 2 else 0
