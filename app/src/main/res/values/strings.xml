@@ -3,8 +3,8 @@
     <string name="download_channel_name">Downloads</string>
     <string name="widget_label">Tonearm player</string>
     <string name="widget_description">What\'s playing, with play, pause and skip</string>
-    <string name="widget_empty_title">TONEARM</string>
-    <string name="widget_empty">NOTHING QUEUED // TAP TO OPEN</string>
+    <string name="widget_empty_title">NOTHING QUEUED</string>
+    <string name="widget_empty">TAP TO OPEN TONEARM</string>
     <string name="widget_previous">Previous</string>
     <string name="widget_play">Play</string>
     <string name="widget_pause">Pause</string>
