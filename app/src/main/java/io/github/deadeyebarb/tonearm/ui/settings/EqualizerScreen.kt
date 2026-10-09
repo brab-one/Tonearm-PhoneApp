@@ -37,6 +37,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.deadeyebarb.tonearm.container
@@ -103,11 +107,11 @@ fun EqualizerScreen() {
                         }
                     }
                     bands.bandCenterHz.forEachIndexed { band, hz ->
+                        val name = if (hz >= 1000) String.format(locale, "%.1f kHz", hz / 1000f) else "$hz Hz"
+                        val gain = String.format(locale, "%+.1f", local[band] / 100f)
                         Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                if (hz >= 1000) String.format(locale, "%.1f kHz", hz / 1000f) else "$hz Hz",
-                                style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(64.dp),
-                            )
+                            // TalkBack reads the band and its gain on the slider, so the labels beside it aren't read again.
+                            Text(name, style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(64.dp).clearAndSetSemantics {})
                             Slider(
                                 value = local[band].toFloat(),
                                 onValueChange = { v ->
@@ -117,12 +121,12 @@ fun EqualizerScreen() {
                                 onValueChangeFinished = { save(eq.copy(preset = -1, bandLevels = local)) },
                                 valueRange = bands.minLevel.toFloat()..bands.maxLevel.toFloat(),
                                 enabled = eq.enabled,
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier.weight(1f).semantics {
+                                    contentDescription = name
+                                    stateDescription = "$gain dB"
+                                },
                             )
-                            Text(
-                                String.format(locale, "%+.1f", local[band] / 100f),
-                                style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(44.dp),
-                            )
+                            Text(gain, style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(44.dp).clearAndSetSemantics {})
                         }
                     }
                 }
