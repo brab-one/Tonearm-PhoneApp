@@ -251,6 +251,13 @@ class AppActions(
         message(if (items.size == 1) "Download removed" else "Removed ${items.size} downloads")
     }
 
+    /** Stops downloads still on their way; songs downloaded already stay. */
+    fun cancelDownloads(items: List<QueueSong>) {
+        if (items.isEmpty()) return
+        container.downloads.remove(items.map { container.downloads.key(it.serverId, it.song.id) })
+        message(if (items.size == 1) "Download cancelled" else "Cancelled ${items.size} downloads")
+    }
+
     fun setStarred(serverId: String, kind: StarKind, id: String, starred: Boolean) = launch {
         container.starred.set(serverId, kind, id, starred)
     }

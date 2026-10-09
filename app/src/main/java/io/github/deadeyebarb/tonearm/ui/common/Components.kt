@@ -25,6 +25,7 @@ import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.outlined.ThumbDown
 import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteForever
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.DownloadDone
@@ -68,6 +69,8 @@ import androidx.compose.ui.layout.FirstBaseline
 import androidx.compose.ui.layout.LastBaseline
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -89,6 +92,7 @@ import io.github.deadeyebarb.tonearm.ui.theme.HudTag
 import io.github.deadeyebarb.tonearm.ui.theme.glowBorder
 import io.github.deadeyebarb.tonearm.youtube.YouTubeMusic
 import java.util.Locale
+import kotlin.math.roundToInt
 
 data class MenuAction(val label: String, val icon: ImageVector, val onClick: () -> Unit)
 
@@ -398,21 +402,33 @@ fun PlayShuffleButtons(onPlay: () -> Unit, onShuffle: () -> Unit, modifier: Modi
     }
 }
 
-/** Download button for a whole album or playlist: shows progress, and offers removal once done. */
+/**
+ * Download button for a whole album or playlist: shows progress (tapped then, it cancels the songs still on their way),
+ * and offers removal once done.
+ */
 @Composable
 fun DownloadAllButton(items: List<QueueSong>) {
     val actions = LocalActions.current
     val downloads = LocalDownloads.current
     val states = items.map { downloads["${it.serverId}/${it.song.id}"] }
+    val pending = items.filterIndexed { i, _ -> states[i]?.active == true }
     var confirmRemove by remember { mutableStateOf(false) }
+    var confirmCancel by remember { mutableStateOf(false) }
     when {
         items.isEmpty() -> Unit
         states.all { it?.completed == true } ->
             IconButton(onClick = { confirmRemove = true }) { Icon(Icons.Rounded.DownloadDone, "Downloaded", tint = Hud.colors.ok) }
-        states.any { it?.active == true } -> {
+        pending.isNotEmpty() -> {
             val progress = states.sumOf { (it?.percent ?: 0f).toDouble() } / items.size / 100
-            Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(progress = { progress.toFloat() }, modifier = Modifier.size(24.dp), strokeWidth = 3.dp)
+            IconButton(onClick = { if (pending.size > 3) confirmCancel = true else actions.cancelDownloads(pending) }) {
+                Box(contentAlignment = Alignment.Center) {
+                    // How far it got, in words: as a progress bar it would make TalkBack read the button as one.
+                    CircularProgressIndicator(
+                        progress = { progress.toFloat() }, strokeWidth = 3.dp,
+                        modifier = Modifier.size(24.dp).clearAndSetSemantics { contentDescription = "Downloading, ${(progress * 100).roundToInt()}%" },
+                    )
+                    Icon(Icons.Rounded.Close, "Cancel downloads", Modifier.size(14.dp))
+                }
             }
         }
         // All of them: ones already there are skipped, and kept ones (Keep offline's) become the user's own.
@@ -432,6 +448,21 @@ fun DownloadAllButton(items: List<QueueSong>) {
                 }) { Text("REMOVE") }
             },
             dismissButton = { TextButton(onClick = { confirmRemove = false }) { Text("CANCEL") } },
+        )
+    }
+    // Gone by itself once the last of them is done.
+    if (confirmCancel && pending.isNotEmpty()) {
+        AlertDialog(
+            onDismissRequest = { confirmCancel = false },
+            title = { Text("Cancel downloads?") },
+            text = { Text("The ${plural(pending.size, "song")} still to come won't be downloaded. Songs already downloaded stay.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmCancel = false
+                    actions.cancelDownloads(pending)
+                }) { Text("CANCEL THEM") }
+            },
+            dismissButton = { TextButton(onClick = { confirmCancel = false }) { Text("KEEP GOING") } },
         )
     }
 }
