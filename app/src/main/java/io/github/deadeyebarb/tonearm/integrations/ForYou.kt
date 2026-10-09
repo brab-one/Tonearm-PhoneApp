@@ -67,11 +67,23 @@ class ForYou(private val api: SubsonicApi, private val weekly: WeeklyPicks) {
             zone: ZoneId = ZoneId.systemDefault(),
         ): List<ForYouItem> {
             val seen = HashSet<String>()
-            /** The first [n] albums not shown yet. */
-            fun <T> List<Pair<Album, T>>.fresh(n: Int) = asSequence().filter { (album, _) ->
-                val keys = listOf("id:" + album.id, "name:" + nameKey(album))
-                keys.none { it in seen }.also { if (it) seen += keys }
-            }.take(n).toList()
+            /**
+             * The first [n] albums not shown yet, at most two by one artist: a discography liked in one go leaves room
+             * for the other likes. One passed over for its artist isn't taken as seen.
+             */
+            fun <T> List<Pair<Album, T>>.fresh(n: Int): List<Pair<Album, T>> {
+                val byArtist = HashMap<String, Int>()
+                return asSequence().filter { (album, _) ->
+                    val keys = listOf("id:" + album.id, "name:" + nameKey(album))
+                    val artist = artistKey(album)
+                    (keys.none { it in seen } && byArtist.getOrDefault(artist, 0) < PER_ARTIST).also {
+                        if (it) {
+                            seen += keys
+                            byArtist.merge(artist, 1, Int::plus)
+                        }
+                    }
+                }.take(n).toList()
+            }
 
             val pickItems = picks.fresh(PICKS).map { (album, expires) -> ForYouItem(album, ForYouKind.PICK, pickCaption(expires, now)) }
 

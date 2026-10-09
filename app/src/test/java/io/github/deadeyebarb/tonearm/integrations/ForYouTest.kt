@@ -68,6 +68,23 @@ class ForYouTest {
     }
 
     @Test
+    fun `a discography liked in one go leaves room for the other likes`() {
+        val discography = (1..6).map { album("d$it", "Midnight Quartet", starred = iso(1)) }
+        val others = (1..5).map { album("l$it", starred = iso(10L + it)) }
+        val items = mix(starred = Starred(album = discography + others))
+        assertEquals(listOf("d1", "d2", "l1", "l2", "l3", "l4"), items.map { it.album.id })
+    }
+
+    @Test
+    fun `forgotten albums of a favourite artist leave room for others`() {
+        val favourite = (1..8).map { album("f$it", "Signal Garden", plays = 50L - it, played = iso(200)) }
+        val others = (1..4).map { album("r$it", plays = 10L + it, played = iso(200)) }
+        val items = mix(frequent = favourite + others)
+        assertEquals(6, items.size)
+        assertEquals(2, items.count { it.album.artist == "Signal Garden" })
+    }
+
+    @Test
     fun `old likes and liked songs without an album are left out`() {
         val starred = Starred(
             song = listOf(
