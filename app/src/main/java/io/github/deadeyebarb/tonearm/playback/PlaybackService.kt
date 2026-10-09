@@ -128,6 +128,7 @@ class PlaybackService : MediaLibraryService() {
         observeSettings()
         scope.launch { c.starred.overrides.collect { updateButtons() } }
         scope.launch { c.likes.pending.items.collect { updateButtons() } }
+        scope.launch { c.likes.phone.collect { updateButtons() } }
         // Back online: what couldn't be scrobbled goes now.
         scope.launch { c.network.online.filter { it }.collect { scrobbler.retry() } }
         // When a server is added (or switched), drop any "set up Tonearm" error the car is showing
@@ -138,6 +139,12 @@ class PlaybackService : MediaLibraryService() {
                     session.clearReplicatedLibraryError()
                     session.notifyChildrenChanged(MediaIds.ROOT, Int.MAX_VALUE, null)
                 }
+            }
+        }
+        // Daily Discovery and Your mix are on Home once the Tonearm server is found, which can take a while.
+        scope.launch {
+            c.tonearmServer.server.map { it?.history == true }.distinctUntilChanged().collect {
+                session.notifyChildrenChanged(MediaIds.HOME, Int.MAX_VALUE, null)
             }
         }
         restoreQueue()
@@ -309,7 +316,12 @@ class PlaybackService : MediaLibraryService() {
             runCatching {
                 c.likes.set(entry, !liked)
                 if (!liked) c.undislike(entry.song)
-            }.onFailure { c.messages.show(it.userMessage()) }
+            }.onFailure {
+                val message = it.userMessage()
+                c.messages.show(message)
+                // The car shows it for a moment too.
+                session.sendError(SessionError(SessionError.ERROR_UNKNOWN, message))
+            }
         }
     }
 
@@ -467,7 +479,16 @@ class PlaybackService : MediaLibraryService() {
             startIndex: Int,
             startPositionMs: Long,
         ): ListenableFuture<MediaItemsWithStartPosition> = scope.future {
-            tree.resolveForPlayback(mediaItems, startIndex, startPositionMs)
+            try {
+                // A song picked in the car plays its album or playlist; the app sends whole queues itself.
+                tree.resolveForPlayback(mediaItems, startIndex, startPositionMs, expandSongs = controller.packageName != packageName)
+            } catch (e: NoSuchElementException) {
+                // A voice search found nothing: say so (the car too), and what was playing carries on.
+                val message = e.message ?: "Nothing found"
+                c.messages.show(message)
+                session.sendError(SessionError(SessionError.ERROR_BAD_VALUE, message))
+                throw e
+            }
         }
 
         override fun onPlaybackResumption(
