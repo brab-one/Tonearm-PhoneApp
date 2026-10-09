@@ -22,6 +22,7 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Devices
 import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material3.Icon
@@ -31,6 +32,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -50,6 +52,7 @@ import io.github.deadeyebarb.tonearm.subsonic.AlbumListType
 import io.github.deadeyebarb.tonearm.ui.AlbumListRoute
 import io.github.deadeyebarb.tonearm.ui.ConnectRoute
 import io.github.deadeyebarb.tonearm.ui.DownloadsRoute
+import io.github.deadeyebarb.tonearm.ui.HistoryRoute
 import io.github.deadeyebarb.tonearm.ui.SettingsRoute
 import io.github.deadeyebarb.tonearm.ui.common.AlbumRow
 import io.github.deadeyebarb.tonearm.ui.common.AppActions
@@ -93,6 +96,9 @@ fun HomeScreen() {
         }
     }
     val online by c.network.online.collectAsStateWithLifecycle()
+    val server by c.tonearmServer.server.collectAsStateWithLifecycle()
+    // What the Tonearm server can do (History, daily mixes) shows once it has been looked for.
+    LaunchedEffect(session?.id) { runCatching { c.tonearmServer.refresh(session) } }
     Scaffold(
         containerColor = Color.Transparent,
         topBar = {
@@ -100,6 +106,7 @@ fun HomeScreen() {
                 serverName = session?.config?.name,
                 mtls = session?.config?.clientCert != null,
                 online = online && vm.state !is Load.Failed,
+                history = server?.stats == true,
                 onSettings = { actions.navigate(SettingsRoute) },
             )
         },
@@ -127,7 +134,7 @@ fun HomeScreen() {
 }
 
 @Composable
-private fun HomeHeader(serverName: String?, mtls: Boolean, online: Boolean, onSettings: () -> Unit) {
+private fun HomeHeader(serverName: String?, mtls: Boolean, online: Boolean, history: Boolean, onSettings: () -> Unit) {
     val actions = LocalActions.current
     val hud = Hud.colors
     Row(
@@ -151,6 +158,7 @@ private fun HomeHeader(serverName: String?, mtls: Boolean, online: Boolean, onSe
                 )
             }
         }
+        if (history) IconButton(onClick = { actions.navigate(HistoryRoute) }) { Icon(Icons.Rounded.History, "History") }
         IconButton(onClick = { actions.navigate(ConnectRoute) }) { Icon(Icons.Rounded.Devices, "Devices") }
         IconButton(onClick = onSettings) { Icon(Icons.Rounded.Settings, "Settings") }
     }

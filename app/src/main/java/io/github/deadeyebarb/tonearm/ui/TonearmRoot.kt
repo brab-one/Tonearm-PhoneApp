@@ -93,6 +93,7 @@ import io.github.deadeyebarb.tonearm.ui.discover.DailyScreen
 import io.github.deadeyebarb.tonearm.ui.discover.DiscoverScreen
 import io.github.deadeyebarb.tonearm.ui.discover.MoreLikeScreen
 import io.github.deadeyebarb.tonearm.ui.downloads.DownloadsScreen
+import io.github.deadeyebarb.tonearm.ui.history.HistoryScreen
 import io.github.deadeyebarb.tonearm.ui.home.HomeScreen
 import io.github.deadeyebarb.tonearm.ui.library.LibraryScreen
 import io.github.deadeyebarb.tonearm.ui.library.PhoneAlbumScreen
@@ -223,6 +224,7 @@ fun TonearmRoot(container: AppContainer, openPlayerRequests: Int, requestNotific
                     composable<HomeRoute> { HomeScreen() }
                     composable<DiscoverRoute> { DiscoverScreen() }
                     composable<DailyRoute> { DailyScreen() }
+                    composable<HistoryRoute> { HistoryScreen() }
                     composable<ConnectRoute> { ConnectScreen() }
                     composable<RequestRoute> { RequestScreen(it.toRoute<RequestRoute>().query) }
                     composable<LidarrSettingsRoute> { LidarrSettingsScreen() }
