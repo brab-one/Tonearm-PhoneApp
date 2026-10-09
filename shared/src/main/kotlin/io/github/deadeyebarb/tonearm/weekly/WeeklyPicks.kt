@@ -131,6 +131,8 @@ class WeeklyPicks(
             batches = batches(session)
         }
         val current = batches.maxByOrNull { it.state.created }
+        // The week's albums Lidarr has let go of before they arrived are wanted again.
+        current?.takeIf { it.state.status == WeeklyState.READY && now < it.expires }?.let { rewant(config, key, it) }
         val gone = mutableSetOf<String>()
         for (old in batches) {
             val replaced = old !== current && current != null && old.state.created < current.state.created && current.state.status == WeeklyState.READY
@@ -139,6 +141,11 @@ class WeeklyPicks(
                 cleanUp(config, key, session, old)
                 gone += old.playlist.id
             }
+        }
+        if (gone.isNotEmpty()) {
+            // Weeks that stay keep their artists; anything else in the user's own folder with nothing wanted or on disk goes.
+            val inUse = batches.filter { it.playlist.id !in gone }.flatMap { b -> b.state.albums.map { it.artistId } }.toSet()
+            runCatching { connect.picksFolder(session) }.getOrNull()?.takeIf { it.ready }?.let { sweep(config, key, it.path, inUse) }
         }
         batches.filter { it.state.status == WeeklyState.READY && it.playlist.id !in gone }.forEach { runCatching { fill(session, it) } }
         return news
@@ -319,6 +326,26 @@ class WeeklyPicks(
             }
         }
         api.deletePlaylist(batch.playlist.id, session)
+    }
+
+    /**
+     * Monitors (and searches for) the batch's albums that are neither monitored nor on disk anymore: Lidarr unmonitors a
+     * new artist's albums once it has added them, when it isn't told which one was asked for.
+     */
+    private suspend fun rewant(config: LidarrConfig, key: String, batch: WeeklyBatch) {
+        for (album in batch.state.albums) {
+            val now = runCatching { lidarr.album(config, key, album.lidarrId) }.getOrNull() ?: continue
+            if (!now.monitored && (now.statistics?.trackFileCount ?: 0) == 0) runCatching { lidarr.monitorAlbum(config, key, album.lidarrId, search = true) }
+        }
+    }
+
+    /** Deletes the artists in the user's own picks [folder] with nothing wanted and nothing on disk, except those weeks still use. */
+    private suspend fun sweep(config: LidarrConfig, key: String, folder: String, inUse: Set<Int>) {
+        val leftovers = lidarr.artists(config, key).filter { it.id !in inUse && isIn(it.path, folder) && (it.statistics?.trackFileCount ?: 0) == 0 }
+        for (artist in leftovers) {
+            val wanted = runCatching { lidarr.albums(config, key, artist.id) }.getOrNull()?.any { it.monitored } ?: true
+            if (!wanted) runCatching { lidarr.deleteArtist(config, key, artist.id, exclude = false) }
+        }
     }
 
     private class AlbumKey(val title: String, val artist: String) {

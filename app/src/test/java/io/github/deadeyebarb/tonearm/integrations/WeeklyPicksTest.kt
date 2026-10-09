@@ -53,6 +53,8 @@ class WeeklyPicksTest {
     private var picksFolder: String? = null
     /** Lidarr's artists. */
     private var artists = """[{"id":5,"artistName":"Tricky"}]"""
+    /** Lidarr's albums by id, as GET album/{id} gives them; also what GET album?artistId= lists. */
+    private val albumsById = mutableMapOf<Int, String>()
 
     private val T = 1_760_000_000_000L
 
@@ -113,6 +115,10 @@ class WeeklyPicksTest {
                     {"id":4,"name":"Tonearm weekly picks","implementation":"Brainarr","fields":[{"name":"maxRecommendations","value":3}]}]""")
             }
             endpoint == "artist" -> MockResponse(body = artists)
+            endpoint.startsWith("album/") && endpoint.removePrefix("album/").toIntOrNull() != null ->
+                albumsById[endpoint.removePrefix("album/").toInt()]?.let { MockResponse(body = it) } ?: MockResponse(code = 404)
+            endpoint == "album" && request.method == "GET" ->
+                MockResponse(body = albumsById.values.filter { "\"artistId\":${q("artistId")}," in it }.joinToString(",", "[", "]"))
             endpoint == "rootfolder" -> MockResponse(body = """[{"id":1,"path":"/music","defaultQualityProfileId":1,"defaultMetadataProfileId":1}]""")
             endpoint == "album/lookup" -> MockResponse(body = when (q("term")) {
                 "Mazzy Star So Tonight That I Might See" -> """[{"id":0,"title":"So Tonight That I Might See","foreignAlbumId":"rg-m","artist":{"artistName":"Mazzy Star","foreignArtistId":"a-m"}}]"""
@@ -279,5 +285,52 @@ class WeeklyPicksTest {
         assertTrue(playlists.isEmpty())
         // An admin's go (after the half-day pause between tries) starts the week.
         assertEquals("Picking this week's albums from what you play", weekly.tick(config, "k", session, now = T + 13 * 3_600_000L))
+    }
+
+    @Test
+    fun `a new artist comes with the asked-for album monitored`() = runTest {
+        oldLists = false
+        weekly.tick(config, "k", session, now = T)
+        picks = week
+        weekly.tick(config, "k", session, now = T + 180_000)
+        // Lidarr's after-adding step would otherwise unmonitor every album of the new artist, this one too.
+        val homogenic = addedAlbums.single { "rg-h" in it }
+        assertTrue("\"albumsToMonitor\":[\"rg-h\"]" in homogenic)
+    }
+
+    @Test
+    fun `the week's albums Lidarr let go of before they came are wanted again`() = runTest {
+        oldLists = false
+        weekly.tick(config, "k", session, now = T)
+        picks = week
+        weekly.tick(config, "k", session, now = T + 180_000)
+        // Mazzy Star's album was unmonitored by Lidarr with nothing on disk; Homogenic arrived and stays as it is.
+        albumsById[50] = """{"id":50,"artistId":9,"title":"So Tonight That I Might See","monitored":false,"statistics":{"trackFileCount":0}}"""
+        albumsById[51] = """{"id":51,"artistId":10,"title":"Homogenic","monitored":false,"statistics":{"trackFileCount":10}}"""
+        lidarrChanges.clear()
+        weekly.tick(config, "k", session, now = T + 3_600_000)
+        assertEquals(listOf("PUT" to "album/monitor"), lidarrChanges.filter { it.first == "PUT" })
+        assertTrue(lidarrChanges.any { it.first == "POST" && it.second == "command" })
+    }
+
+    @Test
+    fun `leftover artists in your own picks go with the old week`() = runTest {
+        oldLists = false
+        picksFolder = """{"path":"/picks/alice","ready":true}"""
+        artists = """[{"id":5,"artistName":"Tricky","path":"/music/Tricky"},
+            {"id":30,"artistName":"Leftover","path":"/picks/alice/Leftover","statistics":{"trackFileCount":0}},
+            {"id":31,"artistName":"Kept","path":"/picks/alice/Kept","statistics":{"trackFileCount":12}}]"""
+        albumsById[300] = """{"id":300,"artistId":30,"title":"Never Came","monitored":false}"""
+        weekly.tick(config, "k", session, now = T)
+        picks = week
+        weekly.tick(config, "k", session, now = T + 180_000)
+        // A week later the next one replaces it, and the clean-up sweeps the folder.
+        picks = """{"picks":[],"madeAt":0,"running":true}"""
+        weekly.tick(config, "k", session, now = T + WeeklyPicks.WEEK)
+        picks = week.replace("${T + 120_000}", "${T + WeeklyPicks.WEEK + 60_000}")
+        lidarrChanges.clear()
+        weekly.tick(config, "k", session, now = T + WeeklyPicks.WEEK + 180_000)
+        assertTrue(lidarrChanges.any { it == "DELETE" to "artist/30?deleteFiles=true&addImportListExclusion=false" })
+        assertFalse(lidarrChanges.any { it.second.startsWith("artist/31") || it.second.startsWith("artist/5") })
     }
 }

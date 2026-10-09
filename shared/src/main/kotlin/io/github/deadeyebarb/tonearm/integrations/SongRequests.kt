@@ -103,6 +103,7 @@ class SongRequests(
         }
         if (album.monitored) return alreadyWanted(config, key, album.title, existing?.artistName ?: artist.title, existing?.path)
         lidarr.monitorAlbum(config, key, album.id, search = config.searchOnAdd)
+        if (added != null) keepWanted(config, key, album.id)
         return SongRequestResult.Album(album.title, (existing ?: added)?.artistName?.ifEmpty { null } ?: artist.title)
     }
 
@@ -118,6 +119,21 @@ class SongRequests(
             throw IntegrationHttpException(409, "$artist is in someone else's private weekly picks, so “$title” won't reach your library; an admin can move $artist to a shared root folder in Lidarr")
         }
         return SongRequestResult.AlreadyWanted(title)
+    }
+
+    /**
+     * Lidarr's after-adding step for a new artist (added with nothing monitored, before the song's album was known) can
+     * come after the album was monitored, and unmonitor it again: a few looks, and it's monitored once more.
+     */
+    private suspend fun keepWanted(config: LidarrConfig, key: String, albumId: Int) {
+        repeat(6) {
+            pause(5_000)
+            val now = runCatching { lidarr.album(config, key, albumId) }.getOrNull() ?: return
+            if (!now.monitored) {
+                lidarr.monitorAlbum(config, key, albumId, search = config.searchOnAdd)
+                return
+            }
+        }
     }
 
     /** The artist's tracks; for a just-added artist, once Lidarr has stopped adding to them (or after a while). */

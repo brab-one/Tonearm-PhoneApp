@@ -63,6 +63,8 @@ data class LidarrAlbum(
     val images: List<LidarrImage> = emptyList(),
     val remoteCover: String? = null,
     val artist: LidarrArtist? = null,
+    /** Its tracks and files (trackFileCount: what's on disk). */
+    val statistics: LidarrStatistics? = null,
 )
 
 @Serializable
@@ -250,6 +252,9 @@ class LidarrClient(private val http: IntegrationHttp, private val json: Json) {
     suspend fun albums(config: LidarrConfig, key: String, artistId: Int? = null): List<LidarrAlbum> =
         json.decodeFromString(ListSerializer(LidarrAlbum.serializer()), get(config, key, "album", listOfNotNull(artistId?.let { "artistId" to it })))
 
+    suspend fun album(config: LidarrConfig, key: String, albumId: Int): LidarrAlbum =
+        json.decodeFromString(LidarrAlbum.serializer(), get(config, key, "album/$albumId"))
+
     /** The tracks Lidarr knows for an artist's albums (from its metadata, whether or not they're monitored). */
     suspend fun tracks(config: LidarrConfig, key: String, artistId: Int): List<LidarrTrack> =
         json.decodeFromString(ListSerializer(LidarrTrack.serializer()), get(config, key, "track", listOf("artistId" to artistId)))
@@ -357,7 +362,12 @@ class LidarrClient(private val http: IntegrationHttp, private val json: Json) {
                 "addOptions" to buildJsonObject {
                     put("searchForNewAlbum", JsonPrimitive(defaults.search))
                 },
-                "artist" to artistBody(artistRaw, defaults, monitor = "none", search = false, monitorNewItems = "none"),
+                // A new artist comes with this album monitored only: with "none" alone, Lidarr's after-adding step would
+                // unmonitor every album of theirs, the requested one too.
+                "artist" to artistBody(
+                    artistRaw, defaults, monitor = "none", search = false, monitorNewItems = "none",
+                    albumsToMonitor = listOfNotNull((candidate.raw["foreignAlbumId"] as? JsonPrimitive)?.contentOrNull),
+                ),
             ),
         )
         val response = http.postJson(url(config, "album"), body.toString(), config.useServerTls, headers(key), service = "Lidarr")
@@ -370,6 +380,7 @@ class LidarrClient(private val http: IntegrationHttp, private val json: Json) {
         monitor: String,
         search: Boolean,
         monitorNewItems: String = if (monitor == "none") "none" else "all",
+        albumsToMonitor: List<String> = emptyList(),
     ) = JsonObject(
         raw + mapOf(
             "qualityProfileId" to JsonPrimitive(defaults.qualityProfileId),
@@ -380,6 +391,7 @@ class LidarrClient(private val http: IntegrationHttp, private val json: Json) {
             "addOptions" to buildJsonObject {
                 put("monitor", JsonPrimitive(monitor))
                 put("searchForMissingAlbums", JsonPrimitive(search))
+                if (albumsToMonitor.isNotEmpty()) put("albumsToMonitor", JsonArray(albumsToMonitor.map(::JsonPrimitive)))
             },
         ),
     )
