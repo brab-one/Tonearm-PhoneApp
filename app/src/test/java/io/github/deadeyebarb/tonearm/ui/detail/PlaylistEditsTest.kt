@@ -1,8 +1,24 @@
 package io.github.deadeyebarb.tonearm.ui.detail
 
+import androidx.lifecycle.viewModelScope
 import io.github.deadeyebarb.tonearm.subsonic.Playlist
 import io.github.deadeyebarb.tonearm.subsonic.Song
 import io.github.deadeyebarb.tonearm.subsonic.SubsonicApi
+import io.github.deadeyebarb.tonearm.ui.common.LoaderViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.setMain
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -73,5 +89,37 @@ class PlaylistEditsTest {
         }
         assertEquals(listOf("b", "d"), server)
         assertEquals(server, shown.entry.map { it.id })
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `a reload that comes while songs are being removed waits its turn`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        try {
+            // As the playlist page does it: removals and reloads share the playlist's lock.
+            val lock = Mutex()
+            val server = mutableListOf("a", "b", "c", "d", "e")
+            val changed = MutableStateFlow(0)
+            val vm = LoaderViewModel({ lock.withLock { delay(10); playlist(*server.toTypedArray()) } }, changed)
+            advanceUntilIdle()
+            // b, c and d tapped in a row; each removal reloads the page when it's done.
+            for (id in listOf("b", "c", "d")) {
+                launch(Dispatchers.Main) {
+                    lock.withLock {
+                        val index = vm.value!!.entry.indexOfCopy(id, 0)!!
+                        vm.mutate { it.withoutEntry(index) }
+                        delay(100)
+                        server.removeAt(index)
+                        changed.update { it + 1 }
+                    }
+                }
+            }
+            advanceUntilIdle()
+            assertEquals(listOf("a", "e"), server)
+            assertEquals(server, vm.value!!.entry.map { it.id })
+            vm.viewModelScope.cancel()
+        } finally {
+            Dispatchers.resetMain()
+        }
     }
 }

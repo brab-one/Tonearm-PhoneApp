@@ -33,6 +33,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -72,16 +73,20 @@ fun PlaylistScreen(id: String) {
     val c = LocalContext.current.container
     val actions = LocalActions.current
     val serverId = actions.activeServerId
-    val vm = rememberLoader("playlist", serverId, id) { c.api.playlist(id) }
+    // The server removes by position: one removal at a time, also across a rotation or the page opened again.
+    val removing = remember(serverId, id) { c.playlistLocks.getOrPut("$serverId|$id") { Mutex() } }
+    // Changed elsewhere (this playlist's page in another tab, the playlist picker): loaded again, under the lock too, so a
+    // list from the server never lands in the middle of removals.
+    val vm = rememberLoader("playlist", serverId, id, reloadOn = c.playlistsChanged) { removing.withLock { c.api.playlist(id) } }
     val playlist = vm.value
     val session by c.sessions.active.collectAsStateWithLifecycle()
-    // Someone else's playlist (or a smart one) can be played but not changed.
-    val editable = playlist?.editableBy(session?.config?.username) == true
+    // Someone else's playlist (or a smart one) can be played but not changed. An API key doesn't say whose it is; the Tonearm server does.
+    val user by produceState(session?.user, session) { value = session?.let { c.tonearmServer.user(it) } }
+    val editable = playlist?.editableBy(user) == true
     var menu by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
     var keeping by remember { mutableStateOf(false) }
-    val removing = remember { Mutex() }
     val weekly = playlist?.let { WeeklyPicks.parse(it) }
     val list = rememberLazyListState()
     // The header shows the name; the top bar takes it over once the header has scrolled away.
