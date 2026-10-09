@@ -739,7 +739,8 @@ class PlaybackService : MediaLibraryService() {
                     // A new queue: the radio playing doesn't go on with it.
                     .also { radio.stop() }
             } catch (e: NoSuchElementException) {
-                // A voice search found nothing: say so (the car too), and what was playing carries on.
+                // Nothing to play (a voice search found nothing, a mix couldn't be had): say so (the car too), and what was
+                // playing carries on.
                 val message = e.message ?: "Nothing found"
                 c.messages.show(message)
                 session.sendError(SessionError(SessionError.ERROR_BAD_VALUE, message))

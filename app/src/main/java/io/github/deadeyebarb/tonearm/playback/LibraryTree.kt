@@ -40,6 +40,8 @@ class LibraryTree(
     private val api get() = c.api
     /** Today's daily mixes: for which server, since when, and the answer (or the ask still under way). */
     @Volatile private var daily: Triple<String, Long, Deferred<DailyMixes?>>? = null
+    /** The last daily mixes that came, and for which server: a mix picked while they can't be had plays from these. */
+    @Volatile private var lastDaily: Pair<String, DailyMixes>? = null
 
     fun root(): MediaItem = factory.folder(MediaIds.ROOT, "Tonearm")
 
@@ -163,9 +165,26 @@ class LibraryTree(
     private fun dailyMixes(session: ServerSession): Deferred<DailyMixes?> {
         val now = System.currentTimeMillis()
         daily?.let { (server, at, answer) -> if (server == session.id && (answer.isActive || now - at < DAILY_CACHE_MS)) return answer }
-        val answer = c.scope.async { runCatching { c.mixer.daily(session) }.getOrNull() }
+        val answer = c.scope.async {
+            runCatching { c.mixer.daily(session) }.getOrNull()?.also { if (it.mixes.isNotEmpty()) lastDaily = session.id to it }
+        }
         daily = Triple(session.id, now, answer)
         return answer
+    }
+
+    /**
+     * A daily mix's songs: from today's mixes, else from the last ones that came (no signal for a moment). Fails with a
+     * message to show when it can't be had, which leaves the queue as it was.
+     */
+    private suspend fun dailyMix(session: ServerSession, id: String): List<Song> {
+        val today = dailyMixes(session).await()
+        val mix = today?.mixes?.firstOrNull { it.id == id }
+            ?: lastDaily?.takeIf { it.first == session.id }?.second?.mixes?.firstOrNull { it.id == id }
+        if (mix != null) return mix.songs
+        if (today == null) throw NoSuchElementException("Couldn't get that daily mix right now")
+        // A new day's mixes: Home shows those instead.
+        onHomeChanged()
+        throw NoSuchElementException("That daily mix isn't there anymore")
     }
 
     /** All songs in a container media ID, in play order. */
@@ -207,7 +226,7 @@ class LibraryTree(
             MediaIds.ALBUM -> api.album(parsed.id!!, session).song
             MediaIds.PLAYLIST -> api.playlist(parsed.id!!, session).entry
             MediaIds.GENRE -> api.songsByGenre(parsed.id!!, 500, session = session)
-            MediaIds.DAILY_MIX -> dailyMixes(session).await()?.mixes?.firstOrNull { it.id == parsed.id }?.songs.orEmpty()
+            MediaIds.DAILY_MIX -> dailyMix(session, parsed.id!!)
             else -> emptyList()
         }.map { QueueSong(serverId, it) }
     }
@@ -247,6 +266,7 @@ class LibraryTree(
     /**
      * With [expandSongs] (a car or another app), a single song picked from a browsed album or playlist
      * expands to the whole container. "Shuffle all" and voice searches ("play X on Tonearm") are resolved here too.
+     * A mix, album or playlist with nothing to play fails with a message to show: an empty queue would stop the music.
      */
     suspend fun resolveForPlayback(items: List<MediaItem>, startIndex: Int, startPositionMs: Long, expandSongs: Boolean = true): MediaItemsWithStartPosition {
         if (items.size == 1) {
@@ -272,6 +292,8 @@ class LibraryTree(
                         if (index >= 0) startPositionMs else 0,
                     )
                 }
+                // The mix or album picked has nothing to play (a song picked in one plays by itself, below).
+                if (container == item.mediaId) throw NoSuchElementException("Nothing to play there right now")
             }
         }
         return MediaItemsWithStartPosition(resolve(items), startIndex, startPositionMs)
