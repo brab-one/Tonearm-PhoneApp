@@ -21,6 +21,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import kotlin.random.Random
 
 /** The keyword mix against a fake Navidrome. */
 class SentenceMixTest {
@@ -57,7 +58,8 @@ class SentenceMixTest {
                 val q = { name: String -> url.queryParameter(name).orEmpty() }
                 return when (url.encodedPath.removePrefix("/rest/").removeSuffix(".view")) {
                     "getGenres" -> subsonic(""""genres":{"genre":[{"value":"Jazz"},{"value":"Ambient"},{"value":"Drum and Bass"},{"value":"Bass"},{"value":"Électronique"}]}""")
-                    "getSongsByGenre" -> subsonic(""""songsByGenre":{"song":${JsonArray(library.filter { it.text("genre") == q("genre") })}}""")
+                    // Navidrome's getSongsByGenre gives a big genre's songs in the same order every time: the mix draws at random.
+                    "getRandomSongs" -> subsonic(""""randomSongs":{"song":${JsonArray(library.filter { q("genre").isEmpty() || it.text("genre") == q("genre") })}}""")
                     "getArtists" -> subsonic(""""artists":{"index":[{"name":"M","artist":[{"id":"ar3","name":"Midnight Quartet"}]},{"name":"S","artist":[{"id":"ar2","name":"Signal Garden"}]}]}""")
                     "getTopSongs" -> subsonic(""""topSongs":{"song":${JsonArray(library.filter { topSongs && it.text("artist") == q("artist") }.take(2))}}""")
                     "search3" -> subsonic(""""searchResult3":{"song":${JsonArray(library.filter { q("query").lowercase() in (it.text("title") + " " + it.text("artist")).lowercase() })}}""")
@@ -96,7 +98,7 @@ class SentenceMixTest {
     @Test
     fun `genres, artists and the other words each bring their songs`() = runTest {
         val songs = SentenceMix.build(api, session, "rainy sunday, mellow jazz like Signal Garden", { _, _ -> false })
-        assertEquals(listOf("Jazz"), asked("getSongsByGenre").map { it.queryParameter("genre") })
+        assertEquals(listOf("Jazz"), asked("getRandomSongs").map { it.queryParameter("genre") })
         assertEquals(listOf("Signal Garden"), asked("getTopSongs").map { it.queryParameter("artist") })
         // Words the genre or the artist stand for, and short or empty ones, aren't searched.
         assertEquals(listOf("mellow", "rainy", "sunday"), asked("search3").mapNotNull { it.queryParameter("query") }.sorted())
@@ -127,6 +129,15 @@ class SentenceMixTest {
         // Never one artist twice in a row here: there are always others to put between.
         val artists = first.map { it.artist }
         assertTrue(artists.toString(), artists.windowed(2).none { it[0] == it[1] })
+    }
+
+    @Test
+    fun `another random shuffles the same songs anew`() = runTest {
+        val sentence = "jazz and ambient"
+        val first = SentenceMix.build(api, session, sentence, { _, _ -> false })
+        val again = (1..10).map { SentenceMix.build(api, session, sentence, { _, _ -> false }, random = Random(it)) }
+        assertTrue(again.all { it.toSet() == first.toSet() })
+        assertTrue(again.any { it != first })
     }
 
     @Test

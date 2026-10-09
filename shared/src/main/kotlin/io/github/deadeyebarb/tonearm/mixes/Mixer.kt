@@ -26,6 +26,7 @@ import kotlinx.serialization.Serializable
 import java.io.IOException
 import java.time.OffsetDateTime
 import java.time.ZoneId
+import kotlin.random.Random
 
 /** Where a radio starts: a song (library, YouTube Music when [youtube], or a file on this device when [local]), or the user's picks. */
 @Serializable
@@ -157,6 +158,7 @@ class Mixer(
     /**
      * A mix from a sentence; polls every 3 s while the server's AI works (≤ 5 min), calling [onWaiting]. Without the AI, or
      * when it couldn't answer, the mix is matched in the library ([Mix.ai] null, the AI's trouble in [Mix.problem]).
+     * [refresh] ("Ask again") has the AI make it again, and a mix matched in the library drawn and shuffled anew.
      * Throws when the AI is still at it after 5 minutes (asking again later picks its answer up).
      */
     suspend fun prompt(session: ServerSession, sentence: String, refresh: Boolean = false, onWaiting: (Mix) -> Unit = {}): Mix {
@@ -186,7 +188,8 @@ class Mixer(
                 note = answer.problem
             }
         }
-        val songs = SentenceMix.build(api, session, text, dislikes::isDisliked)
+        val random = if (refresh) Random(System.nanoTime()) else Random(text.hashCode())
+        val songs = SentenceMix.build(api, session, text, dislikes::isDisliked, random = random)
         return Mix(
             prompt = text, title = text, songs = songs, ai = null,
             problem = note ?: "Nothing in your library matches “$text”".takeIf { songs.isEmpty() },

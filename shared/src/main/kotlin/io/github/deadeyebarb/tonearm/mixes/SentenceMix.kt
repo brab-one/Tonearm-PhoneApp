@@ -47,8 +47,9 @@ object SentenceMix {
     }
 
     /**
-     * Up to [size] library songs for [sentence]: the genres it names (three at most), the artists it names, and songs
-     * found for its other words; shuffled the same way for the same sentence, without disliked songs.
+     * Up to [size] library songs for [sentence]: songs drawn at random from the genres it names (three at most), the
+     * artists it names, and songs found for its other words; shuffled with [random], without disliked songs. The same
+     * sentence is shuffled the same way unless [random] is another one ("Ask again").
      */
     suspend fun build(
         api: SubsonicApi,
@@ -56,6 +57,7 @@ object SentenceMix {
         sentence: String,
         isDisliked: (String?, String) -> Boolean,
         size: Int = 30,
+        random: Random = Random(sentence.trim().hashCode()),
     ): List<Song> = coroutineScope {
         val genres = genresIn(sentence, runCatching { api.genres(session) }.getOrDefault(emptyList()).map { it.value }).take(MAX_GENRES)
         val artists = artistsIn(sentence, runCatching { api.artists(session) }.getOrDefault(emptyList()).flatMap { it.artist }.map { it.name })
@@ -64,11 +66,12 @@ object SentenceMix {
         val words = terms(sentence).filter { it.length >= 4 && it !in named }.take(MAX_WORDS)
         val gate = Semaphore(4)
         val found = (
-            genres.map { genre -> async { gate.withPermit { runCatching { api.songsByGenre(genre, GENRE_SONGS, session = session) }.getOrDefault(emptyList()) } } } +
+            // At random: a genre's songs in the server's order would always be the same first ones of a big genre.
+            genres.map { genre -> async { gate.withPermit { runCatching { api.randomSongs(GENRE_SONGS, session, genre) }.getOrDefault(emptyList()) } } } +
                 artists.map { artist -> async { gate.withPermit { songsBy(api, session, artist) } } } +
                 words.map { word -> async { gate.withPermit { runCatching { api.search(word, 0, 0, WORD_SONGS, session).song }.getOrDefault(emptyList()) } } }
             ).awaitAll().flatten()
-        val songs = found.distinctBy { it.id }.filterNot { isDisliked(it.artistLabel, it.title) }.shuffled(Random(sentence.trim().hashCode()))
+        val songs = found.distinctBy { it.id }.filterNot { isDisliked(it.artistLabel, it.title) }.shuffled(random)
         RadioPolicy.spread(songs.map { NextSong(it, false) }).map { it.song }.take(size)
     }
 

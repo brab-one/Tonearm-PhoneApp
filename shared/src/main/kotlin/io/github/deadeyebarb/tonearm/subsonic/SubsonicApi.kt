@@ -75,8 +75,9 @@ class SubsonicApi(private val sessions: ActiveServer, private val json: Json) {
     suspend fun song(id: String, session: ServerSession? = null): Song =
         call(session ?: active(), "getSong", listOf("id" to id)).song ?: notFound()
 
-    suspend fun randomSongs(size: Int = 100, session: ServerSession? = null): List<Song> =
-        call(session ?: active(), "getRandomSongs", listOf("size" to size)).randomSongs?.song.orEmpty()
+    /** Songs drawn at random from the library, or only from [genre]. */
+    suspend fun randomSongs(size: Int = 100, session: ServerSession? = null, genre: String? = null): List<Song> =
+        call(session ?: active(), "getRandomSongs", listOf("size" to size, "genre" to genre)).randomSongs?.song.orEmpty()
 
     suspend fun songsByGenre(genre: String, count: Int = 100, offset: Int = 0, session: ServerSession? = null): List<Song> =
         call(session ?: active(), "getSongsByGenre", listOf("genre" to genre, "count" to count, "offset" to offset))

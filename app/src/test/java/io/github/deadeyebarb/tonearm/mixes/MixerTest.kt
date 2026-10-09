@@ -110,7 +110,7 @@ class MixerTest {
             "getStarred2" -> subsonic(""""starred2":{"song":${JsonArray(starred.map { (id, at) -> buildJsonObject { (catalog[id] ?: song(id)).forEach { (k, v) -> put(k, v) }; put("starred", Instant.ofEpochMilli(at).toString()) } })}}""")
             "getSimilarSongs2" -> subsonic(""""similarSongs2":{"song":${JsonArray(similarTo(q("id")!!))}}""")
             "getGenres" -> subsonic(""""genres":{"genre":[{"value":"Jazz","songCount":3},{"value":"Ambient","songCount":2}]}""")
-            "getSongsByGenre" -> subsonic(""""songsByGenre":{"song":${JsonArray(catalog.values.filter { it["genre"]?.jsonPrimitive?.content == q("genre") })}}""")
+            "getRandomSongs" -> subsonic(""""randomSongs":{"song":${JsonArray(catalog.values.filter { q("genre") == null || it["genre"]?.jsonPrimitive?.content == q("genre") })}}""")
             "getArtists" -> subsonic(""""artists":{"index":[{"name":"M","artist":[{"id":"ar3","name":"Midnight Quartet"}]}]}""")
             "getTopSongs" -> subsonic(""""topSongs":{"song":${JsonArray(catalog.values.filter { it["artist"]?.jsonPrimitive?.content == q("artist") })}}""")
             "search3" -> subsonic(""""searchResult3":{"song":${JsonArray(catalog.values.filter { q("query")!!.lowercase() in it["title"]!!.jsonPrimitive.content.lowercase() })}}""")
@@ -282,7 +282,7 @@ class MixerTest {
         assertEquals(listOf("al4-1"), mix.songs.map { it.id })
         assertEquals(2, waits.size)
         assertEquals(listOf("true", null, null), requested("mix").map { it.queryParameter("refresh") })
-        assertTrue(requested("getSongsByGenre").isEmpty())
+        assertTrue(requested("getRandomSongs").isEmpty())
     }
 
     @Test
@@ -323,6 +323,18 @@ class MixerTest {
         assertNull(mix.problem)
         assertEquals(setOf("al4-1", "al4-2", "al4-3"), mix.songs.map { it.id }.toSet())
         assertEquals("Nothing in your library matches “zzz”", mixer().prompt(session, "zzz").problem)
+    }
+
+    @Test
+    fun `asking again for a mix matched in the library shuffles it anew`() = runTest {
+        val mixer = mixer()
+        val first = mixer.prompt(session, "mellow jazz").songs.map { it.id }
+        assertEquals(first, mixer.prompt(session, "mellow jazz").songs.map { it.id })
+        // Three songs: ten asks all in the first order would be one in 60 million.
+        val again = (1..10).map { mixer.prompt(session, "mellow jazz", refresh = true).songs.map { it.id } }
+        assertTrue(again.all { it.toSet() == first.toSet() })
+        assertTrue(again.any { it != first })
+        assertTrue(requested("getRandomSongs").all { it.queryParameter("genre") == "Jazz" })
     }
 
     @Test
