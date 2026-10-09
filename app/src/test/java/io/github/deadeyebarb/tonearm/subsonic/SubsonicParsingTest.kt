@@ -70,15 +70,4 @@ class SubsonicParsingTest {
     fun `html from a misconfigured proxy is rejected clearly`() {
         SubsonicApi.parse(json, "<html><body>Login</body></html>")
     }
-
-    @Test
-    fun `structured lyrics are parsed`() {
-        val body = """
-            {"subsonic-response":{"status":"ok","version":"1.16.1","lyricsList":{"structuredLyrics":[
-              {"lang":"eng","synced":true,"offset":100,"line":[{"start":1100,"value":"one"},{"start":2100,"value":"two"}]}]}}}
-        """.trimIndent()
-        val lyrics = Lyrics.from(SubsonicApi.parse(json, body).lyricsList!!.structuredLyrics.single())
-        assertTrue(lyrics.synced)
-        assertEquals(listOf(1000L, 2000L), lyrics.lines.map { it.startMs })
-    }
 }

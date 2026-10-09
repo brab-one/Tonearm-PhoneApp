@@ -39,7 +39,6 @@ Related repositories:
 - ReplayGain (track/album, pre-amp, clipping protection), built-in equalizer + system EQ apps
 - Sleep timer (with fade-out, or "end of this song"), optional audio offload for battery
 - Queue with drag-to-reorder, play next, add to queue; the queue survives restarts
-- Synced lyrics (OpenSubsonic `songLyrics`) with tap-to-seek, plain lyrics fallback
 - Scrobbling (now playing + submissions, retried when offline)
 - Android Auto browsing, voice search ("play … on Tonearm"), playback resumption
 - **When the queue ends**: stop, keep going with similar music (library first, then YouTube Music's radio
@@ -251,7 +250,7 @@ is liked in your library. If its album can't be found, nothing is requested. Tur
 This uses [NewPipeExtractor](https://github.com/TeamNewPipe/NewPipeExtractor), the library behind
 NewPipe, without a Google account. It's unofficial: YouTube's terms don't allow third-party players,
 and changes on YouTube's side can break it until the library catches up. YouTube Music songs can't be
-downloaded, added to server playlists or show lyrics.
+downloaded or added to server playlists.
 
 ## Tonearm Connect (phone ↔ desktop)
 
@@ -316,7 +315,7 @@ python3 tools/mock-subsonic/server.py --connect http://127.0.0.1:8790 --plain-po
 On first run it creates a CA, a server certificate valid for `localhost`, `127.0.0.1` and
 `10.0.2.2` (the host as seen from the Android emulator), client certificates
 (`client.p12` and `client-legacy.p12`, password `tonearm`), and albums of 16/44.1, 24/96 and
-24/192 FLAC tones with cover art and synced lyrics, all under `tools/mock-subsonic/data/`.
+24/192 FLAC tones with cover art, all under `tools/mock-subsonic/data/`.
 The same address also serves a mock **Maloja** (`/apis/mlj_1/`, API key `maloja-key`) for the Tonearm
 server's one-time history import, and a mock **Lidarr** (`/api/v1/`, API key `lidarr-key`) with a small catalog, a download
 queue, album lookups and track lists, so Discover, Daily Discovery, requests and (behind a Tonearm server)

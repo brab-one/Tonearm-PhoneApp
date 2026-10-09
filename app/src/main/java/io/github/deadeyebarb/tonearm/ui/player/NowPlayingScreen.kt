@@ -30,7 +30,6 @@ import androidx.compose.material.icons.rounded.Devices
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Equalizer
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
-import androidx.compose.material.icons.rounded.Lyrics
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.Person
@@ -112,7 +111,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 
-private enum class Sheet { None, Queue, Lyrics, Sleep }
+private enum class Sheet { None, Queue, Sleep }
 
 @Composable
 fun NowPlayingScreen(onBack: () -> Unit) {
@@ -162,11 +161,7 @@ fun NowPlayingScreen(onBack: () -> Unit) {
                 Spacer(Modifier.height(4.dp))
                 Controls(state, visualizer)
                 Spacer(Modifier.height(10.dp))
-                BottomActions(
-                    // Only the music server has lyrics.
-                    hasLyrics = entry != null && !YouTubeMusic.isYouTube(entry.serverId) && !LocalMusic.isLocal(entry.serverId),
-                    onLyrics = { sheet = Sheet.Lyrics }, onSleep = { sheet = Sheet.Sleep }, onQueue = { sheet = Sheet.Queue },
-                )
+                BottomActions(state.radio, onSleep = { sheet = Sheet.Sleep }, onQueue = { sheet = Sheet.Queue })
             }
             if (maxWidth > maxHeight) {
                 Row(Modifier.fillMaxSize().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -190,7 +185,6 @@ fun NowPlayingScreen(onBack: () -> Unit) {
 
     when (sheet) {
         Sheet.Queue -> QueueSheet(state) { sheet = Sheet.None }
-        Sheet.Lyrics -> entry?.let { LyricsSheet(it) { sheet = Sheet.None } }
         Sheet.Sleep -> SleepTimerSheet { sheet = Sheet.None }
         Sheet.None -> Unit
     }
@@ -363,20 +357,24 @@ private fun Controls(state: PlayerUiState, visualizer: VisualizerState) {
     }
 }
 
+/** Sleep, radio and queue. [radio] is the radio's title while one plays: the button then stops it. */
 @Composable
-private fun BottomActions(hasLyrics: Boolean, onLyrics: () -> Unit, onSleep: () -> Unit, onQueue: () -> Unit) {
-    val timer by LocalContext.current.container.sleepTimer.state.collectAsStateWithLifecycle()
+private fun BottomActions(radio: String?, onSleep: () -> Unit, onQueue: () -> Unit) {
+    val c = LocalContext.current.container
+    val timer by c.sleepTimer.state.collectAsStateWithLifecycle()
     val hud = Hud.colors
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-        // Dimmed where there are none; a tap still says why.
-        DeckButton(Icons.Rounded.Lyrics, "LYRICS", if (hasLyrics) hud.dim else hud.dim.copy(alpha = 0.4f), onLyrics)
-        DeckButton(Icons.Rounded.Bedtime, if (timer != SleepTimer.State.Off) "TIMER ON" else "SLEEP", if (timer != SleepTimer.State.Off) hud.accent else hud.dim, onSleep)
-        DeckButton(Icons.AutoMirrored.Rounded.QueueMusic, "QUEUE", hud.dim, onQueue)
+        DeckButton(Icons.Rounded.Bedtime, if (timer != SleepTimer.State.Off) "TIMER ON" else "SLEEP", if (timer != SleepTimer.State.Off) hud.accent else hud.dim, onClick = onSleep)
+        DeckButton(
+            Icons.Rounded.Radio, if (radio != null) "RADIO ON" else "RADIO", if (radio != null) hud.accent else hud.dim,
+            onClickLabel = if (radio != null) "Stop the radio" else "Start a radio from this song",
+        ) { if (radio != null) c.player.stopRadio() else c.player.startRadio() }
+        DeckButton(Icons.AutoMirrored.Rounded.QueueMusic, "QUEUE", hud.dim, onClick = onQueue)
     }
 }
 
 @Composable
-private fun DeckButton(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, color: Color, onClick: () -> Unit) {
+private fun DeckButton(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, color: Color, onClickLabel: String? = null, onClick: () -> Unit) {
     val hud = Hud.colors
     val shape = MaterialTheme.shapes.small
     Row(
@@ -384,7 +382,7 @@ private fun DeckButton(icon: androidx.compose.ui.graphics.vector.ImageVector, la
             .glowBorder(hud.line, shape, glow = 0.dp)
             .clip(shape)
             .background(hud.panel.copy(alpha = 0.6f))
-            .clickable(onClick = onClick)
+            .clickable(onClickLabel = onClickLabel, onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

@@ -29,10 +29,7 @@ data class SubsonicResponse(
     val randomSongs: SongList? = null,
     val topSongs: SongList? = null,
     val similarSongs2: SongList? = null,
-    val lyrics: PlainLyrics? = null,
-    val lyricsList: LyricsList? = null,
     val artistInfo2: ArtistInfo? = null,
-    val openSubsonicExtensions: List<OpenSubsonicExtension>? = null,
 )
 
 @Serializable
@@ -192,31 +189,11 @@ data class Genres(val genre: List<Genre> = emptyList())
 data class Genre(val value: String = "", val songCount: Int = 0, val albumCount: Int = 0)
 
 @Serializable
-data class PlainLyrics(val artist: String? = null, val title: String? = null, val value: String? = null)
-
-@Serializable
-data class LyricsList(val structuredLyrics: List<StructuredLyrics> = emptyList())
-
-@Serializable
-data class StructuredLyrics(
-    val lang: String? = null,
-    val synced: Boolean = false,
-    val offset: Long = 0,
-    val line: List<StructuredLine> = emptyList(),
-)
-
-@Serializable
-data class StructuredLine(val start: Long? = null, val value: String = "")
-
-@Serializable
 data class ArtistInfo(
     val biography: String? = null,
     val largeImageUrl: String? = null,
     val similarArtist: List<Artist> = emptyList(),
 )
-
-@Serializable
-data class OpenSubsonicExtension(val name: String = "", val versions: List<Int> = emptyList())
 
 enum class AlbumListType(val param: String, val title: String) {
     NEWEST("newest", "Recently added"),
