@@ -54,6 +54,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -405,32 +406,44 @@ class PlaybackService : MediaLibraryService() {
     }
 
     /**
-     * After a network error (a tunnel, a dead zone) while the music should play: while offline it skips
-     * to the next song that plays without a connection, otherwise it waits for one and carries on.
+     * After a network error (a tunnel, a dead zone) while the music should play: while offline, or when trying again
+     * failed too (a network that's there but gets nothing through), it skips to the next song that plays without a
+     * connection; otherwise it waits for one and carries on. Out of tries, it starts over once the connection is back.
      */
     private fun recover(error: PlaybackException) {
         val online = c.network.online.value
         // Offline, any reading error is down to that (a YouTube Music song can't be looked up, say).
         val lostConnection = error.errorCode in CONNECTION_ERRORS || (!online && error.errorCode in IO_ERRORS)
-        if (!lostConnection || !player.playWhenReady || recoveries >= MAX_RECOVERIES) return
-        recoveries++
+        if (!lostConnection || !player.playWhenReady) return
         recoverJob?.cancel()
-        recoverJob = scope.launch {
-            if (!online) {
-                val upcoming = CacheAhead.upcoming(player.currentTimeline, player.currentMediaItemIndex, player.repeatMode, player.shuffleModeEnabled, player.mediaItemCount)
-                val uris = upcoming.map { player.getMediaItemAt(it).localConfiguration?.uri }
-                val offline = withContext(Dispatchers.IO) { uris.indexOfFirst { it != null && c.media.playsOffline(it) } }
-                if (offline >= 0 && player.playerError != null) {
-                    player.seekToDefaultPosition(upcoming[offline])
-                    player.prepare()
-                    c.messages.show("Offline: skipped to a song that plays without a connection")
-                    return@launch
-                }
-                c.network.online.first { it }
+        if (recoveries >= MAX_RECOVERIES) {
+            recoverJob = scope.launch {
+                // The next time it comes back (it may be gone first).
+                c.network.online.drop(1).first { it }
+                recoveries = 0
+                if (player.playerError != null && player.playWhenReady) player.prepare()
             }
+            return
+        }
+        recoveries++
+        recoverJob = scope.launch {
+            if ((!online || recoveries > 1) && skipToOffline()) return@launch
+            if (!online) c.network.online.first { it }
             delay(RECOVER_DELAY_MS * recoveries)
             if (player.playerError != null) player.prepare()
         }
+    }
+
+    /** Skips to the next song that plays without a connection; false when none does. */
+    private suspend fun skipToOffline(): Boolean {
+        val upcoming = CacheAhead.upcoming(player.currentTimeline, player.currentMediaItemIndex, player.repeatMode, player.shuffleModeEnabled, player.mediaItemCount)
+        val uris = upcoming.map { player.getMediaItemAt(it).localConfiguration?.uri }
+        val offline = withContext(Dispatchers.IO) { uris.indexOfFirst { it != null && c.media.playsOffline(it) } }
+        if (offline < 0 || player.playerError == null) return false
+        player.seekToDefaultPosition(upcoming[offline])
+        player.prepare()
+        c.messages.show("Offline: skipped to a song that plays without a connection")
+        return true
     }
 
     private fun toggleStar() {
