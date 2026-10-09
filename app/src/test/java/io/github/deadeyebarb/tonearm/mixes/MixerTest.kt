@@ -272,7 +272,8 @@ class MixerTest {
         mixAnswers += """{"error":"This Tonearm server has no AI set up"}"""
         val failed = mixer().prompt(session, "mellow jazz")
         assertEquals(3, failed.songs.size)
-        assertTrue(failed.problem!!, "no AI" in failed.problem!!)
+        val problem = failed.problem!!
+        assertTrue(problem, "no AI" in problem)
     }
 
     @Test
