@@ -5,6 +5,7 @@ import io.github.deadeyebarb.tonearm.connect.ConnectRouter
 import io.github.deadeyebarb.tonearm.connect.DailyMixes
 import io.github.deadeyebarb.tonearm.connect.Mix
 import io.github.deadeyebarb.tonearm.integrations.Continuation
+import io.github.deadeyebarb.tonearm.integrations.IntegrationHttpException
 import io.github.deadeyebarb.tonearm.integrations.NextSong
 import io.github.deadeyebarb.tonearm.likes.Dislikes
 import io.github.deadeyebarb.tonearm.subsonic.ServerSession
@@ -170,7 +171,8 @@ class Mixer(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: IOException) {
-                note = e.message
+                // The server's own reason, else plainly that it didn't answer (not how the request failed).
+                note = (e as? IntegrationHttpException)?.reason ?: SERVER_UNREACHABLE
                 null
             }
             if (answer != null) {
@@ -204,6 +206,8 @@ class Mixer(
 
     companion object {
         const val NO_PICKS = "Picks radio starts from your weekly picks and the songs you like. Like a few songs first."
+        /** The note on a mix matched in the library because the Tonearm server didn't answer. */
+        const val SERVER_UNREACHABLE = "The Tonearm server couldn't be reached"
         private const val RADIO_TIMEOUT_MS = 8_000L
         private const val POLL_MS = 3_000L
         /** 5 minutes of asking every 3 s. */

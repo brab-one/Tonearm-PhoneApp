@@ -96,6 +96,20 @@ class ConnectClientTest {
         } catch (e: IntegrationHttpException) {
             assertEquals(401, e.code)
             assertEquals("Tonearm server: Navidrome didn't accept that login", e.message)
+            assertEquals("Navidrome didn't accept that login", e.reason)
+        }
+    }
+
+    @Test
+    fun `a proxy with nothing behind it gives no reason of the server's`() = runTest {
+        respond("<html><body>502 Bad Gateway</body></html>", 502)
+        try {
+            client.devices(ConnectRoute.Server(session()))
+            error("expected failure")
+        } catch (e: IntegrationHttpException) {
+            assertEquals(502, e.code)
+            assertEquals("Tonearm server: No answer through the proxy (HTTP 502); try again in a moment", e.message)
+            assertNull(e.reason)
         }
     }
 

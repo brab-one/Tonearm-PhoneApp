@@ -13,8 +13,11 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
-/** An HTTP error from Lidarr or the Tonearm server, with the server's own message when it sent one. */
-open class IntegrationHttpException(val code: Int, message: String, cause: Throwable? = null) : IOException(message, cause)
+/**
+ * An HTTP error from Lidarr or the Tonearm server, with the server's own message when it sent one. [reason] is that
+ * message alone, without the service's name; null when the service gave none (no answer, or just a status code).
+ */
+open class IntegrationHttpException(val code: Int, message: String, cause: Throwable? = null, val reason: String? = null) : IOException(message, cause)
 
 /**
  * HTTP for the integrations. When asked to, requests go through the active music server's
@@ -70,7 +73,10 @@ class IntegrationHttp(
             try {
                 client.newCall(request).await().use { response ->
                     val text = response.body.string()
-                    if (!response.isSuccessful) throw IntegrationHttpException(response.code, prefix + describe(response.code, text))
+                    if (!response.isSuccessful) {
+                        val reason = reasonIn(text)
+                        throw IntegrationHttpException(response.code, prefix + (reason ?: describe(response.code)), reason = reason)
+                    }
                     text
                 }
             } catch (e: IntegrationHttpException) {
@@ -82,17 +88,20 @@ class IntegrationHttp(
         }
     }
 
-    private fun describe(code: Int, body: String): String {
+    /** The service's own words in an error answer, if any. */
+    private fun reasonIn(body: String): String? {
         // Lidarr validation errors: [{"propertyName": "...", "errorMessage": "..."}]; the Tonearm server: {"error": "..."}.
         val messages = Regex(""""(?:errorMessage|error|message)"\s*:\s*"([^"]+)"""").findAll(body).map { it.groupValues[1] }.toList()
-        return when {
-            messages.isNotEmpty() -> messages.distinct().joinToString("; ")
-            code == 401 || code == 403 -> "The API key was rejected (HTTP $code)"
-            code == 404 -> "Nothing at this address (HTTP 404). Check the URL."
-            // From a reverse proxy: it got no answer from what's behind it.
-            code == 502 || code == 504 -> "No answer through the proxy (HTTP $code); try again in a moment"
-            else -> "HTTP $code"
-        }
+        return messages.distinct().joinToString("; ").ifEmpty { null }
+    }
+
+    /** An error answer without the service's own words. */
+    private fun describe(code: Int): String = when (code) {
+        401, 403 -> "The API key was rejected (HTTP $code)"
+        404 -> "Nothing at this address (HTTP 404). Check the URL."
+        // From a reverse proxy: it got no answer from what's behind it.
+        502, 504 -> "No answer through the proxy (HTTP $code); try again in a moment"
+        else -> "HTTP $code"
     }
 
     companion object {

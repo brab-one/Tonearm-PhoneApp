@@ -55,6 +55,8 @@ class MixerTest {
     private var radioAnswer: MockResponse = MockResponse(code = 404, body = """{"error":"not here"}""")
     /** Answers to "mix" and "dailymixes", in turn; the last one stays. */
     private val mixAnswers = ArrayDeque<String>()
+    /** What "mix" gets instead, when set: the server down, say. */
+    private var mixFailure: MockResponse? = null
     private val dailyAnswers = ArrayDeque<String>()
     private var disliked = """{"songs":[{"artist":"Signal Garden","title":"Shimmer"}],"artists":[]}"""
 
@@ -118,7 +120,7 @@ class MixerTest {
             "hello" -> MockResponse(body = hello)
             "disliked" -> MockResponse(body = disliked)
             "radio" -> radioAnswer
-            "mix" -> MockResponse(body = if (mixAnswers.size > 1) mixAnswers.removeFirst() else mixAnswers.first())
+            "mix" -> mixFailure ?: MockResponse(body = if (mixAnswers.size > 1) mixAnswers.removeFirst() else mixAnswers.first())
             "dailymixes" -> MockResponse(body = if (dailyAnswers.size > 1) dailyAnswers.removeFirst() else dailyAnswers.first())
             else -> MockResponse(code = 404, body = """{"error":"no such op"}""")
         }
@@ -274,6 +276,17 @@ class MixerTest {
         assertEquals(3, failed.songs.size)
         val problem = failed.problem!!
         assertTrue(problem, "no AI" in problem)
+    }
+
+    @Test
+    fun `when the server doesn't answer, the note says so plainly`() = runTest {
+        hello = """{"server":"tonearm","protocol":2,"dislikes":true,"mix":true}"""
+        // The proxy in front of it, with nothing behind it.
+        mixFailure = MockResponse(code = 502, body = "<html><body><h1>502 Bad Gateway</h1></body></html>")
+        val mix = mixer().prompt(session, "mellow jazz")
+        assertNull(mix.ai)
+        assertEquals(Mixer.SERVER_UNREACHABLE, mix.problem)
+        assertEquals(setOf("al4-1", "al4-2", "al4-3"), mix.songs.map { it.id }.toSet())
     }
 
     @Test

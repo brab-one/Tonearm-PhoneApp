@@ -508,7 +508,7 @@ class ConnectClient(private val http: IntegrationHttp, private val json: Json) {
         val session = (route as ConnectRoute.Server).session
         val text = http.post(session.connectUrl(op, params), payload, session.client, service = "Tonearm server")
         val response = json.parseToJsonElement(text).jsonObject
-        response["error"]?.jsonPrimitive?.contentOrNull?.let { throw IntegrationHttpException(0, "Tonearm server: $it") }
+        response["error"]?.jsonPrimitive?.contentOrNull?.let { throw IntegrationHttpException(0, "Tonearm server: $it", reason = it) }
         return response
     }
 
