@@ -122,7 +122,7 @@ class PlaylistSources(private val client: OkHttpClient, private val youtube: You
          * Columns are found by their header.
          */
         fun parseCsv(text: String, name: String): ImportedPlaylist {
-            val rows = csvRows(text.removePrefix("﻿"))
+            val rows = csvRows(text.removePrefix("\uFEFF"))
             val header = rows.firstOrNull()?.map { it.trim().lowercase() } ?: return ImportedPlaylist(name, emptyList())
             fun column(vararg names: String) = header.indexOfFirst { h -> names.any { h == it } }.takeIf { it >= 0 }
                 ?: header.indexOfFirst { h -> names.any { h.startsWith(it) } }.takeIf { it >= 0 }

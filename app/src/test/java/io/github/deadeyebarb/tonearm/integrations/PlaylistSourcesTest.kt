@@ -33,7 +33,7 @@ class PlaylistSourcesTest {
 
     @Test
     fun `Exportify CSV with quotes and commas`() {
-        val csv = "﻿\"Track URI\",\"Track Name\",\"Artist Name(s)\",\"Album Name\",\"Duration (ms)\"\n" +
+        val csv = "\uFEFF\"Track URI\",\"Track Name\",\"Artist Name(s)\",\"Album Name\",\"Duration (ms)\"\n" +
             "\"spotify:track:1\",\"Hello, Goodbye\",\"The Beatles\",\"Magical Mystery Tour\",\"208000\"\r\n" +
             "\"spotify:track:2\",\"Say \"\"Hi\"\"\",\"A,B\",\"\",\"1000\"\n"
         val playlist = PlaylistSources.parseCsv(csv, "Mine")

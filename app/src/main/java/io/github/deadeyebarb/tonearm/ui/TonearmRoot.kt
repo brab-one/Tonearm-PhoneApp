@@ -63,7 +63,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavDestination.Companion.hasRoute
+import androidx.navigation.compose.ComposeNavigator
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -114,6 +116,7 @@ import io.github.deadeyebarb.tonearm.ui.theme.glowBorder
 import io.github.deadeyebarb.tonearm.youtube.YtAlbum
 import io.github.deadeyebarb.tonearm.youtube.YtArtist
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 
 private enum class Tab(val route: Any, val label: String, val icon: ImageVector) {
     HOME(HomeRoute, "Home", Icons.Rounded.Home),
@@ -168,8 +171,13 @@ fun TonearmRoot(container: AppContainer, openPlayerRequests: Int, requestNotific
     val entry by nav.currentBackStackEntryAsState()
     val destination = entry?.destination
     val showBars = list.servers.isNotEmpty() && destination?.hasRoute<NowPlayingRoute>() != true
-    // A page belongs to the tab it was opened from: the nearest tab below it on the back stack.
-    val backStack by nav.currentBackStack.collectAsStateWithLifecycle()
+    // A page belongs to the tab it was opened from: the nearest tab below it on the back stack. Every page is a
+    // composable, so the back stack of the navigator that shows them has them all. NavHost hands that navigator its
+    // back stack when it sets the graph, which is done once there's a current entry.
+    val pages = remember(nav) { nav.navigatorProvider.getNavigator(ComposeNavigator::class.java) }
+    val pagesShown = entry != null
+    val backStack by remember(pages, pagesShown) { if (pagesShown) pages.backStack else MutableStateFlow(emptyList<NavBackStackEntry>()) }
+        .collectAsStateWithLifecycle()
     val currentTab = backStack.asReversed().firstNotNullOfOrNull { e -> Tab.entries.firstOrNull { e.destination.hasRoute(it.route::class) } }
     val selectTab: (Tab) -> Unit = { tab ->
         if (tab == currentTab) {
