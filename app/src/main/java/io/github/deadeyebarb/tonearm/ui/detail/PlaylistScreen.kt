@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.Delete
@@ -29,6 +30,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -59,6 +61,7 @@ import io.github.deadeyebarb.tonearm.ui.common.PlayShuffleButtons
 import io.github.deadeyebarb.tonearm.ui.common.SongRow
 import io.github.deadeyebarb.tonearm.ui.common.TextInputDialog
 import io.github.deadeyebarb.tonearm.ui.common.formatTotal
+import io.github.deadeyebarb.tonearm.ui.common.plural
 import io.github.deadeyebarb.tonearm.ui.common.rememberLoader
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
@@ -80,8 +83,12 @@ fun PlaylistScreen(id: String) {
     var keeping by remember { mutableStateOf(false) }
     val removing = remember { Mutex() }
     val weekly = playlist?.let { WeeklyPicks.parse(it) }
+    val list = rememberLazyListState()
+    // The header shows the name; the top bar takes it over once the header has scrolled away.
+    val headerGone by remember { derivedStateOf { list.firstVisibleItemIndex > 0 } }
     DetailScaffold(
         title = playlist?.name.orEmpty(),
+        showTitle = headerGone,
         actions = {
             if (playlist != null) {
                 if (weekly != null && editable) {
@@ -107,7 +114,7 @@ fun PlaylistScreen(id: String) {
     ) {
         LoadContent(vm) { pl ->
             val context = serverId?.let { MediaIds.playlist(it, pl.id) }
-            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
+            LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = PaddingValues(bottom = 24.dp)) {
                 item { PlaylistHeader(pl, onPlay = { shuffle -> actions.play(pl.entry, shuffle = shuffle, context = context) }) }
                 WeeklyPicks.parse(pl)?.let { state ->
                     item {
@@ -226,7 +233,7 @@ private fun PlaylistHeader(playlist: Playlist, onPlay: (Boolean) -> Unit) {
         Spacer(Modifier.height(20.dp))
         Text(playlist.name, style = MaterialTheme.typography.headlineSmall.glow(Hud.colors.accent.copy(alpha = 0.5f)), textAlign = TextAlign.Center)
         playlist.comment?.takeIf { it.isNotBlank() }?.let { MetaLine(it) }
-        MetaLine(listOfNotNull("${playlist.songCount} tracks", formatTotal(playlist.duration), playlist.owner?.let { "by $it" }).joinToString(" // "))
+        MetaLine(listOfNotNull(plural(playlist.songCount, "track"), formatTotal(playlist.duration), playlist.owner?.let { "by $it" }).joinToString(" // "))
         Spacer(Modifier.height(16.dp))
         if (playlist.entry.isNotEmpty()) PlayShuffleButtons(onPlay = { onPlay(false) }, onShuffle = { onPlay(true) }, modifier = Modifier.fillMaxWidth())
         Spacer(Modifier.height(8.dp))

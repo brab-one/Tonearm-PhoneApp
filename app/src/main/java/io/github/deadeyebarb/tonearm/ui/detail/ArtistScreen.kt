@@ -3,6 +3,7 @@ package io.github.deadeyebarb.tonearm.ui.detail
 import android.text.Html
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -24,6 +25,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.DeleteForever
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -50,6 +52,7 @@ import io.github.deadeyebarb.tonearm.subsonic.Artist
 import io.github.deadeyebarb.tonearm.subsonic.ArtistInfo
 import io.github.deadeyebarb.tonearm.subsonic.Song
 import io.github.deadeyebarb.tonearm.subsonic.StarKind
+import io.github.deadeyebarb.tonearm.ui.common.ActionMenu
 import io.github.deadeyebarb.tonearm.ui.common.AlbumCard
 import io.github.deadeyebarb.tonearm.ui.common.AppActions
 import io.github.deadeyebarb.tonearm.ui.common.ArtistCircle
@@ -57,10 +60,12 @@ import io.github.deadeyebarb.tonearm.ui.common.CoverArt
 import io.github.deadeyebarb.tonearm.ui.common.CoverSize
 import io.github.deadeyebarb.tonearm.ui.common.LoadContent
 import io.github.deadeyebarb.tonearm.ui.common.LocalActions
+import io.github.deadeyebarb.tonearm.ui.common.MenuAction
 import io.github.deadeyebarb.tonearm.ui.common.PlayShuffleButtons
 import io.github.deadeyebarb.tonearm.ui.common.SectionHeader
 import io.github.deadeyebarb.tonearm.ui.common.SongRow
 import io.github.deadeyebarb.tonearm.ui.common.StarButton
+import io.github.deadeyebarb.tonearm.ui.common.plural
 import io.github.deadeyebarb.tonearm.ui.common.rememberLoader
 import io.github.deadeyebarb.tonearm.ui.request.RemoteCover
 import io.github.deadeyebarb.tonearm.ui.theme.Hud
@@ -88,6 +93,19 @@ fun ArtistScreen(id: String) {
         }
     }
     val page = vm.value
+    var menu by remember { mutableStateOf(false) }
+    // Play and Shuffle fetch every album first, which takes a moment on a big artist.
+    var fetching by remember { mutableStateOf(false) }
+    fun play(artist: Artist, shuffle: Boolean) {
+        fetching = true
+        actions.launch {
+            try {
+                playArtist(actions, artist, shuffle)
+            } finally {
+                fetching = false
+            }
+        }
+    }
     DetailScaffold(
         title = page?.artist?.name.orEmpty(),
         actions = {
@@ -96,9 +114,18 @@ fun ArtistScreen(id: String) {
                     Icon(Icons.Rounded.AutoAwesome, "More like this")
                 }
                 StarButton(serverId, StarKind.ARTIST, p.artist.id, p.artist.starred != null)
+                // Out of the way in a menu: it can't be undone.
                 if (actions.canDeleteMusic) {
-                    IconButton(onClick = { actions.deleteFromServer(p.artist.name, null, null) { it.artistId == p.artist.id } }) {
-                        Icon(Icons.Rounded.DeleteForever, "Delete from server", tint = Hud.colors.dim)
+                    Box {
+                        IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, "More") }
+                        ActionMenu(
+                            menu, { menu = false },
+                            listOf(
+                                MenuAction("Delete from server", Icons.Rounded.DeleteForever) {
+                                    actions.deleteFromServer(p.artist.name, null, null) { it.artistId == p.artist.id }
+                                },
+                            ),
+                        )
                     }
                 }
             }
@@ -119,14 +146,15 @@ fun ArtistScreen(id: String) {
                             Spacer(Modifier.width(18.dp))
                             Column {
                                 Text(data.artist.name.uppercase(), style = MaterialTheme.typography.headlineSmall.glow(Hud.colors.accent.copy(alpha = 0.5f)))
-                                MetaLine(if (data.artist.albumCount == 1) "1 album" else "${data.artist.albumCount} albums")
+                                MetaLine(plural(data.artist.albumCount, "album"))
                             }
                         }
                         Spacer(Modifier.height(16.dp))
                         PlayShuffleButtons(
-                            onPlay = { playArtist(actions, data.artist, shuffle = false) },
-                            onShuffle = { playArtist(actions, data.artist, shuffle = true) },
+                            onPlay = { play(data.artist, shuffle = false) },
+                            onShuffle = { play(data.artist, shuffle = true) },
                             modifier = Modifier.fillMaxWidth(),
+                            busy = fetching,
                         )
                     }
                 }
@@ -224,7 +252,7 @@ private fun MoreOnYouTube(artist: Artist) {
     }
 }
 
-private fun playArtist(actions: AppActions, artist: Artist, shuffle: Boolean) = actions.launch {
+private suspend fun playArtist(actions: AppActions, artist: Artist, shuffle: Boolean) {
     val songs = coroutineScope {
         artist.album.sortedBy { it.year ?: 0 }.map { album -> async { actions.container.api.album(album.id).song } }.awaitAll().flatten()
     }

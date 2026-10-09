@@ -3,6 +3,7 @@ package io.github.deadeyebarb.tonearm.ui.discover
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,7 +26,9 @@ import androidx.compose.material.icons.rounded.CloudDownload
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -64,6 +67,7 @@ import io.github.deadeyebarb.tonearm.ui.common.LocalActions
 import io.github.deadeyebarb.tonearm.ui.common.SongRow
 import io.github.deadeyebarb.tonearm.ui.common.YouTubePlayButton
 import io.github.deadeyebarb.tonearm.ui.common.formatTotal
+import io.github.deadeyebarb.tonearm.ui.common.plural
 import io.github.deadeyebarb.tonearm.ui.common.rememberLoader
 import io.github.deadeyebarb.tonearm.ui.detail.DetailScaffold
 import io.github.deadeyebarb.tonearm.ui.request.RemoteCover
@@ -94,12 +98,29 @@ fun DailyScreen() {
     val vm = rememberLoader("daily", session?.id, LocalDate.now()) { c.daily.ensureToday() }
     var confirmRequestAll by remember { mutableStateOf(false) }
     var requesting by remember { mutableStateOf(false) }
+    var rebuilding by remember { mutableStateOf(false) }
 
     DetailScaffold(
         title = "Daily Discovery",
         actions = {
-            IconButton(onClick = { actions.launch { c.daily.ensureToday(force = true); vm.reload(silent = true) } }) {
-                Icon(Icons.Rounded.Refresh, "Rebuild today's mix")
+            if (rebuilding) {
+                Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp) }
+            } else {
+                IconButton(onClick = {
+                    rebuilding = true
+                    actions.launch {
+                        try {
+                            c.daily.ensureToday(force = true)
+                            vm.reload(silent = true)
+                            actions.playlistsChanged()
+                            actions.message("Today's mix is ready")
+                        } finally {
+                            rebuilding = false
+                        }
+                    }
+                }) {
+                    Icon(Icons.Rounded.Refresh, "Rebuild today's mix")
+                }
             }
         },
     ) {
@@ -138,14 +159,24 @@ fun DailyScreen() {
                 }
                 item {
                     val onServer by c.daily.onServer.collectAsStateWithLifecycle()
-                    Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .toggleable(value = onServer, role = Role.Switch) { on ->
+                                actions.launch {
+                                    c.daily.setOnServer(on)
+                                    actions.playlistsChanged()
+                                }
+                            }
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Text(
                             "A new mix arrives every day. Keep it as the “Daily Discovery” playlist on your server, so other apps can play it " +
                                 "(deleting that playlist turns this off)",
                             style = MaterialTheme.typography.bodySmall, color = Hud.colors.dim, modifier = Modifier.weight(1f),
                         )
                         Spacer(Modifier.width(12.dp))
-                        Switch(onServer, { on -> actions.launch { c.daily.setOnServer(on) } })
+                        Switch(onServer, null)
                     }
                 }
             }
@@ -197,10 +228,10 @@ private fun DailyHeader(mix: DailyMix, onPlay: (Boolean) -> Unit, onRequestAll: 
                     style = TextStyle(fontFamily = Orbitron, fontWeight = FontWeight.Bold, fontSize = 30.sp).glow(hud.accent.copy(alpha = 0.6f), 20f),
                 )
                 Text(
-                    "${mix.songs.size} TRACKS // ${formatTotal(mix.songs.sumOf { it.duration ?: 0 }).uppercase()}",
+                    "${plural(mix.songs.size, "track")} // ${formatTotal(mix.songs.sumOf { it.duration ?: 0 })}".uppercase(),
                     style = MaterialTheme.typography.labelSmall, color = hud.dim,
                 )
-                if (mix.missing.isNotEmpty()) {
+                if (mix.toRequest.isNotEmpty()) {
                     Spacer(Modifier.height(4.dp))
                     HudTag("${mix.toRequest.size} TO REQUEST", color = hud.accent2)
                 }
@@ -209,10 +240,15 @@ private fun DailyHeader(mix: DailyMix, onPlay: (Boolean) -> Unit, onRequestAll: 
         Spacer(Modifier.height(16.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             HudButton("Play", { onPlay(false) }, Modifier.weight(1f), icon = Icons.Rounded.PlayArrow, enabled = mix.songs.isNotEmpty())
-            HudButton(
-                if (requesting) "Requesting…" else "Request all (${mix.toRequest.size})", onRequestAll, Modifier.weight(1.3f),
-                icon = Icons.Rounded.CloudDownload, filled = false, enabled = !requesting && mix.toRequest.isNotEmpty(),
-            )
+            // Nothing left to request: the space goes to Shuffle.
+            if (requesting || mix.toRequest.isNotEmpty()) {
+                HudButton(
+                    if (requesting) "Requesting…" else "Request all (${mix.toRequest.size})", onRequestAll, Modifier.weight(1.3f),
+                    icon = Icons.Rounded.CloudDownload, filled = false, enabled = !requesting,
+                )
+            } else {
+                HudButton("Shuffle", { onPlay(true) }, Modifier.weight(1f), icon = Icons.Rounded.Shuffle, filled = false, enabled = mix.songs.isNotEmpty())
+            }
         }
     }
 }
@@ -304,7 +340,9 @@ fun DailyCard(actions: AppActions) {
             Column(Modifier.weight(1f)) {
                 Text("DAILY DISCOVERY", style = MaterialTheme.typography.titleLarge.copy(fontSize = 15.sp))
                 Text(
-                    current?.let { "${it.songs.size} TRACKS // ${it.toRequest.size} TO REQUEST" } ?: "BUILDING TODAY'S MIX…",
+                    current?.let { mix ->
+                        (plural(mix.songs.size, "track") + if (mix.toRequest.isNotEmpty()) " // ${mix.toRequest.size} to request" else "").uppercase()
+                    } ?: "BUILDING TODAY'S MIX…",
                     style = MaterialTheme.typography.labelSmall, color = hud.accent,
                 )
                 Text("Fresh picks every day", style = MaterialTheme.typography.bodySmall, color = hud.dim)

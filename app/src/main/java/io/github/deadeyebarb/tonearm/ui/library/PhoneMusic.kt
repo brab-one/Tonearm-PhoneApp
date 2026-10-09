@@ -1,5 +1,9 @@
 package io.github.deadeyebarb.tonearm.ui.library
 
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.border
@@ -28,12 +32,15 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.core.app.ActivityCompat
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.deadeyebarb.tonearm.container
 import io.github.deadeyebarb.tonearm.local.LocalMusic
@@ -47,6 +54,7 @@ import io.github.deadeyebarb.tonearm.ui.common.LocalActions
 import io.github.deadeyebarb.tonearm.ui.common.PlayShuffleButtons
 import io.github.deadeyebarb.tonearm.ui.common.SongLeading
 import io.github.deadeyebarb.tonearm.ui.common.SongRow
+import io.github.deadeyebarb.tonearm.ui.common.plural
 import io.github.deadeyebarb.tonearm.ui.detail.DetailScaffold
 import io.github.deadeyebarb.tonearm.ui.detail.MetaLine
 import io.github.deadeyebarb.tonearm.ui.theme.Hud
@@ -56,18 +64,40 @@ import io.github.deadeyebarb.tonearm.ui.theme.HudLoader
 /** Library → This phone: the music files stored on the phone, by album. */
 @Composable
 fun PhonePage() {
-    val c = LocalContext.current.container
+    val context = LocalContext.current
+    val c = context.container
     val actions = LocalActions.current
+    val activity = LocalActivity.current
     var granted by remember { mutableStateOf(c.local.hasPermission()) }
-    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted = it }
+    // Once access was refused for good, Android doesn't ask anymore: the button opens the app's settings instead.
+    var blocked by rememberSaveable { mutableStateOf(false) }
+    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        granted = ok
+        blocked = !ok && activity != null && !ActivityCompat.shouldShowRequestPermissionRationale(activity, LocalMusic.PERMISSION)
+    }
+    // Access given in Android's settings counts as soon as you're back.
+    LifecycleResumeEffect(Unit) {
+        granted = c.local.hasPermission()
+        onPauseOrDispose {}
+    }
     if (!granted) {
         Column(Modifier.fillMaxSize().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             EmptyState(
                 Icons.Rounded.PhoneAndroid, "Music on this phone",
-                "Tonearm can play the music files stored on this phone too, next to your server's library. Android asks first whether it may see them.",
+                if (blocked) {
+                    "Access to music is turned off for Tonearm. Turn on “Music and audio” under Permissions in the app's settings."
+                } else {
+                    "Tonearm can play the music files stored on this phone too, next to your server's library. Android asks first whether it may see them."
+                },
                 Modifier.weight(1f),
             )
-            HudButton("Allow access to music", { ask.launch(LocalMusic.PERMISSION) }, Modifier.fillMaxWidth())
+            if (blocked) {
+                HudButton("Open app settings", {
+                    context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null)))
+                }, Modifier.fillMaxWidth())
+            } else {
+                HudButton("Allow access to music", { ask.launch(LocalMusic.PERMISSION) }, Modifier.fillMaxWidth())
+            }
         }
         return
     }
@@ -84,7 +114,7 @@ fun PhonePage() {
         item(span = { GridItemSpan(maxLineSpan) }) {
             Column(Modifier.padding(8.dp)) {
                 Text(
-                    "${list.size} songs in ${albums.size} albums, played straight from the phone's storage.",
+                    "${plural(list.size, "song")} in ${plural(albums.size, "album")}, played straight from the phone's storage.",
                     style = MaterialTheme.typography.bodySmall, color = Hud.colors.dim,
                 )
                 Spacer(Modifier.height(8.dp))
@@ -121,7 +151,7 @@ fun PhoneAlbumScreen(albumId: String) {
                     Spacer(Modifier.height(12.dp))
                     Text(album.name, style = MaterialTheme.typography.headlineSmall, textAlign = TextAlign.Center, color = Hud.colors.text)
                     Text(album.artistLabel, style = MaterialTheme.typography.titleMedium, color = Hud.colors.accent2)
-                    MetaLine(listOfNotNull("On this phone", album.year?.toString(), "${album.songCount} tracks").joinToString(" // "))
+                    MetaLine(listOfNotNull("On this phone", album.year?.toString(), plural(album.songCount, "track")).joinToString(" // "))
                     Spacer(Modifier.height(12.dp))
                     PlayShuffleButtons(onPlay = { actions.playEntries(entries) }, onShuffle = { actions.playEntries(entries, shuffle = true) })
                 }

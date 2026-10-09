@@ -44,8 +44,14 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.deadeyebarb.tonearm.ui.theme.Hud
@@ -70,10 +76,12 @@ import io.github.deadeyebarb.tonearm.ui.common.PlaylistRow
 import io.github.deadeyebarb.tonearm.ui.common.SectionHeader
 import io.github.deadeyebarb.tonearm.ui.common.SongRow
 import io.github.deadeyebarb.tonearm.ui.common.TextInputDialog
+import io.github.deadeyebarb.tonearm.ui.common.plural
 import io.github.deadeyebarb.tonearm.ui.common.rememberLoader
 import kotlinx.coroutines.launch
 
-private enum class LibraryTab(val label: String) { ARTISTS("Artists"), ALBUMS("Albums"), PLAYLISTS("Playlists"), GENRES("Genres"), FAVORITES("Liked"), PHONE("This phone") }
+// Liked comes early: it's one of the most used, and the row doesn't fit on a phone.
+private enum class LibraryTab(val label: String) { ARTISTS("Artists"), FAVORITES("Liked"), ALBUMS("Albums"), PLAYLISTS("Playlists"), GENRES("Genres"), PHONE("This phone") }
 
 @Composable
 fun LibraryScreen() {
@@ -92,6 +100,7 @@ fun LibraryScreen() {
                 )
                 PrimaryScrollableTabRow(
                     selectedTabIndex = pager.currentPage,
+                    modifier = Modifier.fadeEnd(),
                     edgePadding = 16.dp,
                     containerColor = Color.Transparent,
                     contentColor = Hud.colors.accent,
@@ -121,6 +130,16 @@ fun LibraryScreen() {
             }
         }
     }
+}
+
+/** Fades out the right edge, so a row that goes on past it looks like it does. */
+private fun Modifier.fadeEnd(width: Dp = 32.dp) = graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }.drawWithContent {
+    drawContent()
+    val fade = width.toPx()
+    drawRect(
+        Brush.horizontalGradient(listOf(Color.Black, Color.Transparent), startX = size.width - fade, endX = size.width),
+        blendMode = BlendMode.DstIn,
+    )
 }
 
 @Composable
@@ -222,7 +241,7 @@ private fun GenresPage() {
                     modifier = Modifier.clickable { actions.openGenre(genre.value) },
                     colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                     headlineContent = { Text(genre.value) },
-                    supportingContent = { Text("${genre.albumCount} albums · ${genre.songCount} songs") },
+                    supportingContent = { Text("${plural(genre.albumCount, "album")} · ${plural(genre.songCount, "song")}") },
                 )
             }
         }
@@ -246,7 +265,7 @@ private fun FavoritesPage() {
         val starred = result.getOrNull() ?: Starred()
         val failure = result.exceptionOrNull()
         if (failure != null && likedOnPhone.isEmpty()) {
-            ErrorState(failure.userMessage(), onRetry = { vm.reload() })
+            ErrorState(failure, onRetry = { vm.reload() })
             return@LoadContent
         }
         if (starred.song.isEmpty() && starred.album.isEmpty() && starred.artist.isEmpty() && pending.isEmpty() && likedOnPhone.isEmpty()) {

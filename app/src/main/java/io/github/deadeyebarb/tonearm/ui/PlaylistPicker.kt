@@ -29,6 +29,7 @@ import io.github.deadeyebarb.tonearm.ui.detail.editableBy
 import io.github.deadeyebarb.tonearm.ui.theme.Hud
 import io.github.deadeyebarb.tonearm.ui.common.LocalActions
 import io.github.deadeyebarb.tonearm.ui.common.TextInputDialog
+import io.github.deadeyebarb.tonearm.ui.common.plural
 import kotlinx.coroutines.CancellationException
 
 @Composable
@@ -103,7 +104,7 @@ fun PlaylistPickerDialog(items: List<QueueSong>, onDismiss: () -> Unit) {
                                 }
                             },
                             headlineContent = { Text(playlist.name) },
-                            supportingContent = { Text("${playlist.songCount} songs") },
+                            supportingContent = { Text(plural(playlist.songCount, "song")) },
                         )
                     }
                 }
