@@ -2,6 +2,7 @@ package io.github.deadeyebarb.tonearm.ui.common
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -14,6 +15,9 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -29,6 +33,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.deadeyebarb.tonearm.subsonic.Album
 import io.github.deadeyebarb.tonearm.subsonic.userMessage
+import io.github.deadeyebarb.tonearm.ui.theme.Hud
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
@@ -84,7 +89,7 @@ fun AlbumGrid(vm: AlbumPagingViewModel, modifier: Modifier = Modifier, header: L
     LaunchedEffect(nearEnd, vm.albums.size) { if (nearEnd) vm.loadMore() }
     val error = vm.error
     when {
-        vm.albums.isEmpty() && error != null -> ErrorState(error.userMessage(), onRetry = vm::loadMore, modifier = modifier)
+        vm.albums.isEmpty() && error != null -> ErrorState(error, onRetry = vm::loadMore, modifier = modifier)
         vm.albums.isEmpty() && vm.endReached -> EmptyState(Icons.Rounded.Album, "No albums here", modifier = modifier)
         else -> LazyVerticalGrid(
             columns = GridCells.Adaptive(152.dp),
@@ -97,6 +102,17 @@ fun AlbumGrid(vm: AlbumPagingViewModel, modifier: Modifier = Modifier, header: L
             if (vm.loading) {
                 item(span = { GridItemSpan(maxLineSpan) }) {
                     Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                }
+            } else if (error != null) {
+                // A later page failed: say so where the list stops, with a way to go on.
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "Couldn't load more: ${error.userMessage()}",
+                            style = MaterialTheme.typography.bodySmall, color = Hud.colors.danger, modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = vm::loadMore) { Text("RETRY") }
+                    }
                 }
             }
         }

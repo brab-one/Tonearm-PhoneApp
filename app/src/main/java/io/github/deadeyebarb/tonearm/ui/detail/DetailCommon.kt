@@ -1,5 +1,6 @@
 package io.github.deadeyebarb.tonearm.ui.detail
 
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -12,6 +13,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.graphics.Color
@@ -23,21 +25,27 @@ import io.github.deadeyebarb.tonearm.ui.common.LocalActions
 import io.github.deadeyebarb.tonearm.ui.common.isHiRes
 import io.github.deadeyebarb.tonearm.ui.common.qualityLabel
 
-/** Scaffold for pushed screens: back arrow, a title that appears as the content scrolls, and actions. */
+/**
+ * Scaffold for pushed screens: back arrow, a title, and actions. A page whose header already shows the title passes
+ * [showTitle] = false until the header has scrolled away, and the title fades in then.
+ */
 @Composable
 fun DetailScaffold(
     title: String,
+    showTitle: Boolean = true,
     actions: @Composable () -> Unit = {},
     content: @Composable (Modifier) -> Unit,
 ) {
     val app = LocalActions.current
     val scroll = TopAppBarDefaults.enterAlwaysScrollBehavior()
+    val titleAlpha by animateFloatAsState(if (showTitle) 1f else 0f, label = "title")
     Scaffold(
         modifier = Modifier.nestedScroll(scroll.nestedScrollConnection),
         containerColor = Color.Transparent,
         topBar = {
             HudTopBar(
                 title = title,
+                titleAlpha = titleAlpha,
                 navigationIcon = { IconButton(onClick = { app.back() }) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } },
                 actions = { actions() },
                 scrollBehavior = scroll,

@@ -63,6 +63,10 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.AlignmentLine
+import androidx.compose.ui.layout.FirstBaseline
+import androidx.compose.ui.layout.LastBaseline
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -109,6 +113,10 @@ fun SongRow(
     serverId: String? = null,
     leading: SongLeading = SongLeading.Cover,
     showAlbum: Boolean = true,
+    /** The HI-RES tag; off where the page already says it for every song. */
+    showQuality: Boolean = true,
+    /** A tag for songs from YouTube Music or the phone, where they're mixed with library songs. */
+    showSource: Boolean = false,
     extraActions: List<MenuAction> = emptyList(),
 ) {
     val actions = LocalActions.current
@@ -172,8 +180,10 @@ fun SongRow(
             )
         },
         supportingContent = {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                if (isLossless(song.suffix) && isHiRes(song.bitDepth, song.samplingRate)) HudTag("HI-RES")
+            Row(Modifier.singleBaseline(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (showSource && YouTubeMusic.isYouTube(sid)) HudTag("YT Music", color = hud.accent2)
+                if (showSource && LocalMusic.isLocal(sid)) HudTag("Phone", color = hud.accent2)
+                if (showQuality && isLossless(song.suffix) && isHiRes(song.bitDepth, song.samplingRate)) HudTag("HI-RES")
                 if (download?.completed == true) {
                     Icon(Icons.Rounded.DownloadDone, "Downloaded", Modifier.size(14.dp), tint = hud.ok)
                 }
@@ -197,6 +207,17 @@ fun SongRow(
             }
         },
     )
+}
+
+/**
+ * Reports one baseline for a line of tags and text. Their baselines differ a little, and ListItem takes that for
+ * two lines of text: it makes the row taller and moves the cover to the top.
+ */
+private fun Modifier.singleBaseline() = layout { measurable, constraints ->
+    val placeable = measurable.measure(constraints)
+    val baseline = placeable[FirstBaseline]
+    val lines: Map<AlignmentLine, Int> = if (baseline == AlignmentLine.Unspecified) emptyMap() else mapOf(FirstBaseline to baseline, LastBaseline to baseline)
+    layout(placeable.width, placeable.height, lines) { placeable.place(0, 0) }
 }
 
 @Composable
@@ -343,7 +364,7 @@ fun PlaylistRow(playlist: Playlist, onClick: () -> Unit) {
         headlineContent = { Text(playlist.name, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleSmall) },
         supportingContent = {
             Text(
-                listOfNotNull("${playlist.songCount} TRACKS", formatTotal(playlist.duration).uppercase(), playlist.owner?.uppercase()).joinToString(" // "),
+                listOfNotNull(plural(playlist.songCount, "track").uppercase(), formatTotal(playlist.duration).uppercase(), playlist.owner?.uppercase()).joinToString(" // "),
                 style = MaterialTheme.typography.labelSmall, color = hud.dim, maxLines = 1,
             )
         },
@@ -354,11 +375,12 @@ fun PlaylistRow(playlist: Playlist, onClick: () -> Unit) {
 fun SectionHeader(title: String, modifier: Modifier = Modifier, onSeeAll: (() -> Unit)? = null) =
     HudSectionHeader(title, modifier, onSeeAll)
 
+/** Play and Shuffle side by side; [busy] while the songs are still being fetched. */
 @Composable
-fun PlayShuffleButtons(onPlay: () -> Unit, onShuffle: () -> Unit, modifier: Modifier = Modifier) {
+fun PlayShuffleButtons(onPlay: () -> Unit, onShuffle: () -> Unit, modifier: Modifier = Modifier, busy: Boolean = false) {
     Row(modifier, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        HudButton("Play", onPlay, Modifier.weight(1f), icon = Icons.Rounded.PlayArrow)
-        HudButton("Shuffle", onShuffle, Modifier.weight(1f), icon = Icons.Rounded.Shuffle, filled = false)
+        HudButton(if (busy) "Loading…" else "Play", onPlay, Modifier.weight(1f), icon = Icons.Rounded.PlayArrow, enabled = !busy)
+        HudButton("Shuffle", onShuffle, Modifier.weight(1f), icon = Icons.Rounded.Shuffle, filled = false, enabled = !busy)
     }
 }
 
@@ -387,7 +409,7 @@ fun DownloadAllButton(items: List<QueueSong>) {
         AlertDialog(
             onDismissRequest = { confirmRemove = false },
             title = { Text("Remove downloads?") },
-            text = { Text("${items.size} songs will no longer be available offline.") },
+            text = { Text("${plural(items.size, "song")} will no longer be available offline.") },
             confirmButton = {
                 TextButton(onClick = {
                     confirmRemove = false
