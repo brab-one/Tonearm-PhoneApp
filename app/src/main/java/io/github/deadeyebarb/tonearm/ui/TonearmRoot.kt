@@ -12,13 +12,21 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
@@ -47,12 +55,12 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavDestination.Companion.hasRoute
-import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -140,10 +148,36 @@ fun TonearmRoot(container: AppContainer, openPlayerRequests: Int, requestNotific
     LaunchedEffect(openPlayerRequests) {
         if (openPlayerRequests > 0 && list.servers.isNotEmpty()) actions.openNowPlaying()
     }
+    // Removing the last server brings back the welcome setup.
+    val noServers = list.servers.isEmpty()
+    LaunchedEffect(noServers) {
+        if (!noServers) return@LaunchedEffect
+        val top = nav.currentBackStackEntry
+        val onWelcome = top?.destination?.hasRoute<ServerEditRoute>() == true && top.toRoute<ServerEditRoute>().welcome
+        if (!onWelcome) nav.navigate(ServerEditRoute(welcome = true)) { popUpTo(nav.graph.id) { inclusive = true } }
+    }
 
     val entry by nav.currentBackStackEntryAsState()
     val destination = entry?.destination
     val showBars = list.servers.isNotEmpty() && destination?.hasRoute<NowPlayingRoute>() != true
+    // A page belongs to the tab it was opened from: the nearest tab below it on the back stack.
+    val backStack by nav.currentBackStack.collectAsStateWithLifecycle()
+    val currentTab = backStack.asReversed().firstNotNullOfOrNull { e -> Tab.entries.firstOrNull { e.destination.hasRoute(it.route::class) } }
+    val selectTab: (Tab) -> Unit = { tab ->
+        if (tab == currentTab) {
+            // The tab you're in: back to its first page.
+            nav.popBackStack(tab.route, inclusive = false)
+        } else {
+            nav.navigate(tab.route) {
+                popUpTo(nav.graph.findStartDestination().id) { saveState = true }
+                launchSingleTop = true
+                restoreState = true
+            }
+        }
+    }
+    // Sideways the tabs move to a rail on the left, so the bottom keeps only the mini player and more of each page shows.
+    val configuration = LocalConfiguration.current
+    val rail = showBars && configuration.screenWidthDp > configuration.screenHeightDp
 
     CompositionLocalProvider(
         LocalActions provides actions,
@@ -162,70 +196,65 @@ fun TonearmRoot(container: AppContainer, openPlayerRequests: Int, requestNotific
             snackbarHost = { SnackbarHost(snackbar) { HudSnackbar(it) } },
             bottomBar = {
                 if (showBars) {
-                    Column {
+                    Column(if (rail) Modifier.navigationBarsPadding() else Modifier) {
                         if (player.current != null) MiniPlayer(player, onOpen = actions::openNowPlaying)
-                        HudNavBar(
-                            selected = Tab.entries.firstOrNull { tab -> destination?.hierarchy?.any { it.hasRoute(tab.route::class) } == true },
-                            onSelect = { tab ->
-                                nav.navigate(tab.route) {
-                                    popUpTo(nav.graph.findStartDestination().id) { saveState = true }
-                                    launchSingleTop = true
-                                    restoreState = true
-                                }
-                            },
-                        )
+                        if (!rail) HudNavBar(selected = currentTab, onSelect = selectTab)
                     }
                 }
             },
         ) { padding ->
             val bottom = PaddingValues(bottom = padding.calculateBottomPadding())
-            NavHost(
-                nav, startDestination,
-                modifier = Modifier.padding(bottom).consumeWindowInsets(bottom),
-                enterTransition = { fadeIn(tween(200)) },
-                exitTransition = { fadeOut(tween(200)) },
-            ) {
-                composable<HomeRoute> { HomeScreen() }
-                composable<DiscoverRoute> { DiscoverScreen() }
-                composable<DailyRoute> { DailyScreen() }
-                composable<ConnectRoute> { ConnectScreen() }
-                composable<RequestRoute> { RequestScreen(it.toRoute<RequestRoute>().query) }
-                composable<LidarrSettingsRoute> { LidarrSettingsScreen() }
-                composable<LibraryRoute> { LibraryScreen() }
-                composable<SearchRoute> { SearchScreen() }
-                composable<DownloadsRoute> { DownloadsScreen() }
-                composable<AlbumRoute> { AlbumScreen(it.toRoute<AlbumRoute>().id) }
-                composable<ArtistRoute> { ArtistScreen(it.toRoute<ArtistRoute>().id) }
-                composable<PlaylistRoute> { PlaylistScreen(it.toRoute<PlaylistRoute>().id) }
-                composable<GenreRoute> { GenreScreen(it.toRoute<GenreRoute>().name) }
-                composable<AlbumListRoute> { AlbumListScreen(it.toRoute<AlbumListRoute>().type) }
-                composable<LocalAlbumRoute> { PhoneAlbumScreen(it.toRoute<LocalAlbumRoute>().id) }
-                composable<YtArtistRoute> {
-                    val r = it.toRoute<YtArtistRoute>()
-                    YouTubeArtistScreen(YtArtist(r.url, r.name, r.imageUrl, r.subscribers))
+            val railInsets = WindowInsets.systemBars.union(WindowInsets.displayCutout).only(WindowInsetsSides.Start)
+            Row(Modifier.padding(bottom).consumeWindowInsets(bottom)) {
+                if (rail) HudNavRail(selected = currentTab, onSelect = selectTab, modifier = Modifier.windowInsetsPadding(railInsets))
+                NavHost(
+                    nav, startDestination,
+                    modifier = Modifier.weight(1f).then(if (rail) Modifier.consumeWindowInsets(railInsets) else Modifier),
+                    enterTransition = { fadeIn(tween(200)) },
+                    exitTransition = { fadeOut(tween(200)) },
+                ) {
+                    composable<HomeRoute> { HomeScreen() }
+                    composable<DiscoverRoute> { DiscoverScreen() }
+                    composable<DailyRoute> { DailyScreen() }
+                    composable<ConnectRoute> { ConnectScreen() }
+                    composable<RequestRoute> { RequestScreen(it.toRoute<RequestRoute>().query) }
+                    composable<LidarrSettingsRoute> { LidarrSettingsScreen() }
+                    composable<LibraryRoute> { LibraryScreen() }
+                    composable<SearchRoute> { SearchScreen() }
+                    composable<DownloadsRoute> { DownloadsScreen() }
+                    composable<AlbumRoute> { AlbumScreen(it.toRoute<AlbumRoute>().id) }
+                    composable<ArtistRoute> { ArtistScreen(it.toRoute<ArtistRoute>().id) }
+                    composable<PlaylistRoute> { PlaylistScreen(it.toRoute<PlaylistRoute>().id) }
+                    composable<GenreRoute> { GenreScreen(it.toRoute<GenreRoute>().name) }
+                    composable<AlbumListRoute> { AlbumListScreen(it.toRoute<AlbumListRoute>().type) }
+                    composable<LocalAlbumRoute> { PhoneAlbumScreen(it.toRoute<LocalAlbumRoute>().id) }
+                    composable<YtArtistRoute> {
+                        val r = it.toRoute<YtArtistRoute>()
+                        YouTubeArtistScreen(YtArtist(r.url, r.name, r.imageUrl, r.subscribers))
+                    }
+                    composable<MoreLikeRoute> { MoreLikeScreen(it.toRoute<MoreLikeRoute>()) }
+                    composable<YtAlbumRoute> {
+                        val r = it.toRoute<YtAlbumRoute>()
+                        YouTubeAlbumScreen(YtAlbum(r.url, r.title, r.artist, r.imageUrl))
+                    }
+                    composable<SettingsRoute> { SettingsScreen() }
+                    composable<ServersRoute> { ServersScreen() }
+                    composable<EqualizerRoute> { EqualizerScreen() }
+                    composable<ServerEditRoute> { backStack ->
+                        val route = backStack.toRoute<ServerEditRoute>()
+                        ServerEditScreen(route.serverId, route.welcome, onSaved = {
+                            if (route.welcome) {
+                                nav.navigate(HomeRoute) { popUpTo(nav.graph.id) { inclusive = true } }
+                            } else {
+                                nav.popBackStack()
+                            }
+                        })
+                    }
+                    composable<NowPlayingRoute>(
+                        enterTransition = { slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Up, tween(300)) },
+                        popExitTransition = { slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Down, tween(300)) },
+                    ) { NowPlayingScreen(onBack = { nav.popBackStack() }) }
                 }
-                composable<MoreLikeRoute> { MoreLikeScreen(it.toRoute<MoreLikeRoute>()) }
-                composable<YtAlbumRoute> {
-                    val r = it.toRoute<YtAlbumRoute>()
-                    YouTubeAlbumScreen(YtAlbum(r.url, r.title, r.artist, r.imageUrl))
-                }
-                composable<SettingsRoute> { SettingsScreen() }
-                composable<ServersRoute> { ServersScreen() }
-                composable<EqualizerRoute> { EqualizerScreen() }
-                composable<ServerEditRoute> { backStack ->
-                    val route = backStack.toRoute<ServerEditRoute>()
-                    ServerEditScreen(route.serverId, route.welcome, onSaved = {
-                        if (route.welcome) {
-                            nav.navigate(HomeRoute) { popUpTo(nav.graph.id) { inclusive = true } }
-                        } else {
-                            nav.popBackStack()
-                        }
-                    })
-                }
-                composable<NowPlayingRoute>(
-                    enterTransition = { slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Up, tween(300)) },
-                    popExitTransition = { slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Down, tween(300)) },
-                ) { NowPlayingScreen(onBack = { nav.popBackStack() }) }
             }
         }
         }
@@ -239,6 +268,51 @@ fun TonearmRoot(container: AppContainer, openPlayerRequests: Int, requestNotific
                 confirmButton = { TextButton(onClick = { actions.confirm = null; confirm.onConfirm() }) { Text(confirm.action, color = Hud.colors.danger) } },
                 dismissButton = { TextButton(onClick = { actions.confirm = null }) { Text("Cancel") } },
             )
+        }
+    }
+}
+
+/** The tabs down the left side, for a phone held sideways: icons only, the active one lit up like on the bottom bar. */
+@Composable
+private fun HudNavRail(selected: Tab?, onSelect: (Tab) -> Unit, modifier: Modifier = Modifier) {
+    val hud = Hud.colors
+    Column(
+        modifier
+            .fillMaxHeight()
+            .width(72.dp)
+            .background(Brush.horizontalGradient(listOf(hud.void.copy(alpha = 0.98f), hud.panel.copy(alpha = 0.92f))))
+            .drawBehind {
+                drawLine(
+                    Brush.verticalGradient(listOf(Color.Transparent, hud.accent.copy(alpha = 0.6f), Color.Transparent)),
+                    Offset(size.width, 0f), Offset(size.width, size.height), 1.dp.toPx(),
+                )
+            }
+            .statusBarsPadding(),
+        verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterVertically),
+    ) {
+        for (tab in Tab.entries) {
+            val active = tab == selected
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(56.dp)
+                    .selectable(selected = active, role = Role.Tab, onClick = { onSelect(tab) })
+                    .drawBehind {
+                        if (active) {
+                            val h = size.height * 0.5f
+                            val y = (size.height - h) / 2
+                            drawLine(hud.accent.copy(alpha = 0.35f), Offset(size.width, y), Offset(size.width, y + h), 7.dp.toPx())
+                            drawLine(hud.accent, Offset(size.width, y), Offset(size.width, y + h), 2.dp.toPx())
+                            drawCircle(
+                                Brush.radialGradient(listOf(hud.accent.copy(alpha = 0.16f), Color.Transparent), center = Offset(size.width, size.height / 2), radius = size.height),
+                                radius = size.height, center = Offset(size.width, size.height / 2),
+                            )
+                        }
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(tab.icon, tab.label, tint = if (active) hud.accent else hud.dim)
+            }
         }
     }
 }
