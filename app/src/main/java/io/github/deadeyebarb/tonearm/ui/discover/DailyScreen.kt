@@ -216,7 +216,7 @@ private fun DailyHeader(mix: DailyMix, onPlay: (Boolean) -> Unit, onRequestAll: 
     val locale = androidx.compose.ui.platform.LocalConfiguration.current.locales[0]
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Collage(mix, Modifier.size(132.dp))
+            MixCollage(mix.covers, mix.serverId, Modifier.size(132.dp))
             Spacer(Modifier.width(20.dp))
             Column {
                 Text(
@@ -253,10 +253,9 @@ private fun DailyHeader(mix: DailyMix, onPlay: (Boolean) -> Unit, onRequestAll: 
     }
 }
 
-/** 2×2 grid of the first covers in the mix, in a bracketed frame. */
+/** 2×2 grid of a mix's first [covers] (cover ids on [serverId]), in a bracketed frame. */
 @Composable
-private fun Collage(mix: DailyMix, modifier: Modifier) {
-    val covers = mix.songs.mapNotNull { it.coverArt }.distinct().take(4)
+internal fun MixCollage(covers: List<String>, serverId: String?, modifier: Modifier) {
     val shape = MaterialTheme.shapes.medium
     Box(modifier.cornerBrackets(Hud.colors.accent, inset = 5.dp).clip(shape).background(Hud.colors.panel)) {
         Column {
@@ -265,7 +264,7 @@ private fun Collage(mix: DailyMix, modifier: Modifier) {
                     for (col in 0 until 2) {
                         CoverArt(
                             covers.getOrNull((row * 2 + col) % covers.size.coerceAtLeast(1)),
-                            Modifier.weight(1f).fillMaxSize(), serverId = mix.serverId, size = CoverSize.THUMB,
+                            Modifier.weight(1f).fillMaxSize(), serverId = serverId, size = CoverSize.THUMB,
                             shape = androidx.compose.ui.graphics.RectangleShape,
                         )
                     }
@@ -275,6 +274,9 @@ private fun Collage(mix: DailyMix, modifier: Modifier) {
         Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(androidx.compose.ui.graphics.Color.Transparent, Hud.colors.void.copy(alpha = 0.6f)))))
     }
 }
+
+/** The first four different covers of the mix. */
+private val DailyMix.covers: List<String> get() = songs.mapNotNull { it.coverArt }.distinct().take(4)
 
 @Composable
 private fun MissingDailyRow(missing: DailyMissing, requested: Boolean, onRequest: () -> Unit) {
@@ -335,7 +337,7 @@ fun DailyCard(actions: AppActions) {
         glow = true,
     ) {
         Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (current != null) Collage(current, Modifier.size(72.dp)) else Box(Modifier.size(72.dp))
+            if (current != null) MixCollage(current.covers, current.serverId, Modifier.size(72.dp)) else Box(Modifier.size(72.dp))
             Spacer(Modifier.width(16.dp))
             Column(Modifier.weight(1f)) {
                 Text("DAILY DISCOVERY", style = MaterialTheme.typography.titleLarge.copy(fontSize = 15.sp))
