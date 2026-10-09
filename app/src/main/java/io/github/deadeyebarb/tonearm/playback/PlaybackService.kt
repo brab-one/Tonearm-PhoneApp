@@ -33,7 +33,6 @@ import com.google.common.util.concurrent.ListenableFuture
 import io.github.deadeyebarb.tonearm.MainActivity
 import io.github.deadeyebarb.tonearm.R
 import io.github.deadeyebarb.tonearm.container
-import io.github.deadeyebarb.tonearm.likes.Dislikes
 import io.github.deadeyebarb.tonearm.media.MediaIds
 import io.github.deadeyebarb.tonearm.media.QueueSong
 import io.github.deadeyebarb.tonearm.media.toQueueSong
@@ -65,6 +64,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import java.io.File
 
 /**
  * Owns the ExoPlayer and the media session: background playback, the media notification,
@@ -89,8 +89,8 @@ class PlaybackService : MediaLibraryService() {
     private lateinit var restoreJob: Job
     /** When this phone last played (ms); saved with the queue. */
     private var lastPlayedAt = 0L
-    /** Songs said "Not this one" to whose dislike couldn't be saved yet: sent again once online, left out meanwhile. */
-    private val unsavedDislikes = mutableListOf<QueueSong>()
+    /** Songs said "Not this one" to whose dislike couldn't be saved yet: sent again until it is, left out meanwhile. */
+    private lateinit var unsavedDislikes: UnsavedDislikes
     private var continueJob: Job? = null
     /** The YouTube Music item auto-request last ran for, so pausing and resuming doesn't repeat it. */
     private var swapJob: Job? = null
@@ -159,6 +159,15 @@ class PlaybackService : MediaLibraryService() {
         c.effects.attach(player.audioSessionId)
         scrobbler = c.scrobbler.also(player::addListener)
         cacheAhead = CacheAhead(player, c.media, c.settings, scope).also(player::addListener)
+        unsavedDislikes = UnsavedDislikes(
+            File(filesDir, "unsaved-dislikes.json"), c.json, scope,
+            send = { entry ->
+                saveDislike(entry)
+                unlike(entry)
+            },
+            // Right after a start the Tonearm server isn't looked up yet: what the last lookup found then.
+            worthRetrying = { c.tonearmServer.server.value?.dislikes ?: c.sessions.active.value?.let(c.knownServers::dislikes) ?: true },
+        )
         radio = RadioQueue(player, c, scope, leaveOut = ::isUnsavedDislike, onChange = ::onRadioChanged).also(player::addListener)
         carHandoff = CarHandoff(
             c, player, gate, scope, restored = { restoreJob.join() }, phonePlayedAt = { lastPlayedAt }, beforeTakeOver = radio::stop,
@@ -175,7 +184,7 @@ class PlaybackService : MediaLibraryService() {
         scope.launch {
             c.network.online.filter { it }.collect {
                 scrobbler.retry()
-                retryDislikes()
+                unsavedDislikes.retry()
             }
         }
         // When a server is added (or switched), drop any "set up Tonearm" error the car is showing
@@ -480,40 +489,37 @@ class PlaybackService : MediaLibraryService() {
             }
             // Seeking leaves the queue as it was, so the song is still at its index (unless the queue changed meanwhile).
             if (index < player.mediaItemCount && player.getMediaItemAt(index).mediaId == item.mediaId) player.removeMediaItem(index)
-            dislike(entry, announce = true)
+            dislike(entry)
         }
     }
 
-    private suspend fun dislike(entry: QueueSong, announce: Boolean) {
-        val song = entry.song
+    private suspend fun dislike(entry: QueueSong) {
         try {
-            c.dislikes.set(song.artist.orEmpty(), song.title, song.album, true)
+            saveDislike(entry)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             Log.w(TAG, "Couldn't save the dislike", e)
             // Without a server that keeps dislikes, trying again won't help.
             if (c.tonearmServer.server.value?.dislikes != true) return c.messages.show(e.userMessage())
-            if (unsavedDislikes.none { it == entry }) unsavedDislikes += entry
+            unsavedDislikes.add(entry)
             return
         }
-        if (announce) c.messages.show("Disliked “${song.title}”: it goes to the end of searches and out of mixes and picks")
-        // The dislike is saved; not liking it anymore may fail on its own.
+        c.messages.show("Disliked “${entry.song.title}”: it goes to the end of searches and out of mixes and picks")
+        unlike(entry)
+    }
+
+    private suspend fun saveDislike(entry: QueueSong) {
+        val song = entry.song
+        c.dislikes.set(song.artist.orEmpty(), song.title, song.album, true)
+    }
+
+    /** A disliked song isn't liked anymore; that may fail on its own. */
+    private suspend fun unlike(entry: QueueSong) {
         if (c.likes.isLiked(entry)) runCatching { c.likes.set(entry, false) }
     }
 
-    private fun retryDislikes() {
-        if (unsavedDislikes.isEmpty()) return
-        val waiting = unsavedDislikes.toList()
-        unsavedDislikes.clear()
-        scope.launch { for (entry in waiting) dislike(entry, announce = false) }
-    }
-
-    private fun isUnsavedDislike(song: Song): Boolean {
-        if (unsavedDislikes.isEmpty()) return false
-        val key = Dislikes.songKey(song.artistLabel, song.title)
-        return unsavedDislikes.any { Dislikes.songKey(it.song.artistLabel, it.song.title) == key }
-    }
+    private fun isUnsavedDislike(song: Song): Boolean = song in unsavedDislikes
 
     /**
      * Starts a radio from the current song ([PlaybackCommands.SEED_CURRENT]; the picks without one) or from the picks,
