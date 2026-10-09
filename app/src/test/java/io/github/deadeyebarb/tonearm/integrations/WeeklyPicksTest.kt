@@ -37,7 +37,7 @@ class WeeklyPicksTest {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true; coerceInputValues = true; explicitNulls = false }
     private val server = MockWebServer()
 
-    private class FakePlaylist(val id: String, var name: String, var comment: String? = null)
+    private class FakePlaylist(val id: String, var name: String, var comment: String? = null, val owner: String = "alice")
     private val playlists = mutableMapOf<String, FakePlaylist>()
     private val store = mutableMapOf<String, Pair<String, Long>>()
     /** The Tonearm server's answer to "recommendations". */
@@ -55,12 +55,20 @@ class WeeklyPicksTest {
     private var artists = """[{"id":5,"artistName":"Tricky"}]"""
     /** Lidarr's albums by id, as GET album/{id} gives them; also what GET album?artistId= lists. */
     private val albumsById = mutableMapOf<Int, String>()
+    /** What looking up "lidarr:<release group>" finds, by release group. */
+    private val lidarrHas = mutableMapOf<String, String>()
+    /** Lidarr's answer to adding Homogenic (504: the proxy gave up waiting). */
+    private var homogenicAnswer = 200
+    /** Lidarr can't be reached. */
+    private var lidarrDown = false
+    /** The music server fails to save the next ready week's comment. */
+    private var failReadyOnce = false
 
     private val T = 1_760_000_000_000L
 
     private fun subsonic(body: String = "") = MockResponse(body = """{"subsonic-response":{"status":"ok","version":"1.16.1"${if (body.isEmpty()) "" else ",$body"}}}""")
 
-    private fun FakePlaylist.toJson() = buildJsonObject { put("id", id); put("name", name); comment?.let { put("comment", it) }; put("songCount", 0) }
+    private fun FakePlaylist.toJson() = buildJsonObject { put("id", id); put("name", name); comment?.let { put("comment", it) }; put("owner", owner); put("songCount", 0) }
 
     @Before
     fun setUp() {
@@ -83,6 +91,10 @@ class WeeklyPicksTest {
                 subsonic(""""playlist":${p.toJson()}""")
             }
             "updatePlaylist" -> {
+                if (failReadyOnce && q("comment")?.contains("\"status\":\"ready\"") == true) {
+                    failReadyOnce = false
+                    return MockResponse(body = """{"subsonic-response":{"status":"failed","error":{"code":0,"message":"busy"}}}""")
+                }
                 playlists[q("playlistId")]?.let { p -> q("comment")?.let { p.comment = it }; q("name")?.let { p.name = it } }
                 subsonic()
             }
@@ -106,6 +118,7 @@ class WeeklyPicksTest {
             else -> MockResponse(code = 404)
         }
         val endpoint = path.removePrefix("/api/v1/")
+        if (lidarrDown) return MockResponse(code = 503)
         if (request.method != "GET") lidarrChanges += request.method to endpoint + (url.encodedQuery?.let { "?$it" } ?: "")
         return when {
             endpoint == "importlist" -> {
@@ -120,13 +133,19 @@ class WeeklyPicksTest {
             endpoint == "album" && request.method == "GET" ->
                 MockResponse(body = albumsById.values.filter { "\"artistId\":${q("artistId")}," in it }.joinToString(",", "[", "]"))
             endpoint == "rootfolder" -> MockResponse(body = """[{"id":1,"path":"/music","defaultQualityProfileId":1,"defaultMetadataProfileId":1}]""")
+            endpoint == "album/lookup" && q("term")!!.startsWith("lidarr:") -> MockResponse(body = lidarrHas[q("term")!!.removePrefix("lidarr:")] ?: "[]")
             endpoint == "album/lookup" -> MockResponse(body = when (q("term")) {
                 "Mazzy Star So Tonight That I Might See" -> """[{"id":0,"title":"So Tonight That I Might See","foreignAlbumId":"rg-m","artist":{"artistName":"Mazzy Star","foreignArtistId":"a-m"}}]"""
                 "Tricky Maxinquaye" -> """[{"id":60,"title":"Maxinquaye","artistId":5,"monitored":false,"artist":{"artistName":"Tricky"}}]"""
                 "Portishead Dummy" -> """[{"id":61,"title":"Dummy","artistId":6,"monitored":true,"artist":{"artistName":"Portishead"}}]"""
                 "Björk Homogenic" -> """[{"id":0,"title":"Homogenic","foreignAlbumId":"rg-h","artist":{"artistName":"Björk"}}]"""
+                "Mazzy Star Seasons of Your Day" -> """[{"id":0,"title":"Seasons of Your Day","foreignAlbumId":"rg-s","artist":{"artistName":"Mazzy Star","foreignArtistId":"a-m"}}]"""
                 else -> """[{"id":0,"title":"Something Else","artist":{"artistName":"Somebody"}}]"""
             })
+            endpoint == "album" && request.method == "POST" && "rg-h" in request.body!!.utf8() && homogenicAnswer != 200 -> {
+                addedAlbums += request.body!!.utf8()
+                MockResponse(code = homogenicAnswer, body = "")
+            }
             endpoint == "album" && request.method == "POST" -> MockResponse(
                 body = request.body!!.utf8().also { addedAlbums += it }.let { sent ->
                     if ("rg-h" in sent) """{"id":51,"title":"Homogenic","artistId":10,"artist":{"artistName":"Björk"}}"""
@@ -182,9 +201,9 @@ class WeeklyPicksTest {
         assertEquals(WeeklyState.READY, state.status)
         assertEquals(
             listOf(
-                WeeklyAlbum(50, "So Tonight That I Might See", "Mazzy Star", 9, newArtist = true, songs = emptyList()),
+                WeeklyAlbum(50, "So Tonight That I Might See", "Mazzy Star", 9, newArtist = true, songs = emptyList(), foreignId = "rg-m"),
                 WeeklyAlbum(60, "Maxinquaye", "Tricky", 5, newArtist = false, songs = emptyList()),
-                WeeklyAlbum(51, "Homogenic", "Björk", 10, newArtist = true, songs = emptyList()),
+                WeeklyAlbum(51, "Homogenic", "Björk", 10, newArtist = true, songs = emptyList(), foreignId = "rg-h"),
             ),
             state.albums,
         )
@@ -224,6 +243,11 @@ class WeeklyPicksTest {
         assertEquals(state, WeeklyPicks.parse(Playlist("p0", comment = old)))
         assertNull(WeeklyPicks.parse(Playlist("p2", comment = "Kept from the weekly picks of 1 Oct")))
         assertNull(WeeklyPicks.parse(Playlist("p3")))
+        // A kept week is no batch, but still says when it was made.
+        val kept = Playlist("p4", comment = "Kept from the weekly picks of 1 Oct\n${WeeklyPicks.KEPT_MARKER}$T")
+        assertNull(WeeklyPicks.parse(kept))
+        assertEquals(T, WeeklyPicks.keptCreated(kept))
+        assertNull(WeeklyPicks.keptCreated(Playlist("p5", comment = comment)))
     }
 
 
@@ -332,5 +356,119 @@ class WeeklyPicksTest {
         weekly.tick(config, "k", session, now = T + WeeklyPicks.WEEK + 180_000)
         assertTrue(lidarrChanges.any { it == "DELETE" to "artist/30?deleteFiles=true&addImportListExclusion=false" })
         assertFalse(lidarrChanges.any { it.second.startsWith("artist/31") || it.second.startsWith("artist/5") })
+    }
+
+    /** The picks of the first test: 3 a week (taken over from the old list) give Mazzy Star, Tricky and Björk. */
+    private val six = """{"running":false,"madeAt":${T + 120_000},"picks":[
+        {"artist":"Portishead","album":"Dummy"},{"artist":"Nobody","album":"Nothing"},
+        {"artist":"Mazzy Star","album":"So Tonight That I Might See"},{"artist":"Tricky","album":"Maxinquaye"},
+        {"artist":"Björk","album":"Homogenic"},{"artist":"Mazzy Star","album":"Seasons of Your Day"}]}"""
+
+    @Test
+    fun `another user's weekly picks are left to them, also for an admin who sees them`() = runTest {
+        oldLists = false
+        weekly.tick(config, "k", session, now = T)
+        picks = week
+        weekly.tick(config, "k", session, now = T + 180_000)
+        // Bob's week is newer; Navidrome lists it to an admin and lets them change it.
+        val bobs = WeeklyState(created = T + 3_600_000, by = "bob-phone", status = WeeklyState.READY,
+            albums = listOf(WeeklyAlbum(70, "Mezzanine", "Massive Attack", 70, newArtist = true)))
+        playlists["bob1"] = FakePlaylist("bob1", WeeklyPicks.playlistName(bobs.created), WeeklyPicks.comment(bobs), owner = "Bob")
+        lidarrChanges.clear()
+        weekly.tick(config, "k", session, now = T + 2 * 3_600_000)
+        assertEquals(setOf("pl1", "bob1"), playlists.keys)
+        assertEquals(WeeklyPicks.comment(bobs), playlists["bob1"]!!.comment)
+        assertFalse(lidarrChanges.any { it.first == "DELETE" })
+        assertEquals(listOf("pl1"), weekly.batches(session).map { it.playlist.id })
+    }
+
+    @Test
+    fun `a check that fails halfway is finished by the next without asking lidarr twice`() = runTest {
+        weekly.tick(config, "k", session, now = T)
+        picks = six
+        // Lidarr is restarting when the picks arrive.
+        lidarrDown = true
+        assertTrue(runCatching { weekly.tick(config, "k", session, now = T + 180_000) }.isFailure)
+        assertTrue(runFile.exists())
+        assertEquals(WeeklyState.RUNNING, batch()!!.status)
+        // Then the albums are asked for, but the music server doesn't take the result.
+        lidarrDown = false
+        failReadyOnce = true
+        assertTrue(runCatching { weekly.tick(config, "k", session, now = T + 240_000) }.isFailure)
+        assertEquals(WeeklyState.RUNNING, batch()!!.status)
+        assertEquals(2, lidarrChanges.count { it == "POST" to "album" })
+        // The next check saves what was asked for, and asks for nothing more.
+        assertEquals("This week's picks: 3 albums are downloading", weekly.tick(config, "k", session, now = T + 300_000))
+        assertEquals(listOf(50, 60, 51), batch()!!.albums.map { it.lidarrId })
+        assertEquals(2, lidarrChanges.count { it == "POST" to "album" })
+        assertEquals(1, lidarrChanges.count { it == "PUT" to "album/monitor" })
+        assertFalse(runFile.exists())
+    }
+
+    @Test
+    fun `keeping this week's picks doesn't start another week`() = runTest {
+        oldLists = false
+        weekly.tick(config, "k", session, now = T)
+        picks = week
+        weekly.tick(config, "k", session, now = T + 180_000)
+        weekly.keep(session, weekly.batches(session).single(), "Good week")
+        assertTrue(weekly.batches(session).isEmpty())
+        // Past the half-day pause between tries, it's still this week.
+        assertNull(weekly.tick(config, "k", session, now = T + 13 * 3_600_000L))
+        assertEquals(1, refreshes)
+        assertEquals(listOf("Good week"), playlists.values.map { it.name })
+        // A week on, the next one comes.
+        picks = """{"picks":[],"madeAt":${T + 120_000},"running":true}"""
+        assertEquals("Picking this week's albums from what you play", weekly.tick(config, "k", session, now = T + WeeklyPicks.WEEK))
+        assertEquals(2, refreshes)
+    }
+
+    @Test
+    fun `an album lidarr took too long over is the week's once it's there`() = runTest {
+        weekly.tick(config, "k", session, now = T)
+        homogenicAnswer = 504
+        picks = six
+        assertEquals("This week's picks: 3 albums are downloading", weekly.tick(config, "k", session, now = T + 180_000))
+        assertEquals(listOf(50, 60), batch()!!.albums.map { it.lidarrId })
+        assertEquals(listOf("rg-h"), batch()!!.unsure.map { it.foreignId })
+        // Lidarr added it after all.
+        lidarrHas["rg-h"] = """[{"id":51,"title":"Homogenic","artistId":10,"foreignAlbumId":"rg-h","monitored":true,"artist":{"artistName":"Björk"}}]"""
+        weekly.tick(config, "k", session, now = T + 3_600_000)
+        val state = batch()!!
+        assertEquals(listOf(50, 60, 51), state.albums.map { it.lidarrId })
+        assertEquals(10, state.albums.last().artistId)
+        assertTrue(state.albums.last().newArtist)
+        assertTrue(state.unsure.isEmpty())
+        // Three a week: nothing else was asked for in its place.
+        assertEquals(2, lidarrChanges.count { it == "POST" to "album" })
+    }
+
+    @Test
+    fun `an add that timed out but went through counts right away`() = runTest {
+        weekly.tick(config, "k", session, now = T)
+        homogenicAnswer = 504
+        lidarrHas["rg-h"] = """[{"id":51,"title":"Homogenic","artistId":10,"foreignAlbumId":"rg-h","monitored":true,"artist":{"artistName":"Björk"}}]"""
+        picks = six
+        weekly.tick(config, "k", session, now = T + 180_000)
+        assertEquals(listOf(50, 60, 51), batch()!!.albums.map { it.lidarrId })
+        assertTrue(batch()!!.unsure.isEmpty())
+    }
+
+    @Test
+    fun `a refresh the server turns down ends the week's try at once`() = runTest {
+        oldLists = false
+        picks = """{"running":false,"madeAt":${T - 3 * 24 * 3_600_000L},"picks":[],"problem":"Couldn't read your listening from Navidrome: timeout"}"""
+        assertEquals("This week's picks didn't work: Couldn't read your listening from Navidrome: timeout", weekly.tick(config, "k", session, now = T))
+        assertTrue(playlists.isEmpty())
+        assertFalse(runFile.exists())
+    }
+
+    @Test
+    fun `new picks are told by the server's clock, not the device's`() = runTest {
+        oldLists = false
+        weekly.tick(config, "k", session, now = T)
+        // The server's clock is an hour behind the phone's.
+        picks = week.replace("${T + 120_000}", "${T - 3_600_000}")
+        assertEquals("This week's picks: 3 albums are downloading", weekly.tick(config, "k", session, now = T + 180_000))
     }
 }

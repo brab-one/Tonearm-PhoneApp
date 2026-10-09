@@ -172,8 +172,11 @@ class Library:
                 "songCount": len(songs), "duration": sum(s["duration"] for s in songs), "year": year, "genre": genre,
                 "created": f"{year}-01-01T00:00:00Z", "genres": [{"name": genre}], "_songs": songs,
             }
-        self.playlists["pl1"] = {"id": "pl1", "name": "Mock Favorites", "owner": USER, "public": False,
+        self.playlists["pl1"] = {"id": "pl1", "name": "Mock Favorites", "owner": USER, "public": True,
                                  "songs": ["al1-2", "al3-1", "al2-1"], "created": "2024-01-01T00:00:00Z"}
+        # Someone else's private playlist, which only the admin (and guest) see, as on Navidrome.
+        self.playlists["plg"] = {"id": "plg", "name": "Guest's own mix", "owner": "guest", "public": False,
+                                 "songs": ["al2-2", "al1-3"], "created": "2024-01-02T00:00:00Z"}
 
     def arrive(self, title: str, artist: str, album: str):
         """A song "downloaded by Lidarr": a new album with one song (the audio of al1-1)."""
@@ -913,7 +916,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json({})
 
     def api_getPlaylists(self, q, one):
-        self.send_json({"playlists": {"playlist": [self.lib.playlist(p) for p in self.lib.playlists.values()]}})
+        # Like Navidrome: the admin sees everyone's playlists, others their own and the public ones.
+        seen = [p for p in self.lib.playlists.values() if one("u") == USER or p["owner"] == one("u") or p["public"]]
+        self.send_json({"playlists": {"playlist": [self.lib.playlist(p) for p in seen]}})
 
     def api_getPlaylist(self, q, one):
         p = self.lib.playlists.get(one("id"))
@@ -929,7 +934,7 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.lib.next_playlist = getattr(self.lib, "next_playlist", len(self.lib.playlists)) + 1
             pid = f"pl{self.lib.next_playlist}"
-            self.lib.playlists[pid] = {"id": pid, "name": one("name", "New playlist"), "owner": USER, "public": False,
+            self.lib.playlists[pid] = {"id": pid, "name": one("name", "New playlist"), "owner": one("u") or USER, "public": False,
                                        "songs": q.get("songId", []), "created": now()}
             print(f"    playlist {pid} '{one('name')}' created with {len(q.get('songId', []))} songs", flush=True)
         self.send_json({"playlist": self.lib.playlist(self.lib.playlists[pid], True)})

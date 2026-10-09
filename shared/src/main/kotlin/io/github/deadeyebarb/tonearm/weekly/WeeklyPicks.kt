@@ -5,6 +5,7 @@ import io.github.deadeyebarb.tonearm.connect.ConnectClient
 import io.github.deadeyebarb.tonearm.connect.PicksFolder
 import io.github.deadeyebarb.tonearm.connect.ConnectRoute
 import io.github.deadeyebarb.tonearm.data.LidarrConfig
+import io.github.deadeyebarb.tonearm.integrations.IntegrationHttpException
 import io.github.deadeyebarb.tonearm.integrations.LidarrClient
 import io.github.deadeyebarb.tonearm.integrations.Names
 import io.github.deadeyebarb.tonearm.integrations.SongMatch
@@ -12,6 +13,8 @@ import io.github.deadeyebarb.tonearm.subsonic.Playlist
 import io.github.deadeyebarb.tonearm.subsonic.ServerSession
 import io.github.deadeyebarb.tonearm.subsonic.Song
 import io.github.deadeyebarb.tonearm.subsonic.SubsonicApi
+import io.github.deadeyebarb.tonearm.subsonic.SubsonicApiException
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
@@ -20,6 +23,7 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 
 /** An album a weekly run added in Lidarr. */
 @Serializable
@@ -35,7 +39,13 @@ data class WeeklyAlbum(
      * first few songs then). Null in weeks from before the playlist was made of songs: the whole album goes in.
      */
     val songs: List<String>? = null,
-)
+    /** Its release group (MusicBrainz) id, to find it in Lidarr again. */
+    val foreignId: String? = null,
+) {
+    /** Whether it's the album [pick] names. */
+    fun isPick(pick: AiPick) = Names.normalize(SongMatch.cleanTitle(title)) == Names.normalize(SongMatch.cleanTitle(pick.album)) &&
+        Names.normalize(artist) == Names.normalize(pick.artist)
+}
 
 /** What a weekly playlist's comment carries after [WeeklyPicks.MARKER]. */
 @Serializable
@@ -46,6 +56,12 @@ data class WeeklyState(
     val status: String = RUNNING,
     val albums: List<WeeklyAlbum> = emptyList(),
     val message: String? = null,
+    /**
+     * Albums whose request got no clear answer (Lidarr was slow, the proxy gave up), which Lidarr may add all the same:
+     * looked for during the first day, and this week's albums once they're there. Their [WeeklyAlbum.lidarrId] is 0 when
+     * Lidarr didn't have them before.
+     */
+    val unsure: List<WeeklyAlbum> = emptyList(),
 ) {
     companion object {
         const val RUNNING = "running"
@@ -63,7 +79,19 @@ data class WeeklySettings(val on: Boolean = false, val albums: Int = WeeklyPicks
 
 /** The run a device started and is waiting for: fresh AI picks asked for at [started]. */
 @Serializable
-private data class RunInProgress(val playlistId: String, val started: Long, val albums: Int = WeeklyPicks.DEFAULT_ALBUMS)
+private data class RunInProgress(
+    val playlistId: String,
+    val started: Long,
+    val albums: Int = WeeklyPicks.DEFAULT_ALBUMS,
+    /** When the picks there were before were made, by the server's clock; null in runs from before, which use [started]. */
+    val since: Long? = null,
+    /** What the run has had Lidarr get so far, so a check after a failure carries on from there. */
+    val added: List<WeeklyAlbum> = emptyList(),
+    val unsure: List<WeeklyAlbum> = emptyList(),
+) {
+    /** It has had Lidarr get albums: the week is on, whatever the AI does now. */
+    val underway: Boolean get() = added.isNotEmpty() || unsure.isNotEmpty()
+}
 
 /**
  * Weekly picks: once a week the Tonearm server's AI suggests albums from what you play, Lidarr downloads
@@ -103,8 +131,25 @@ class WeeklyPicks(
         throw IOException("Couldn't save the weekly picks setting; try again")
     }
 
-    suspend fun batches(session: ServerSession): List<WeeklyBatch> =
-        api.playlists(session).mapNotNull { playlist -> parse(playlist, json)?.let { WeeklyBatch(playlist, it) } }
+    /** The user's own weekly playlists. */
+    suspend fun batches(session: ServerSession): List<WeeklyBatch> = batchesOf(own(session))
+
+    private fun batchesOf(playlists: List<Playlist>) = playlists.mapNotNull { playlist -> parse(playlist, json)?.let { WeeklyBatch(playlist, it) } }
+
+    /**
+     * The user's own playlists. Navidrome lists an admin everyone's, and everyone the public ones, but another user's
+     * weekly picks are theirs to look after.
+     */
+    private suspend fun own(session: ServerSession): List<Playlist> {
+        val me = me(session)
+        return api.playlists(session).filter { it.ownedBy(me) }
+    }
+
+    /** Who is logged in: the login says, and for an API key the Tonearm server does. */
+    private suspend fun me(session: ServerSession): String? =
+        session.user ?: users[session.id] ?: connect.findServer(session)?.user?.ifEmpty { null }?.also { users[session.id] = it }
+
+    private val users = ConcurrentHashMap<String, String>()
 
     /**
      * Does what's due: finishes this device's run, starts this week's when the newest is a week old,
@@ -116,19 +161,26 @@ class WeeklyPicks(
         // Only admins had (and can remove) the Brainarr lists.
         val settings = (if (config.limited) null else moveFromBrainarr(config, key, session)) ?: settings(session)
         var news: String? = finishRun(config, key, session, now)
-        var batches = batches(session)
+        val lists = own(session)
+        var batches = batchesOf(lists)
         // A run whose device went away doesn't block the next week forever.
         batches.filter { it.state.status == WeeklyState.RUNNING && now - it.state.created > ABANDONED }.forEach {
             api.deletePlaylist(it.playlist.id, session)
         }
         batches = batches.filterNot { it.state.status == WeeklyState.RUNNING && now - it.state.created > ABANDONED }
-        val newest = batches.maxByOrNull { it.state.created }
+        // A week kept for good is still this week's.
+        val last = listOfNotNull(batches.maxOfOrNull { it.state.created }, lists.mapNotNull { keptCreated(it) }.maxOrNull()).maxOrNull()
         val lastAttempt = attemptFile.takeIf { it.exists() }?.readText()?.trim()?.toLongOrNull() ?: 0L
-        val due = newest == null || now - newest.state.created >= WEEK - SLACK
+        val due = last == null || now - last >= WEEK - SLACK
         if (settings.on && due && !runFile.exists() && now - lastAttempt >= RETRY) {
             attemptFile.writeText(now.toString())
             news = startRun(session, settings, now, config.limited) ?: news
             batches = batches(session)
+        }
+        // Albums whose request got no clear answer and that Lidarr has after all are the week's too (looked for on its first day).
+        batches = batches.map { batch ->
+            val unsettled = batch.state.status == WeeklyState.READY && batch.state.unsure.isNotEmpty() && now - batch.state.created < ABANDONED
+            if (unsettled) orNull { settle(config, key, session, batch) } ?: batch else batch
         }
         val current = batches.maxByOrNull { it.state.created }
         // The week's albums Lidarr has let go of before they arrived are wanted again.
@@ -151,10 +203,10 @@ class WeeklyPicks(
         return news
     }
 
-    /** Keeps a weekly playlist and its music for good, under [name]. */
+    /** Keeps a weekly playlist and its music for good, under [name]. When its week was made stays in it, so the next one still waits a week. */
     suspend fun keep(session: ServerSession, batch: WeeklyBatch, name: String) {
         api.renamePlaylist(batch.playlist.id, name.trim(), session)
-        api.setPlaylistComment(batch.playlist.id, "Kept from the weekly picks of ${date(batch.state.created)}", session)
+        api.setPlaylistComment(batch.playlist.id, "Kept from the weekly picks of ${date(batch.state.created)}\n$KEPT_MARKER${batch.state.created}", session)
     }
 
     /**
@@ -190,88 +242,168 @@ class WeeklyPicks(
         }
         waitingFile.delete()
         val state = WeeklyState(created = now, by = deviceId)
+        val me = me(session)
         val playlist = api.createPlaylist(playlistName(now), emptyList(), session)
-            ?: api.playlists(session).firstOrNull { it.name == playlistName(now) && parse(it, json) == null }
+            ?: api.playlists(session).firstOrNull { it.name == playlistName(now) && parse(it, json) == null && it.ownedBy(me) }
             ?: throw IOException("The music server didn't create the weekly playlist")
         api.setPlaylistComment(playlist.id, comment(state, json), session)
-        // Phone and desktop may start at the same moment: the earlier claim wins.
-        val rivals = batches(session).filter { it.playlist.id != playlist.id && now - it.state.created < WEEK - SLACK }
-        if (rivals.any { it.state.created < now || (it.state.created == now && it.playlist.id < playlist.id) }) {
+        // Phone and desktop may start at the same moment: the earlier claim wins. A week kept already counts too.
+        val lists = own(session)
+        val rivals = batchesOf(lists).filter { it.playlist.id != playlist.id && now - it.state.created < WEEK - SLACK }
+        val kept = lists.any { keptCreated(it)?.let { created -> now - created < WEEK - SLACK } == true }
+        if (kept || rivals.any { it.state.created < now || (it.state.created == now && it.playlist.id < playlist.id) }) {
             api.deletePlaylist(playlist.id, session)
             return null
         }
-        try {
-            connect.aiPicks(session, refresh = true)
-            writeRun(RunInProgress(playlist.id, now, settings.albums))
+        val refused = try {
+            // The picks there are now, so the new ones are told apart by the server's own clock.
+            val before = connect.aiPicks(session)
+            val asked = connect.aiPicks(session, refresh = true)
+            // Nothing started (the server couldn't read what you play, say): no use waiting a day for it.
+            if (!asked.running && asked.madeAt <= before.madeAt) {
+                asked.problem ?: "the AI didn't start"
+            } else {
+                writeRun(RunInProgress(playlist.id, now, settings.albums, since = before.madeAt))
+                null
+            }
         } catch (e: Exception) {
             api.deletePlaylist(playlist.id, session)
             throw e
         }
+        if (refused != null) {
+            api.deletePlaylist(playlist.id, session)
+            return "This week's picks didn't work: $refused"
+        }
         return "Picking this week's albums from what you play"
     }
 
+    /**
+     * Finishes this device's run once the AI has answered. The run file stays until what came of it is saved in the
+     * playlist, so when Lidarr or the music server is away for a moment the next check carries on.
+     */
     private suspend fun finishRun(config: LidarrConfig, key: String, session: ServerSession, now: Long): String? {
         val run = readRun() ?: return null
         val picks = runCatching { connect.aiPicks(session) }.getOrNull()
-        val fresh = picks != null && !picks.running && picks.madeAt >= run.started
-        val failed = picks != null && !picks.running && picks.madeAt < run.started && picks.problem != null
-        if (!fresh && !failed && now - run.started < ABANDONED) return null
-        // Asked before the run is let go: when Lidarr or the server is away for a moment, the next check finishes it.
+        val since = run.since ?: run.started
+        val fresh = picks != null && !picks.running && picks.madeAt > since
+        val failed = picks != null && !picks.running && picks.madeAt <= since && picks.problem != null
+        if (!fresh && !failed && !run.underway && now - run.started < ABANDONED) return null
         val folder = if (fresh) connect.picksFolder(session) else null
-        runFile.delete()
-        val playlist = runCatching { api.playlist(run.playlistId, session) }.getOrNull() ?: return null
-        val state = parse(playlist, json) ?: return null
-        if (!fresh) {
-            api.deletePlaylist(playlist.id, session)
-            return "This week's picks didn't work: ${picks?.problem ?: "the AI took too long"}"
+        val playlist = try {
+            api.playlist(run.playlistId, session)
+        } catch (e: SubsonicApiException) {
+            if (e.code != 70) throw e
+            null
         }
-        folderProblem(folder, config.limited)?.let {
-            api.deletePlaylist(playlist.id, session)
-            return waitFor(it)
+        // Deleted meanwhile, or not this user's: nothing to finish.
+        val state = playlist?.takeIf { it.ownedBy(me(session)) }?.let { parse(it, json) }
+        if (playlist == null || state == null) {
+            runFile.delete()
+            return null
         }
-        val added = request(config, key, picks.picks, run.albums, folder?.path)
-        if (added.isEmpty()) {
+        if (!run.underway) {
+            val problem = when {
+                !fresh -> "This week's picks didn't work: ${picks?.problem ?: "the AI took too long"}"
+                else -> folderProblem(folder, config.limited)?.let(::waitFor)
+            }
+            if (problem != null) {
+                api.deletePlaylist(playlist.id, session)
+                runFile.delete()
+                return problem
+            }
+        }
+        val done = if (fresh) request(config, key, picks.picks, run, folder?.path) else run
+        if (!done.underway) {
             api.deletePlaylist(playlist.id, session)
+            runFile.delete()
             return "Nothing new to get from the AI picks this week"
         }
-        api.setPlaylistComment(playlist.id, comment(state.copy(status = WeeklyState.READY, albums = added), json), session)
-        return "This week's picks: ${added.size} albums are downloading"
+        api.setPlaylistComment(playlist.id, comment(state.copy(status = WeeklyState.READY, albums = done.added, unsure = done.unsure), json), session)
+        runFile.delete()
+        return "This week's picks: ${done.added.size + done.unsure.size} albums are downloading"
     }
 
     /**
-     * Has Lidarr get the first [count] picks it knows and doesn't already want, into [folder] when the user has a folder
-     * of their own: then only for artists that are new to Lidarr or already in that folder, since an album always goes
-     * where its artist is (the shared library, or someone else's picks).
+     * Has Lidarr get the first picks it knows and doesn't already want, up to the run's count, into [folder] when the user
+     * has a folder of their own: then only for artists that are new to Lidarr or already in that folder, since an album
+     * always goes where its artist is (the shared library, or someone else's picks). Carries on from what the run got
+     * before, and notes each album in the run file as it goes.
      */
-    private suspend fun request(config: LidarrConfig, key: String, picks: List<AiPick>, count: Int, folder: String? = null): List<WeeklyAlbum> {
+    private suspend fun request(config: LidarrConfig, key: String, picks: List<AiPick>, run: RunInProgress, folder: String? = null): RunInProgress {
+        var progress = run
         val artists = lidarr.artists(config, key)
         val artistsBefore = artists.map { it.id }.toSet()
         val defaults = lidarr.resolveDefaults(config, key).copy(search = true).let { d -> folder?.let { d.copy(rootFolderPath = it) } ?: d }
-        val added = mutableListOf<WeeklyAlbum>()
         for (pick in picks) {
-            if (added.size >= count) break
-            val hit = runCatching { lidarr.lookupAlbum(config, key, "${pick.artist} ${pick.album}") }.getOrDefault(emptyList()).firstOrNull {
+            if (progress.added.size + progress.unsure.size >= run.albums) break
+            if ((progress.added + progress.unsure).any { it.isPick(pick) }) continue
+            val hit = orNull { lidarr.lookupAlbum(config, key, "${pick.artist} ${pick.album}") }.orEmpty().firstOrNull {
                 Names.normalize(SongMatch.cleanTitle(it.title)) == Names.normalize(SongMatch.cleanTitle(pick.album)) &&
                     Names.normalize(it.artistName.orEmpty()) == Names.normalize(pick.artist)
             } ?: continue
             // Already wanted: not this week's to delete later.
             if (hit.inLidarr && hit.monitored) continue
-            val there = folder?.let { artists.firstOrNull { (hit.artistId != 0 && it.id == hit.artistId) || (hit.artistForeignId != null && it.foreignArtistId == hit.artistForeignId) } }
-            if (folder != null && there != null && !isIn(there.path, folder)) continue
+            val artist = artists.firstOrNull { (hit.artistId != 0 && it.id == hit.artistId) || (hit.artistForeignId != null && it.foreignArtistId == hit.artistForeignId) }
+            if (folder != null && artist != null && !isIn(artist.path, folder)) continue
             // An artist in the user's own folder came with earlier picks: they can go with this week's too, unless
             // something else of theirs is kept (the clean-up checks).
-            val ownArtist = folder != null && there != null
-            added += runCatching {
+            val ownArtist = folder != null && artist != null
+            val album = WeeklyAlbum(hit.lidarrId, hit.title, hit.artistName ?: pick.artist, hit.artistId, newArtist = ownArtist, songs = pick.songs, foreignId = hit.foreignId.ifEmpty { null })
+            val wanted = try {
                 if (hit.inLidarr) {
-                    lidarr.monitorAlbum(config, key, hit.lidarrId, search = true)
-                    WeeklyAlbum(hit.lidarrId, hit.title, hit.artistName ?: pick.artist, hit.artistId, newArtist = ownArtist, songs = pick.songs)
+                    lidarr.monitorAlbum(config, key, hit.lidarrId, search = false)
+                    // Wanted from here on, so it's this week's even when the search doesn't go through.
+                    orNull { lidarr.searchAlbum(config, key, hit.lidarrId) }
+                    album
                 } else {
-                    val album = lidarr.addAlbum(config, key, hit.candidate, defaults)
-                    WeeklyAlbum(album.id, album.title, album.artist?.artistName ?: pick.artist, album.artistId, newArtist = ownArtist || album.artistId !in artistsBefore, songs = pick.songs)
+                    val added = lidarr.addAlbum(config, key, hit.candidate, defaults)
+                    album.copy(lidarrId = added.id, title = added.title, artist = added.artist?.artistName ?: album.artist, artistId = added.artistId,
+                        newArtist = ownArtist || added.artistId !in artistsBefore)
                 }
-            }.getOrNull() ?: continue
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Lidarr said no.
+                if (e is IntegrationHttpException && e.code in 400..499) continue
+                // No answer isn't a no: Lidarr goes on with an add after the proxy has given up waiting.
+                val there = wantedNow(config, key, album)
+                if (there == null) {
+                    // Looked for again on the next checks; it counts toward the week's albums meanwhile.
+                    if (album.foreignId != null) {
+                        progress = progress.copy(unsure = progress.unsure + album.copy(newArtist = ownArtist || artist == null)).also(::writeRun)
+                    }
+                    continue
+                }
+                album.copy(lidarrId = there.lidarrId, artistId = there.artistId, newArtist = ownArtist || there.artistId !in artistsBefore)
+            }
+            progress = progress.copy(added = progress.added + wanted).also(::writeRun)
         }
-        return added
+        return progress
+    }
+
+    /** [album] as Lidarr has it, when it wants it: monitored, or there at all when it wasn't before ([WeeklyAlbum.lidarrId] 0). */
+    private suspend fun wantedNow(config: LidarrConfig, key: String, album: WeeklyAlbum): LidarrClient.AlbumHit? {
+        val id = album.foreignId?.takeIf { it.isNotEmpty() } ?: return null
+        val now = orNull { lidarr.lookupAlbum(config, key, "lidarr:$id") }?.firstOrNull { it.foreignId == id } ?: return null
+        return now.takeIf { it.inLidarr && (it.monitored || album.lidarrId == 0) }
+    }
+
+    /** Makes the batch's unsure albums that Lidarr has after all its own, and saves that. */
+    private suspend fun settle(config: LidarrConfig, key: String, session: ServerSession, batch: WeeklyBatch): WeeklyBatch {
+        val arrived = batch.state.unsure.mapNotNull { album -> wantedNow(config, key, album)?.let { album to album.copy(lidarrId = it.lidarrId, artistId = it.artistId) } }
+        if (arrived.isEmpty()) return batch
+        val state = batch.state.copy(albums = batch.state.albums + arrived.map { it.second }, unsure = batch.state.unsure - arrived.map { it.first }.toSet())
+        api.setPlaylistComment(batch.playlist.id, comment(state, json), session)
+        return batch.copy(state = state)
+    }
+
+    /** What [block] gives, or null when it fails; a cancelled check still stops. */
+    private inline fun <T> orNull(block: () -> T): T? = try {
+        block()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        null
     }
 
     /**
@@ -391,6 +523,8 @@ class WeeklyPicks(
 
     companion object {
         const val MARKER = "[tonearm-weekly]"
+        /** In a kept playlist's comment, before when its week was made (not a [MARKER]: it's no batch anymore). */
+        const val KEPT_MARKER = "[tonearm-weekly-kept]"
         const val SETTINGS_KEY = "weekly-picks"
         const val WEEK = 7 * 24 * 3_600_000L
         /** Runs may start up to this much early, so a weekly check-in doesn't drift later every week. */
@@ -407,6 +541,9 @@ class WeeklyPicks(
             val text = playlist.comment?.substringAfter(MARKER, "")?.trim()?.takeIf { it.isNotEmpty() } ?: return null
             return runCatching { json.decodeFromString(WeeklyState.serializer(), text) }.getOrNull()
         }
+
+        /** When the week a kept playlist came from was made; null for other playlists, and weeks kept before this was noted. */
+        fun keptCreated(playlist: Playlist): Long? = playlist.comment?.substringAfter(KEPT_MARKER, "")?.trim()?.toLongOrNull()
 
         fun comment(state: WeeklyState, json: Json = compact): String =
             "AI picks for the week of ${date(state.created)}. Deleted when next week's arrive, unless you like this playlist.\n" +

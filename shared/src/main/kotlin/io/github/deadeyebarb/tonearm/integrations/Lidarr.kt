@@ -238,14 +238,17 @@ class LidarrClient(private val http: IntegrationHttp, private val json: Json) {
             put("albumIds", JsonArray(listOf(JsonPrimitive(albumId))))
             put("monitored", JsonPrimitive(true))
         }
-        http.send("PUT", url(config, "album/monitor"), body.toString(), config.useServerTls, headers(key), service = "Lidarr")
-        if (search) {
-            val command = buildJsonObject {
-                put("name", JsonPrimitive("AlbumSearch"))
-                put("albumIds", JsonArray(listOf(JsonPrimitive(albumId))))
-            }
-            http.postJson(url(config, "command"), command.toString(), config.useServerTls, headers(key), service = "Lidarr")
+        http.send("PUT", url(config, "album/monitor"), body.toString(), config.useServerTls, headers(key), service = "Lidarr", waitSeconds = SLOW_SECONDS)
+        if (search) searchAlbum(config, key, albumId)
+    }
+
+    /** Has Lidarr look for an album it watches now. */
+    suspend fun searchAlbum(config: LidarrConfig, key: String, albumId: Int) {
+        val command = buildJsonObject {
+            put("name", JsonPrimitive("AlbumSearch"))
+            put("albumIds", JsonArray(listOf(JsonPrimitive(albumId))))
         }
+        http.postJson(url(config, "command"), command.toString(), config.useServerTls, headers(key), service = "Lidarr")
     }
 
     /** Every album Lidarr knows (monitored or not), or one artist's. */
@@ -349,7 +352,7 @@ class LidarrClient(private val http: IntegrationHttp, private val json: Json) {
     /** Adds an artist from a lookup result; Lidarr then monitors and (optionally) searches its albums. */
     suspend fun addArtist(config: LidarrConfig, key: String, candidate: LidarrCandidate, defaults: LidarrAddDefaults): LidarrArtist {
         val body = artistBody(candidate.raw, defaults, monitor = defaults.monitor, search = defaults.search)
-        val response = http.postJson(url(config, "artist"), body.toString(), config.useServerTls, headers(key), service = "Lidarr")
+        val response = http.postJson(url(config, "artist"), body.toString(), config.useServerTls, headers(key), service = "Lidarr", waitSeconds = SLOW_SECONDS)
         return json.decodeFromString(LidarrArtist.serializer(), response)
     }
 
@@ -370,7 +373,7 @@ class LidarrClient(private val http: IntegrationHttp, private val json: Json) {
                 ),
             ),
         )
-        val response = http.postJson(url(config, "album"), body.toString(), config.useServerTls, headers(key), service = "Lidarr")
+        val response = http.postJson(url(config, "album"), body.toString(), config.useServerTls, headers(key), service = "Lidarr", waitSeconds = SLOW_SECONDS)
         return json.decodeFromString(LidarrAlbum.serializer(), response)
     }
 
@@ -408,6 +411,13 @@ class LidarrClient(private val http: IntegrationHttp, private val json: Json) {
     }
 
     companion object {
+        /**
+         * How long adding (or monitoring) waits for Lidarr, which looks the artist and album up on its metadata server
+         * first: longer than the Tonearm server's proxy waits (90 s), so its answer comes back and not a timeout of ours
+         * while Lidarr goes on and adds it anyway.
+         */
+        private const val SLOW_SECONDS = 120L
+
         /**
          * Lidarr's resized poster for an artist in its library. The API route works with the API key,
          * unlike `/MediaCover/…` (which wants a login cookie when Lidarr has authentication on).

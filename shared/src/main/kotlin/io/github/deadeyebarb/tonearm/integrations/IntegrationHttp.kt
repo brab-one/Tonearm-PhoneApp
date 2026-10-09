@@ -11,6 +11,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
+import java.util.concurrent.TimeUnit
 
 /** An HTTP error from Lidarr or the Tonearm server, with the server's own message when it sent one. */
 open class IntegrationHttpException(val code: Int, message: String, cause: Throwable? = null) : IOException(message, cause)
@@ -37,8 +38,10 @@ class IntegrationHttp(
         useServerTls: Boolean,
         headers: Map<String, String> = emptyMap(),
         service: String = "",
-    ): String = send("POST", url, body, useServerTls, headers, service)
+        waitSeconds: Long? = null,
+    ): String = send("POST", url, body, useServerTls, headers, service, waitSeconds)
 
+    /** Sends [body] with [method]; [waitSeconds] waits that long for the answer, for calls slower than the usual timeout. */
     suspend fun send(
         method: String,
         url: HttpUrl,
@@ -46,10 +49,11 @@ class IntegrationHttp(
         useServerTls: Boolean,
         headers: Map<String, String> = emptyMap(),
         service: String = "",
+        waitSeconds: Long? = null,
     ): String = execute(
         Request.Builder().url(url).apply { headers.forEach(::header) }
             .method(method, body.toRequestBody("application/json".toMediaType())).build(),
-        useServerTls,
+        client(useServerTls).let { client -> waitSeconds?.let { client.newBuilder().readTimeout(it, TimeUnit.SECONDS).build() } ?: client },
         service,
     )
 

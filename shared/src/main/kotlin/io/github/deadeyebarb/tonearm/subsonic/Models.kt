@@ -168,7 +168,13 @@ data class Playlist(
     val coverArt: String? = null,
     val changed: String? = null,
     val entry: List<Song> = emptyList(),
-)
+) {
+    /**
+     * Whether it's [user]'s own: Navidrome lists everyone's playlists to an admin, and others' public ones to everyone.
+     * True when the server doesn't say whose it is, or [user] isn't known.
+     */
+    fun ownedBy(user: String?): Boolean = user == null || owner.isNullOrBlank() || owner.equals(user, ignoreCase = true)
+}
 
 @Serializable
 data class Starred(

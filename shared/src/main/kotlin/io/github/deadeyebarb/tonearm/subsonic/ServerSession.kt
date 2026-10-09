@@ -29,6 +29,8 @@ object SubsonicAuth {
  */
 class ServerSession(val config: ServerConfig, private val secret: String, client: OkHttpClient) {
     val id: String get() = config.id
+    /** Who logs in; null with an API key, which doesn't say. */
+    val user: String? get() = config.username.trim().takeIf { it.isNotEmpty() && config.auth != AuthMethod.API_KEY }
     private val base: HttpUrl = config.baseUrl.toHttpUrl()
     private val tonearmPath = base.encodedPath.trimEnd('/') + "/" + CONNECT_PATH + "/"
     /** One salt for a few minutes, so the Tonearm server can recognise the login without asking Navidrome each time. */
