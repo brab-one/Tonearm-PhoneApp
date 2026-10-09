@@ -59,7 +59,10 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
@@ -109,6 +112,7 @@ import io.github.deadeyebarb.tonearm.ui.theme.glow
 import io.github.deadeyebarb.tonearm.ui.theme.glowBorder
 import io.github.deadeyebarb.tonearm.youtube.YtAlbum
 import io.github.deadeyebarb.tonearm.youtube.YtArtist
+import kotlinx.coroutines.delay
 
 private enum class Tab(val route: Any, val label: String, val icon: ImageVector) {
     HOME(HomeRoute, "Home", Icons.Rounded.Home),
@@ -138,11 +142,14 @@ fun TonearmRoot(container: AppContainer, openPlayerRequests: Int, requestNotific
             snackbar.showSnackbar(it)
         }
     }
-    // Lidarr's queue and wanted list, for the status icons on songs from outside the library.
-    LaunchedEffect(Unit) {
-        while (true) {
-            container.integrations.requireLidarrOrNull()?.let { (config, key) -> runCatching { container.fetches.refresh(config, key) } }
-            kotlinx.coroutines.delay(60_000)
+    // Lidarr's queue and wanted list, for the status icons on songs from outside the library. Only while the app is on screen.
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                container.integrations.requireLidarrOrNull()?.let { (config, key) -> runCatching { container.fetches.refresh(config, key) } }
+                delay(60_000)
+            }
         }
     }
     LaunchedEffect(openPlayerRequests) {

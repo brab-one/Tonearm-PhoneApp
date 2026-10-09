@@ -1,6 +1,7 @@
 package io.github.deadeyebarb.tonearm
 
 import android.app.Application
+import androidx.compose.runtime.mutableStateListOf
 import coil3.ImageLoader
 import coil3.disk.DiskCache
 import coil3.memory.MemoryCache
@@ -79,6 +80,9 @@ class AppContainer(val app: Application) {
 
     /** Goes up each time the app changes a playlist, so lists of playlists know to load again. */
     val playlistsChanged = MutableStateFlow(0)
+
+    /** Normalized names of artists requested from Lidarr while the app runs, so they show as requested (also after a rotation). */
+    val requestedArtists = mutableStateListOf<String>()
 
     val baseHttpClient: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)

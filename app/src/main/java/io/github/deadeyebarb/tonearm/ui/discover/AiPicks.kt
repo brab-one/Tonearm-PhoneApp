@@ -1,7 +1,9 @@
 package io.github.deadeyebarb.tonearm.ui.discover
 
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -9,9 +11,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.ThumbDown
 import androidx.compose.material.icons.rounded.Album
-import androidx.compose.material.icons.rounded.ThumbDown
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -27,11 +31,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import io.github.deadeyebarb.tonearm.AppContainer
 import io.github.deadeyebarb.tonearm.connect.AiPick
 import io.github.deadeyebarb.tonearm.connect.AiPicks
@@ -42,6 +51,7 @@ import io.github.deadeyebarb.tonearm.integrations.WeeklyPicksWorker
 import io.github.deadeyebarb.tonearm.subsonic.userMessage
 import io.github.deadeyebarb.tonearm.ui.YtAlbumRoute
 import io.github.deadeyebarb.tonearm.ui.common.AppActions
+import io.github.deadeyebarb.tonearm.ui.common.plural
 import io.github.deadeyebarb.tonearm.ui.request.RemoteCover
 import io.github.deadeyebarb.tonearm.ui.theme.Hud
 import io.github.deadeyebarb.tonearm.ui.theme.HudButton
@@ -67,56 +77,73 @@ fun AiPicksPanel(actions: AppActions, modifier: Modifier = Modifier) {
     val settings by c.settings.state.collectAsStateWithLifecycle()
     var picks by remember { mutableStateOf<AiPicks?>(null) }
     var failed by remember { mutableStateOf<String?>(null) }
+    // "Ask again" starts a new run on the server; "Try again" only asks for the picks once more.
     var asks by remember { mutableIntStateOf(0) }
-    LaunchedEffect(server?.baseUrl, asks) {
+    var retries by remember { mutableIntStateOf(0) }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(server?.baseUrl, asks, retries, lifecycle) {
         var refresh = asks > 0
-        while (true) {
-            try {
-                picks = c.connect.aiPicks(refresh)
-                failed = null
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                failed = e.userMessage()
-                break
+        failed = null
+        // While a run is going, check on it, but only while this page is on screen.
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                try {
+                    picks = c.connect.aiPicks(refresh)
+                    failed = null
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    failed = e.userMessage()
+                    break
+                }
+                refresh = false
+                if (picks?.running != true) break
+                delay(10_000)
             }
-            refresh = false
-            if (picks?.running != true) break
-            delay(10_000)
         }
     }
     val hud = Hud.colors
     val current = picks
-    HudPanel(modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-        Column(Modifier.padding(14.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("AI PICKS", style = MaterialTheme.typography.titleLarge.copy(fontSize = 15.sp))
-                    Text(
-                        when {
-                            current == null -> "ASKING THE TONEARM SERVER…"
-                            current.running -> "LISTENING TO WHAT YOU PLAY… A FEW MINUTES"
-                            current.picks.isEmpty() -> "NOTHING YET"
-                            else -> "${current.picks.size} ALBUMS FOR YOU // " + DateFormat.getDateInstance(DateFormat.SHORT).format(Date(current.madeAt))
-                        },
-                        style = MaterialTheme.typography.labelSmall, color = hud.accent,
-                    )
+    Column(modifier) {
+        HudPanel(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+            Column(Modifier.padding(14.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("AI PICKS", style = MaterialTheme.typography.titleLarge.copy(fontSize = 15.sp))
+                        Text(
+                            when {
+                                current == null && failed != null -> "COULDN'T REACH THE TONEARM SERVER"
+                                current == null -> "ASKING THE TONEARM SERVER…"
+                                current.running -> "LISTENING TO WHAT YOU PLAY… A FEW MINUTES"
+                                current.picks.isEmpty() -> "NOTHING YET"
+                                else -> "${current.picks.size} ALBUMS FOR YOU // " + DateFormat.getDateInstance(DateFormat.SHORT).format(Date(current.madeAt))
+                            },
+                            style = MaterialTheme.typography.labelSmall, color = hud.accent,
+                        )
+                    }
+                    when {
+                        failed != null -> HudButton("Try again", { retries++ }, filled = false)
+                        current != null && !current.running -> HudButton("Ask again", { asks++ }, filled = false)
+                    }
                 }
-                if (current != null && !current.running) HudButton("Ask again", { asks++ }, filled = false)
-            }
-            current?.seed?.let {
-                Text("More like $it", style = MaterialTheme.typography.bodySmall, color = hud.dim, modifier = Modifier.padding(top = 4.dp))
-            }
-            (failed ?: current?.problem)?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall, color = hud.danger, modifier = Modifier.padding(top = 6.dp))
-            }
-            // Admins, and everyone with a picks folder of their own.
-            if (integrations.lidarr?.let { !it.limited || server?.picksFolder != null } == true) WeeklyPicksRow(actions)
-            current?.picks?.forEach { pick ->
-                AiPickRow(pick, canRequest = integrations.lidarr != null, onYouTube = settings.youtubeFallback, actions = actions) {
-                    picks = current.copy(picks = current.picks.filterNot { it.artist == pick.artist })
-                    notForMe(actions, c, pick.artist)
+                current?.seed?.let {
+                    Text("More like $it", style = MaterialTheme.typography.bodySmall, color = hud.dim, modifier = Modifier.padding(top = 4.dp))
                 }
+                (failed ?: current?.problem)?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = hud.danger, modifier = Modifier.padding(top = 6.dp))
+                }
+                current?.picks?.forEach { pick ->
+                    AiPickRow(pick, canRequest = integrations.lidarr != null, onYouTube = settings.youtubeFallback, actions = actions) {
+                        picks = current.copy(picks = current.picks.filterNot { it.artist == pick.artist })
+                        notForMe(actions, c, pick.artist)
+                    }
+                }
+            }
+        }
+        // Admins, and everyone with a picks folder of their own.
+        if (integrations.lidarr?.let { !it.limited || server?.picksFolder != null } == true) {
+            HudPanel(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                Box(Modifier.padding(14.dp)) { WeeklyPicksRow(actions) }
             }
         }
     }
@@ -192,7 +219,7 @@ private fun notForMe(actions: AppActions, c: AppContainer, artist: String) = act
 
 @Composable
 private fun NotForMeButton(artist: String, onClick: () -> Unit) {
-    IconButton(onClick = onClick) { Icon(Icons.Rounded.ThumbDown, "Not for me: no more $artist", tint = Hud.colors.dim, modifier = Modifier.size(20.dp)) }
+    IconButton(onClick = onClick) { Icon(Icons.Outlined.ThumbDown, "Not for me: no more $artist", tint = Hud.colors.dim, modifier = Modifier.size(20.dp)) }
 }
 
 @Composable
@@ -235,12 +262,21 @@ private fun WeeklyPicksRow(actions: AppActions) {
     var settings by remember { mutableStateOf<WeeklySettings?>(null) }
     var current by remember { mutableStateOf<WeeklyBatch?>(null) }
     var waiting by remember { mutableStateOf<String?>(null) }
+    var loadError by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     var changed by remember { mutableIntStateOf(0) }
-    LaunchedEffect(changed) {
-        val session = c.sessions.active.value ?: return@LaunchedEffect
-        settings = runCatching { c.weekly.settings(session) }.getOrNull()
-        current = runCatching { c.weekly.batches(session) }.getOrDefault(emptyList()).maxByOrNull { it.state.created }
+    val session by c.sessions.active.collectAsStateWithLifecycle()
+    LaunchedEffect(changed, session) {
+        val active = session ?: return@LaunchedEffect
+        settings = try {
+            c.weekly.settings(active).also { loadError = null }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            loadError = e.userMessage()
+            null
+        }
+        current = runCatching { c.weekly.batches(active) }.getOrDefault(emptyList()).maxByOrNull { it.state.created }
         waiting = c.weekly.waiting()
     }
     fun set(next: WeeklySettings) {
@@ -257,17 +293,31 @@ private fun WeeklyPicksRow(actions: AppActions) {
             }
         }
     }
-    Column(Modifier.padding(top = 12.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+    Column {
+        // The whole row is the switch, so it reads as one control.
+        Row(
+            Modifier.toggleable(
+                value = settings?.on == true, enabled = !busy && settings != null, role = Role.Switch,
+                onValueChange = { set((settings ?: WeeklySettings()).copy(on = it)) },
+            ),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Column(Modifier.weight(1f)) {
-                Text("WEEKLY PICKS", style = MaterialTheme.typography.labelMedium, color = hud.accent)
+                Text("WEEKLY PICKS", style = MaterialTheme.typography.titleLarge.copy(fontSize = 15.sp))
                 Text(
                     "Every week the first few are downloaded into a playlist. A week later it's deleted with its music, " +
                         "unless you like the playlist (or songs in it).",
                     style = MaterialTheme.typography.bodySmall, color = hud.dim,
                 )
             }
-            Switch(checked = settings?.on == true, onCheckedChange = { set((settings ?: WeeklySettings()).copy(on = it)) }, enabled = !busy && settings != null)
+            Spacer(Modifier.width(8.dp))
+            Switch(checked = settings?.on == true, onCheckedChange = null, enabled = !busy && settings != null)
+        }
+        loadError?.let {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
+                Text("Couldn't load the weekly picks: $it", style = MaterialTheme.typography.bodySmall, color = hud.danger, modifier = Modifier.weight(1f))
+                HudButton("Try again", { changed++ }, filled = false)
+            }
         }
         // Waiting for the server's admin to set up this user's own picks folder.
         if (settings?.on == true) waiting?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = hud.danger, modifier = Modifier.padding(top = 4.dp)) }
@@ -279,8 +329,19 @@ private fun WeeklyPicksRow(actions: AppActions) {
             }
         }
         current?.let { batch ->
-            val status = if (batch.state.status == WeeklyState.RUNNING) "picking…" else "${batch.state.albums.size} albums · ${batch.playlist.songCount} songs so far"
-            HudButton("${batch.playlist.name}: $status", { actions.openPlaylist(batch.playlist.id) }, Modifier.fillMaxWidth().padding(top = 6.dp), filled = false)
+            val status = if (batch.state.status == WeeklyState.RUNNING) "picking…" else "${plural(batch.state.albums.size, "album")} · ${plural(batch.playlist.songCount, "song")} so far"
+            // The playlist's name and how far it is, on two lines so neither is cut off.
+            Row(
+                Modifier.fillMaxWidth().padding(top = 6.dp).clip(MaterialTheme.shapes.small).border(1.dp, hud.line, MaterialTheme.shapes.small)
+                    .clickable(role = Role.Button) { actions.openPlaylist(batch.playlist.id) }.padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(batch.playlist.name.uppercase(), style = MaterialTheme.typography.labelMedium, color = hud.accent, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(status.uppercase(), style = MaterialTheme.typography.labelSmall, color = hud.dim, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = hud.accent)
+            }
         }
     }
 }

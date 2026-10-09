@@ -60,8 +60,8 @@ class AppActions(
     /** Whether music can be deleted from the server: Lidarr through the Tonearm server, with full rights there. */
     val canDeleteMusic: Boolean get() = container.integrations.state.value.lidarr?.limited == false
 
-    /** Normalized names of artists requested from Lidarr during this session. */
-    val requestedArtists = androidx.compose.runtime.mutableStateListOf<String>()
+    /** Normalized names of artists requested from Lidarr while the app runs. */
+    val requestedArtists get() = container.requestedArtists
 
     /**
      * Opens [route] as a new page, so Back comes back here, also from one artist or album to another. When it's the page
