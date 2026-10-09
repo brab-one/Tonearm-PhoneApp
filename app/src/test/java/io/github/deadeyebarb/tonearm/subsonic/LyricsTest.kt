@@ -1,5 +1,13 @@
 package io.github.deadeyebarb.tonearm.subsonic
 
+import io.github.deadeyebarb.tonearm.data.ServerConfig
+import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
+import mockwebserver3.Dispatcher
+import mockwebserver3.MockResponse
+import mockwebserver3.MockWebServer
+import mockwebserver3.RecordedRequest
+import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -37,5 +45,36 @@ class LyricsTest {
         assertFalse(lyrics.synced)
         assertEquals(listOf("Verse one", "", "Verse two"), lyrics.lines.map { it.text })
         assertEquals(-1, lyrics.indexAt(1000))
+    }
+
+    @Test
+    fun `synced lyrics are asked for again after the server couldn't be reached`() = runTest {
+        var down = true
+        val server = MockWebServer()
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                val ok = """{"subsonic-response":{"status":"ok","version":"1.16.1""""
+                return when (request.url.encodedPath.removePrefix("/rest/").removeSuffix(".view")) {
+                    "getOpenSubsonicExtensions" ->
+                        if (down) MockResponse(code = 503) else MockResponse(body = """$ok,"openSubsonicExtensions":[{"name":"songLyrics","versions":[1]}]}}""")
+                    "getLyricsBySongId" -> MockResponse(body = """$ok,"lyricsList":{"structuredLyrics":[{"synced":true,"line":[{"start":1000,"value":"Hello"}]}]}}}""")
+                    "getLyrics" -> MockResponse(body = """$ok,"lyrics":{"value":"Hello"}}}""")
+                    else -> MockResponse(code = 404)
+                }
+            }
+        }
+        server.start()
+        try {
+            val session = ServerSession(ServerConfig(name = "Music", baseUrl = server.url("/").toString(), username = "alice"), "secret", OkHttpClient())
+            val api = SubsonicApi({ session }, Json { ignoreUnknownKeys = true; explicitNulls = false })
+            val song = Song("s1", title = "Song", artist = "Someone")
+            // Only the plain lyrics while the server is away for a moment...
+            assertFalse(api.lyrics(session, song)!!.synced)
+            // ...and the synced ones once it's back.
+            down = false
+            assertTrue(api.lyrics(session, song)!!.synced)
+        } finally {
+            server.close()
+        }
     }
 }

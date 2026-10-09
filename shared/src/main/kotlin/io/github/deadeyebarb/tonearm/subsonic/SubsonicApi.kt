@@ -44,10 +44,18 @@ class SubsonicApi(private val sessions: ActiveServer, private val json: Json) {
 
     suspend fun ping(session: ServerSession): SubsonicResponse = call(session, "ping")
 
-    suspend fun extensions(session: ServerSession): Set<String> =
-        extensionCache[session.id] ?: runCatching {
+    /** The server's OpenSubsonic extensions, kept once it has answered; when it couldn't be asked, it's asked again next time. */
+    suspend fun extensions(session: ServerSession): Set<String> {
+        extensionCache[session.id]?.let { return it }
+        return try {
             call(session, "getOpenSubsonicExtensions").openSubsonicExtensions.orEmpty().map { it.name }.toSet()
-        }.getOrDefault(emptySet()).also { extensionCache[session.id] = it }
+                .also { extensionCache[session.id] = it }
+        } catch (e: IOException) {
+            // A server that says it doesn't know the call isn't OpenSubsonic, and stays so; offline or a timeout says nothing.
+            val answered = e is SubsonicApiException || (e is SubsonicHttpException && e.code == 404)
+            emptySet<String>().also { if (answered) extensionCache[session.id] = it }
+        }
+    }
 
     /** An empty library is an empty list here: Navidrome reports it as error 70 ("Library not found or empty"). */
     suspend fun artists(session: ServerSession? = null): List<ArtistIndexEntry> = try {
