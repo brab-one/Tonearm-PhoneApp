@@ -60,6 +60,16 @@ data class TonearmServerInfo(
     val ai: String? = null,
     /** This user's own folder for their weekly picks, when each user has one (server 1.6.0 and later). */
     val picksFolder: String? = null,
+    /** Radio from a song or the picks, made from the library (server 1.7.0 and later). */
+    val radio: Boolean = false,
+    /** Mixes from a sentence, by its AI. */
+    val mix: Boolean = false,
+    /** Daily mixes from the listening history. */
+    val dailyMixes: Boolean = false,
+    /** It remembers what each device played last, to continue from. */
+    val resume: Boolean = false,
+    /** Listening stats over any span (from/to, albums, minutes). */
+    val stats: Boolean = false,
 ) {
     fun serviceUrl(service: String) = baseUrl.trimEnd('/') + "/connect-tonearm/" + service
 }

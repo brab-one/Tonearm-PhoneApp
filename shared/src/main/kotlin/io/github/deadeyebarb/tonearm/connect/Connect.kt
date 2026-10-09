@@ -185,16 +185,72 @@ data class ArtistCount(val artist: String, val plays: Int, val skips: Int = 0, v
 data class SongCount(val artist: String, val title: String, val album: String? = null, val plays: Int)
 
 @Serializable
-data class RecentPlay(val artist: String, val title: String, val at: Long)
+data class AlbumCount(val artist: String, val album: String, val plays: Int, val lastPlayed: Long = 0)
+
+@Serializable
+data class RecentPlay(
+    val artist: String,
+    val title: String,
+    val at: Long,
+    val album: String? = null,
+    /** "library", "youtube" or "local", as [Played.source]. */
+    val source: String? = null,
+)
 
 /** Someone's listening over a time span, from the Tonearm server's history: most played first. */
 @Serializable
 data class Listening(
     val since: Long = 0,
+    /** Where the span ends (ms, exclusive); 0 from servers before 1.7. */
+    val to: Long = 0,
     val plays: Int = 0,
+    /** Time listened in the span, from the plays that counted. */
+    val minutes: Int = 0,
     val artists: List<ArtistCount> = emptyList(),
+    val albums: List<AlbumCount> = emptyList(),
     val songs: List<SongCount> = emptyList(),
     val recent: List<RecentPlay> = emptyList(),
+)
+
+/** A batch of the Tonearm server's radio: library songs as Navidrome gave them; [more] while there's more to come. */
+@Serializable
+data class RadioBatch(val title: String = "", val songs: List<Song> = emptyList(), val more: Boolean = false, val problem: String? = null)
+
+/** A mix the Tonearm server made (from a sentence, or one of the daily mixes), or one matched in the library here. */
+@Serializable
+data class Mix(
+    val id: String = "",
+    /** The sentence it was made from; null for a daily mix. */
+    val prompt: String? = null,
+    val title: String = "",
+    val subtitle: String? = null,
+    val songs: List<Song> = emptyList(),
+    /** The AI is still at it: ask again in a few seconds. */
+    val running: Boolean = false,
+    val problem: String? = null,
+    /** The AI that made it; null when it was matched in the library without one. */
+    val ai: String? = null,
+)
+
+/** Today's daily mixes; [running] while the server makes them (ask again in a few seconds). */
+@Serializable
+data class DailyMixes(val day: String = "", val running: Boolean = false, val problem: String? = null, val mixes: List<Mix> = emptyList())
+
+/** The device that played last, other than the one asking, as the Tonearm server remembers it. */
+@Serializable
+data class Handoff(
+    val device: String,
+    val name: String = "",
+    /** Seen by the server in the last 45 s and not gone. */
+    val online: Boolean = false,
+    /** Online, and its state says it plays. */
+    val playing: Boolean = false,
+    /** When it last played (ms). */
+    val playedAt: Long = 0,
+    /** When the server last heard from it (ms). */
+    val seenAt: Long = 0,
+    /** The DeviceState JSON as published. */
+    val state: String = "",
 )
 
 /** [running] while the server makes new ones (ask again in a few seconds). */
@@ -240,6 +296,9 @@ class ConnectClient(private val http: IntegrationHttp, private val json: Json) {
     @Serializable
     private data class RawDevice(val id: String = "", val online: Boolean = false, val secondsSinceSeen: Long = 0, val state: String? = null)
 
+    @Serializable
+    private data class Exclude(val exclude: List<String>)
+
     /** The protocol version. */
     suspend fun hello(route: ConnectRoute): Int =
         call(route, "hello")["protocol"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
@@ -271,6 +330,11 @@ class ConnectClient(private val http: IntegrationHttp, private val json: Json) {
             dislikes = flag("dislikes"),
             ai = response["ai"]?.jsonPrimitive?.contentOrNull,
             picksFolder = response["picksFolder"]?.jsonPrimitive?.contentOrNull,
+            radio = flag("radio"),
+            mix = flag("mix"),
+            dailyMixes = flag("dailyMixes"),
+            resume = flag("resume"),
+            stats = flag("stats"),
         )
     }
 
@@ -297,6 +361,62 @@ class ConnectClient(private val http: IntegrationHttp, private val json: Json) {
             Listening.serializer(),
             call(ConnectRoute.Server(session), "listening", listOf("days" to days, "artists" to artists, "songs" to songs, "recent" to recent)),
         )
+
+    /**
+     * The user's listening from [from] up to [to] (ms, exclusive; now for null): top [artists] and [albums], top [songs]
+     * and the [recent] plays, those [before] a time for the next page.
+     */
+    suspend fun listeningBetween(
+        session: ServerSession,
+        from: Long,
+        to: Long?,
+        artists: Int = 10,
+        albums: Int = 10,
+        songs: Int = 0,
+        recent: Int = 100,
+        before: Long? = null,
+    ): Listening = json.decodeFromJsonElement(
+        Listening.serializer(),
+        call(
+            ConnectRoute.Server(session), "listening",
+            listOf("from" to from, "to" to to, "artists" to artists, "albums" to albums, "songs" to songs, "recent" to recent, "before" to before),
+        ),
+    )
+
+    /**
+     * A batch of radio from the [seed] ("song" with a library song's [id], or its [artist] and [title]; or "picks").
+     * [exclude] is the queue so far as [io.github.deadeyebarb.tonearm.integrations.Continuation.key]s, oldest first:
+     * the server leaves those out and follows the last of them.
+     */
+    suspend fun radio(
+        session: ServerSession,
+        seed: String,
+        id: String? = null,
+        artist: String? = null,
+        title: String? = null,
+        exclude: List<String> = emptyList(),
+        count: Int = 25,
+    ): RadioBatch = json.decodeFromJsonElement(
+        RadioBatch.serializer(),
+        call(
+            ConnectRoute.Server(session), "radio",
+            listOf("seed" to seed, "id" to id, "artist" to artist, "title" to title, "count" to count),
+            json.encodeToString(Exclude.serializer(), Exclude(exclude)),
+        ),
+    )
+
+    /** A mix from a sentence by the server's AI; [Mix.running] until it's done (ask again then), [refresh] makes a new one. */
+    suspend fun mix(session: ServerSession, prompt: String, refresh: Boolean = false): Mix =
+        json.decodeFromJsonElement(Mix.serializer(), call(ConnectRoute.Server(session), "mix", listOf("prompt" to prompt, "refresh" to refresh.takeIf { it })))
+
+    /** Today's daily mixes, the day starting at 04:00 in [zone] (an id like "Europe/Vienna"). */
+    suspend fun dailyMixes(session: ServerSession, zone: String): DailyMixes =
+        json.decodeFromJsonElement(DailyMixes.serializer(), call(ConnectRoute.Server(session), "dailymixes", listOf("tz" to zone)))
+
+    /** The device other than [device] that played last (in the last two weeks), to continue from; null if none. */
+    suspend fun resume(session: ServerSession, device: String): Handoff? =
+        (call(ConnectRoute.Server(session), "resume", listOf("device" to device))["handoff"] as? JsonObject)
+            ?.let { json.decodeFromJsonElement(Handoff.serializer(), it) }
 
     /** "Not for me": the server leaves [artist] (or just this [album] of theirs) out of the picks from now on. */
     suspend fun dismiss(session: ServerSession, artist: String, album: String? = null) {

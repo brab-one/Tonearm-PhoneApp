@@ -20,6 +20,8 @@ import mockwebserver3.MockWebServer
 import okhttp3.OkHttpClient
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -216,6 +218,120 @@ class ConnectClientTest {
         val similar = client.similarArtists(session(), "Portishead")
         assertEquals(listOf("Massive Attack" to true, "Tricky" to false), similar.map { it.artist to it.inLibrary })
         assertEquals("Portishead", server.takeRequest().url.queryParameter("artist"))
+    }
+
+    @Test
+    fun `radio sends the seed in the query and the queue as the body, and gives the server's subsonic songs`() = runTest {
+        respond("""{"title":"Radio · Middle C","songs":[{"id":"al2-1","title":"Forty-Four","artist":"The Oscillators","size":4096,"suffix":"flac",
+            "replayGain":{"trackGain":-4.0,"albumGain":-4.5}}],"more":true,"problem":null}""")
+        val batch = client.radio(session(), "song", id = "al1-2", exclude = listOf("lib/al1-1", "yt/dQw4w9WgXcQ"), count = 5)
+        assertEquals("Radio · Middle C", batch.title)
+        assertTrue(batch.more)
+        assertEquals(4096L, batch.songs.single().size)
+        assertEquals(-4.0f, batch.songs.single().replayGain!!.trackGain)
+        val request = server.takeRequest()
+        assertEquals("/connect-tonearm/api/radio", request.url.encodedPath)
+        assertEquals("song", request.url.queryParameter("seed"))
+        assertEquals("al1-2", request.url.queryParameter("id"))
+        assertEquals("5", request.url.queryParameter("count"))
+        assertEquals(null, request.url.queryParameter("artist"))
+        assertEquals(listOf("lib/al1-1", "yt/dQw4w9WgXcQ"), Json.parseToJsonElement(request.body!!.utf8()).jsonObject["exclude"]!!.jsonArray.map { it.jsonPrimitive.content })
+
+        respond("""{"title":"Picks radio","songs":[],"more":false,"problem":"Nothing like that in your library"}""")
+        val none = client.radio(session(), "song", artist = "Sia", title = "Rewrite")
+        assertEquals("Nothing like that in your library", none.problem)
+        assertFalse(none.more)
+        val byName = server.takeRequest().url
+        assertEquals(listOf("Sia", "Rewrite", null, "25"), listOf("artist", "title", "id", "count").map(byName::queryParameter))
+    }
+
+    @Test
+    fun `a mix is asked for by its sentence, refresh only when wanted`() = runTest {
+        respond("""{"id":"mix-1","prompt":"rainy sunday, mellow jazz","title":"","songs":[],"running":true,"problem":null,"ai":"Ollama gemma4:26b"}""")
+        assertTrue(client.mix(session(), "rainy sunday, mellow jazz").running)
+        val first = server.takeRequest().url
+        assertEquals("/connect-tonearm/api/mix", first.encodedPath)
+        assertEquals("rainy sunday, mellow jazz", first.queryParameter("prompt"))
+        assertEquals(null, first.queryParameter("refresh"))
+
+        respond("""{"id":"mix-1","prompt":"rainy sunday, mellow jazz","title":"Rainy Sunday Jazz","subtitle":null,"songs":[{"id":"al4-1","title":"Slow Rain"}],"running":false,"problem":null,"ai":"Ollama gemma4:26b"}""")
+        val done = client.mix(session(), "rainy sunday, mellow jazz", refresh = true)
+        assertEquals("Rainy Sunday Jazz", done.title)
+        assertEquals(listOf("Slow Rain"), done.songs.map { it.title })
+        assertEquals("Ollama gemma4:26b", done.ai)
+        assertEquals("true", server.takeRequest().url.queryParameter("refresh"))
+
+        respond("""{"id":"mix-1","prompt":"x","title":"","songs":[],"running":false,"problem":"The AI couldn't answer: timed out","ai":"Ollama gemma4:26b"}""")
+        assertEquals("The AI couldn't answer: timed out", client.mix(session(), "x").problem)
+        server.takeRequest()
+        respond("""{"error":"This Tonearm server has no AI set up"}""", 404)
+        try {
+            client.mix(session(), "x")
+            error("expected failure")
+        } catch (e: IntegrationHttpException) {
+            assertEquals(404, e.code)
+        }
+    }
+
+    @Test
+    fun `daily mixes are asked for with the time zone`() = runTest {
+        respond("""{"day":"2026-10-09","running":false,"problem":null,"mixes":[{"id":"daily-2026-10-09-1","title":"Daily Mix 1",
+            "subtitle":"The Oscillators, Signal Garden and more","songs":[{"id":"al1-1","title":"Low Hum"}]}]}""")
+        val daily = client.dailyMixes(session(), "Europe/Vienna")
+        assertEquals("2026-10-09", daily.day)
+        assertEquals("Daily Mix 1", daily.mixes.single().title)
+        assertEquals(null, daily.mixes.single().prompt)
+        val request = server.takeRequest().url
+        assertEquals("/connect-tonearm/api/dailymixes", request.encodedPath)
+        assertEquals("Europe/Vienna", request.queryParameter("tz"))
+    }
+
+    @Test
+    fun `resume gives the device that played last, or null`() = runTest {
+        respond("""{"handoff":{"device":"desktop-7c1d","name":"Tonearm on brabb-pc","online":false,"playing":false,
+            "playedAt":1760000000000,"seenAt":1760000005000,"state":"{\"id\":\"desktop-7c1d\",\"name\":\"Tonearm on brabb-pc\",\"kind\":\"desktop\"}"}}""")
+        val handoff = client.resume(session(), "phone-1")!!
+        assertEquals("desktop-7c1d", handoff.device)
+        assertEquals(1_760_000_005_000, handoff.seenAt)
+        assertEquals("Tonearm on brabb-pc", json.decodeFromString(DeviceState.serializer(), handoff.state).name)
+        val request = server.takeRequest().url
+        assertEquals("/connect-tonearm/api/resume", request.encodedPath)
+        assertEquals("phone-1", request.queryParameter("device"))
+        respond("""{"handoff":null}""")
+        assertNull(client.resume(session(), "phone-1"))
+    }
+
+    @Test
+    fun `listening between two times sends only what's given and reads albums and minutes`() = runTest {
+        respond("""{"since":1759701600000,"to":1760306400000,"plays":312,"minutes":1043,
+            "artists":[{"artist":"The Oscillators","plays":120,"skips":3,"lastPlayed":1759870000000}],
+            "albums":[{"artist":"The Oscillators","album":"Hi-Res Tones","plays":60,"lastPlayed":1759870000000}],
+            "songs":[],"recent":[{"artist":"The Oscillators","title":"Low Hum","at":1759870000000,"album":"Hi-Res Tones","source":"library"}]}""")
+        val listening = client.listeningBetween(session(), from = 1_759_701_600_000, to = 1_760_306_400_000)
+        assertEquals(1043, listening.minutes)
+        assertEquals(1_760_306_400_000, listening.to)
+        assertEquals(AlbumCount("The Oscillators", "Hi-Res Tones", 60, 1_759_870_000_000), listening.albums.single())
+        assertEquals("Hi-Res Tones" to "library", listening.recent.single().let { it.album to it.source })
+        val first = server.takeRequest().url
+        assertEquals("/connect-tonearm/api/listening", first.encodedPath)
+        assertEquals(listOf("1759701600000", "1760306400000", "10", "10", "0", "100", null, null), listOf("from", "to", "artists", "albums", "songs", "recent", "before", "days").map(first::queryParameter))
+
+        // An older server's answer still reads.
+        respond("""{"since":1,"plays":3,"artists":[],"recent":[{"artist":"Sia","title":"Rewrite","at":9}]}""")
+        val old = client.listeningBetween(session(), from = 1, to = null, recent = 20, before = 50)
+        assertEquals(Listening(since = 1, plays = 3, recent = listOf(RecentPlay("Sia", "Rewrite", 9))), old)
+        val second = server.takeRequest().url
+        assertEquals(listOf(null, "50", "20"), listOf("to", "before", "recent").map(second::queryParameter))
+    }
+
+    @Test
+    fun `the server's hello says which of radio, mixes, daily mixes, resume and stats it has`() = runTest {
+        respond("""{"server":"tonearm","protocol":2,"version":"1.7.0","user":"demo","radio":true,"mix":false,"dailyMixes":true,"resume":true,"stats":true}""")
+        val info = client.findServer(session())!!
+        assertEquals(listOf(true, false, true, true, true), listOf(info.radio, info.mix, info.dailyMixes, info.resume, info.stats))
+        respond("""{"server":"tonearm","protocol":2,"version":"1.6.0","user":"demo"}""")
+        val old = client.findServer(session())!!
+        assertEquals(listOf(false, false, false, false, false), listOf(old.radio, old.mix, old.dailyMixes, old.resume, old.stats))
     }
 
     @Test
