@@ -7,7 +7,6 @@ import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import okhttp3.Request
 import java.io.IOException
-import java.util.concurrent.ConcurrentHashMap
 
 class SubsonicApiException(val code: Int, message: String) : IOException(message)
 
@@ -25,8 +24,6 @@ fun interface ActiveServer {
 }
 
 class SubsonicApi(private val sessions: ActiveServer, private val json: Json) {
-    private val extensionCache = ConcurrentHashMap<String, Set<String>>()
-
     suspend fun active(): ServerSession = sessions.awaitActive()
 
     suspend fun call(session: ServerSession, method: String, params: List<Pair<String, Any?>> = emptyList()): SubsonicResponse =
@@ -43,19 +40,6 @@ class SubsonicApi(private val sessions: ActiveServer, private val json: Json) {
     private suspend fun call(method: String, vararg params: Pair<String, Any?>) = call(active(), method, params.toList())
 
     suspend fun ping(session: ServerSession): SubsonicResponse = call(session, "ping")
-
-    /** The server's OpenSubsonic extensions, kept once it has answered; when it couldn't be asked, it's asked again next time. */
-    suspend fun extensions(session: ServerSession): Set<String> {
-        extensionCache[session.id]?.let { return it }
-        return try {
-            call(session, "getOpenSubsonicExtensions").openSubsonicExtensions.orEmpty().map { it.name }.toSet()
-                .also { extensionCache[session.id] = it }
-        } catch (e: IOException) {
-            // A server that says it doesn't know the call isn't OpenSubsonic, and stays so; offline or a timeout says nothing.
-            val answered = e is SubsonicApiException || (e is SubsonicHttpException && e.code == 404)
-            emptySet<String>().also { if (answered) extensionCache[session.id] = it }
-        }
-    }
 
     /** An empty library is an empty list here: Navidrome reports it as error 70 ("Library not found or empty"). */
     suspend fun artists(session: ServerSession? = null): List<ArtistIndexEntry> = try {
@@ -164,22 +148,6 @@ class SubsonicApi(private val sessions: ActiveServer, private val json: Json) {
 
     suspend fun scrobble(session: ServerSession, songId: String, timeMs: Long, submission: Boolean) {
         call(session, "scrobble", listOf("id" to songId, "time" to timeMs, "submission" to submission))
-    }
-
-    /** Prefers OpenSubsonic structured (often synced) lyrics, then the classic plain-text endpoint. */
-    suspend fun lyrics(session: ServerSession, song: Song): Lyrics? {
-        if ("songLyrics" in extensions(session)) {
-            val structured = runCatching {
-                call(session, "getLyricsBySongId", listOf("id" to song.id)).lyricsList?.structuredLyrics.orEmpty()
-            }.getOrDefault(emptyList())
-            val best = structured.firstOrNull { it.synced && it.line.isNotEmpty() } ?: structured.firstOrNull { it.line.isNotEmpty() }
-            if (best != null) return Lyrics.from(best)
-        }
-        val artist = song.artist ?: return null
-        val plain = runCatching {
-            call(session, "getLyrics", listOf("artist" to artist, "title" to song.title)).lyrics?.value
-        }.getOrNull()
-        return plain?.takeIf { it.isNotBlank() }?.let(Lyrics::parse)
     }
 
     private fun notFound(): Nothing = throw SubsonicApiException(70, "Not found")

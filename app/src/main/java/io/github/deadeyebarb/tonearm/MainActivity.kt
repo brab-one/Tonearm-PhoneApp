@@ -15,13 +15,19 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.deadeyebarb.tonearm.ui.TonearmRoot
 import io.github.deadeyebarb.tonearm.ui.theme.TonearmTheme
 import io.github.deadeyebarb.tonearm.data.AccentColor
 import io.github.deadeyebarb.tonearm.media.toQueueSong
 import io.github.deadeyebarb.tonearm.ui.player.rememberArtworkColor
+import io.github.deadeyebarb.tonearm.widget.Shortcuts
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private val openPlayerRequests = mutableIntStateOf(0)
@@ -34,6 +40,7 @@ class MainActivity : ComponentActivity() {
         val c = container
         splash.setKeepOnScreenCondition { c.servers.state.value == null }
         if (savedInstanceState == null) handleIntent(intent)
+        Shortcuts.publish(this)
 
         // The HUD theme is always dark: light status and navigation bar icons.
         enableEdgeToEdge(
@@ -71,6 +78,19 @@ class MainActivity : ComponentActivity() {
         if (intent?.action == MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH) {
             container.player.playFromSearch(intent.getStringExtra(SearchManager.QUERY).orEmpty())
             intent.action = null
+        }
+        Shortcuts.seedFor(intent?.action)?.let { seed ->
+            intent?.action = null
+            ShortcutManagerCompat.reportShortcutUsed(this, Shortcuts.idFor(seed))
+            lifecycleScope.launch {
+                // Right after a cold start the server list is still being read.
+                if (container.servers.state.filterNotNull().first().servers.isEmpty()) {
+                    container.messages.show("Add your music server first")
+                } else {
+                    container.player.startRadio(seed)
+                    openPlayerRequests.intValue++
+                }
+            }
         }
         if (intent?.getBooleanExtra(EXTRA_OPEN_PLAYER, false) == true) {
             intent.removeExtra(EXTRA_OPEN_PLAYER)

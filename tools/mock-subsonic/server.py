@@ -4,7 +4,7 @@ A small Subsonic/OpenSubsonic server for testing Tonearm, with optional mutual T
 
 It generates everything it needs on first run (needs `openssl` and `ffmpeg`):
   * a private CA, a server certificate and client certificates (.p12, password "tonearm")
-  * a few albums of FLAC tones, including 24-bit/96 kHz, with cover art and synced lyrics
+  * a few albums of FLAC tones, including 24-bit/96 kHz, with cover art
 
 Usage:
   python3 server.py [--data DIR] [--port 8443] [--host 0.0.0.0] [--no-mtls] [--san IP:10.0.2.2]
@@ -86,8 +86,6 @@ LIDARR_ALBUM_TYPES = {"mb-midnight-signal": "Single"}
 BRAINARR_LIST_ID = 7
 BRAINARR_TAG = {"id": 1, "label": "brainarr"}
 BRAINARR_ADDS = [("mb-neon-cascade", False), ("mb-aurora-lattice", True)]  # (artist, monitored)
-LYRICS = [(0, "This is a synced lyric line"), (4000, "The tone keeps going"), (8000, "Watch the highlight move"),
-          (12000, "Tap a line to seek"), (16000, "That's all, folks")]
 
 
 def run(cmd):
@@ -479,7 +477,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json({"user": {"username": name, "adminRole": name == USER, "streamRole": True}})
 
     def api_getOpenSubsonicExtensions(self, q, one):
-        self.send_json({"openSubsonicExtensions": [{"name": "songLyrics", "versions": [1]}, {"name": "formPost", "versions": [1]}]})
+        self.send_json({"openSubsonicExtensions": [{"name": "formPost", "versions": [1]}]})
 
     def api_getArtists(self, q, one):
         if not ARTISTS:
@@ -990,13 +988,6 @@ class Handler(BaseHTTPRequestHandler):
     def api_deletePlaylist(self, q, one):
         self.lib.playlists.pop(one("id"), None)
         self.send_json({})
-
-    def api_getLyricsBySongId(self, q, one):
-        lines = [{"start": t, "value": v} for t, v in LYRICS] if one("id") in self.lib.songs else []
-        self.send_json({"lyricsList": {"structuredLyrics": [{"lang": "eng", "synced": True, "offset": 0, "line": lines}] if lines else []}})
-
-    def api_getLyrics(self, q, one):
-        self.send_json({"lyrics": {}})
 
     def api_getCoverArt(self, q, one):
         album = self.lib.albums.get(one("id")) or self.lib.albums.get(self.lib.songs.get(one("id"), {}).get("albumId"))

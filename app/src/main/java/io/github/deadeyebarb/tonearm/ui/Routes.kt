@@ -5,6 +5,9 @@ import kotlinx.serialization.Serializable
 @Serializable data object HomeRoute
 @Serializable data object DiscoverRoute
 @Serializable data object DailyRoute
+@Serializable data object HistoryRoute
+/** A mix from a sentence ([prompt]), or one of today's daily mixes ([dailyId]). */
+@Serializable data class MixRoute(val prompt: String? = null, val dailyId: String? = null)
 @Serializable data object ConnectRoute
 @Serializable data class RequestRoute(val query: String = "")
 @Serializable data object LidarrSettingsRoute

@@ -21,10 +21,12 @@ import io.github.deadeyebarb.tonearm.download.DownloadRepository
 import io.github.deadeyebarb.tonearm.download.OfflineSync
 import io.github.deadeyebarb.tonearm.integrations.DailyDiscovery
 import io.github.deadeyebarb.tonearm.integrations.FetchTracker
+import io.github.deadeyebarb.tonearm.integrations.ForYou
 import io.github.deadeyebarb.tonearm.integrations.IntegrationHttp
 import io.github.deadeyebarb.tonearm.integrations.IntegrationImageCalls
 import io.github.deadeyebarb.tonearm.integrations.IntegrationsService
 import io.github.deadeyebarb.tonearm.integrations.LidarrClient
+import io.github.deadeyebarb.tonearm.integrations.ListeningStats
 import io.github.deadeyebarb.tonearm.integrations.Recommender
 import io.github.deadeyebarb.tonearm.integrations.SongRequests
 import io.github.deadeyebarb.tonearm.likes.Dislikes
@@ -164,6 +166,10 @@ class AppContainer(val app: Application) {
     val weekly = WeeklyPicks(api, LidarrClient(integrationHttp, json), connectClient, json, connect.deviceId, java.io.File(app.filesDir, "weekly-run.json"))
     /** Radio, mixes from a sentence and daily mixes: from the Tonearm server, else made from the library. */
     val mixer = Mixer(api, connectClient, tonearmServer, youtube, dislikes, weekly)
+    /** Home's "For you" row. */
+    val forYou = ForYou(api, weekly)
+    /** The History screen's weeks and months. */
+    val stats = ListeningStats(api, connect)
     val continuation = QueueContinuation(api, sessions, youtube, settings, dislikes, tonearmServer)
     val media by lazy { MediaEngine(app, sessions, settings, network, youtube, youtubeHttpClient) }
 

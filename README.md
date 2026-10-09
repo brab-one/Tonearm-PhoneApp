@@ -39,9 +39,13 @@ Related repositories:
 - ReplayGain (track/album, pre-amp, clipping protection), built-in equalizer + system EQ apps
 - Sleep timer (with fade-out, or "end of this song"), optional audio offload for battery
 - Queue with drag-to-reorder, play next, add to queue; the queue survives restarts
-- Synced lyrics (OpenSubsonic `songLyrics`) with tap-to-seek, plain lyrics fallback
 - Scrobbling (now playing + submissions, retried when offline)
 - Android Auto browsing, voice search ("play … on Tonearm"), playback resumption
+- **Radio** on Now Playing: keeps the song playing and follows it with an endless radio of songs like it;
+  RADIO ON turns it off again
+- **Home screen widget** (cover, song, previous / play-pause / next), a **quick settings tile** that plays and
+  pauses, and two shortcuts on the app icon: **Picks** (a radio from your weekly picks and the songs you like)
+  and **Radio** (from the song playing or last played). After a restart, play brings the last song back
 - **When the queue ends**: stop, keep going with similar music (library first, then YouTube Music's radio
   for the last song), or play another of your playlists
 - Seeking works even behind proxies that drop range requests: the file size from the server fills in
@@ -50,6 +54,11 @@ Related repositories:
 
 **Library**
 - Home: recently added / played, most played, liked, discover, shuffle all
+- **For you** on Home: this week's picks, albums you liked lately and ones you played a lot but not in months,
+  each saying why it's there (from the music server alone)
+- **A mix from a sentence**: describe one on Home ("rainy sunday, mellow jazz") and the Tonearm server's AI makes
+  it from your library; without the AI it's matched by genres, artists and words. Play, shuffle or save it as a
+  playlist
 - Artists (A–Z), albums (7 sort orders, endless scrolling), playlists, genres, liked
 - Album, artist (bio, popular songs, similar artists), playlist and genre pages; search
 - **Like** button everywhere (mini player, Now Playing, song menus, the notification and the car). Liking a
@@ -72,6 +81,10 @@ Related repositories:
   so Android Auto and other apps can play it), plus the day's recommended artists you don't own,
   with **Request all** to send them all to Lidarr (latest album, all albums, or artist only)
 - Your mix (in Android Auto): songs similar to what you've been playing, minus what you played recently
+- **Daily mixes** on Home (Tonearm server 1.7 or later): up to three mixes a day of the music you play most, each
+  around a few artists and what's like them
+- **History** (the clock on Home, Tonearm server 1.7 or later): what you played by week or month, with plays
+  and hours, top artists and albums, and every play by day
 - Request any artist or album through Lidarr from search, recommendations or the Request screen,
   and follow Lidarr's download queue
 - **Discovery picks** (with the Tonearm server): artists you don't have that the ones you play point to
@@ -255,7 +268,7 @@ is liked in your library. If its album can't be found, nothing is requested. Tur
 This uses [NewPipeExtractor](https://github.com/TeamNewPipe/NewPipeExtractor), the library behind
 NewPipe, without a Google account. It's unofficial: YouTube's terms don't allow third-party players,
 and changes on YouTube's side can break it until the library catches up. YouTube Music songs can't be
-downloaded, added to server playlists or show lyrics.
+downloaded or added to server playlists.
 
 ## Tonearm Connect (phone ↔ desktop)
 
@@ -337,7 +350,7 @@ python3 tools/mock-subsonic/server.py --connect http://127.0.0.1:8790 --plain-po
 On first run it creates a CA, a server certificate valid for `localhost`, `127.0.0.1` and
 `10.0.2.2` (the host as seen from the Android emulator), client certificates
 (`client.p12` and `client-legacy.p12`, password `tonearm`), and albums of 16/44.1, 24/96 and
-24/192 FLAC tones with cover art and synced lyrics, all under `tools/mock-subsonic/data/`.
+24/192 FLAC tones with cover art, all under `tools/mock-subsonic/data/`.
 The same address also serves a mock **Maloja** (`/apis/mlj_1/`, API key `maloja-key`) for the Tonearm
 server's one-time history import, and a mock **Lidarr** (`/api/v1/`, API key `lidarr-key`) with a small catalog, a download
 queue, album lookups and track lists, so Discover, Daily Discovery, requests and (behind a Tonearm server)
