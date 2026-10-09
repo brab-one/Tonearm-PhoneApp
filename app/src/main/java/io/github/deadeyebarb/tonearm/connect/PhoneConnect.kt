@@ -65,6 +65,33 @@ class PhoneConnect(
         return client.listening(session, days, artists, songs, recent)
     }
 
+    /**
+     * The listening history on the Tonearm server from [from] up to [to] (ms; now for null), with top [albums] and the
+     * [recent] plays [before] a time for the next page.
+     */
+    suspend fun listeningBetween(
+        from: Long,
+        to: Long?,
+        artists: Int = 10,
+        albums: Int = 10,
+        songs: Int = 0,
+        recent: Int = 100,
+        before: Long? = null,
+    ): Listening {
+        val session = sessions.active.value ?: sessions.awaitActive()
+        if (router.refresh(session)?.stats != true) {
+            throw IntegrationNotConfiguredException("Listening stats come from the Tonearm server (1.7 or later), and it isn't on your music server yet")
+        }
+        return client.listeningBetween(session, from, to, artists, albums, songs, recent, before)
+    }
+
+    /** What another device (the desktop) played last, to continue here; null when there's none or the server doesn't keep it. */
+    suspend fun resume(): Handoff? {
+        val session = sessions.active.value ?: sessions.awaitActive()
+        if (router.refresh(session)?.resume != true) return null
+        return client.resume(session, deviceId)
+    }
+
     /** "Not for me": the Tonearm server leaves [artist] (or just this [album]) out of the picks from now on. */
     suspend fun dismiss(artist: String, album: String? = null) = client.dismiss(sessions.active.value ?: sessions.awaitActive(), artist, album)
 

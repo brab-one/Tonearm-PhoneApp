@@ -32,6 +32,7 @@ import io.github.deadeyebarb.tonearm.local.LocalMusic
 import io.github.deadeyebarb.tonearm.media.LibraryVersions
 import io.github.deadeyebarb.tonearm.media.MediaEngine
 import io.github.deadeyebarb.tonearm.media.MediaItemFactory
+import io.github.deadeyebarb.tonearm.mixes.Mixer
 import io.github.deadeyebarb.tonearm.net.NetworkMonitor
 import io.github.deadeyebarb.tonearm.net.TlsFactory
 import io.github.deadeyebarb.tonearm.net.UserAgentInterceptor
@@ -47,6 +48,7 @@ import io.github.deadeyebarb.tonearm.subsonic.SessionManager
 import io.github.deadeyebarb.tonearm.subsonic.Song
 import io.github.deadeyebarb.tonearm.subsonic.SubsonicApi
 import io.github.deadeyebarb.tonearm.weekly.WeeklyPicks
+import io.github.deadeyebarb.tonearm.widget.NowPlayingCard
 import io.github.deadeyebarb.tonearm.youtube.YouTubeCatalog
 import io.github.deadeyebarb.tonearm.youtube.YouTubeMusic
 import java.util.concurrent.TimeUnit
@@ -131,6 +133,15 @@ class AppContainer(val app: Application) {
     }
     val mediaItems = MediaItemFactory(app)
     val queueStore = QueueStore(app, json, mediaItems)
+    /** The song for the widget and the tile: the playback service publishes it, the saved queue stands in until then. */
+    val nowPlaying = MutableStateFlow<NowPlayingCard?>(null)
+
+    init {
+        scope.launch {
+            val saved = queueStore.load()?.let(NowPlayingCard::fromSaved) ?: return@launch
+            nowPlaying.compareAndSet(null, saved)
+        }
+    }
 
     /** YouTube checks the User-Agent its URLs were issued for; the shared client would stamp Tonearm's on everything. */
     private val youtubeHttpClient = baseHttpClient.newBuilder().apply { interceptors().remove(UserAgentInterceptor) }.build()
@@ -142,6 +153,8 @@ class AppContainer(val app: Application) {
     val songRequests = SongRequests(LidarrClient(integrationHttp, json), ownPicks = { tonearmServer.server.value?.picksFolder })
     val likes = Likes(app, json, scope, api, sessions, starred, integrations, songRequests, LikesSync(connectClient, json), connect, settings, messages)
     val weekly = WeeklyPicks(api, LidarrClient(integrationHttp, json), connectClient, json, connect.deviceId, java.io.File(app.filesDir, "weekly-run.json"))
+    /** Radio, mixes from a sentence and daily mixes: from the Tonearm server, else made from the library. */
+    val mixer = Mixer(api, connectClient, tonearmServer, youtube, dislikes, weekly)
     val continuation = QueueContinuation(api, sessions, youtube, settings, dislikes)
     val media by lazy { MediaEngine(app, sessions, settings, network, youtube, youtubeHttpClient) }
 

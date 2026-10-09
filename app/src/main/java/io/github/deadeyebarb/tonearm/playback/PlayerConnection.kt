@@ -2,6 +2,7 @@ package io.github.deadeyebarb.tonearm.playback
 
 import android.content.ComponentName
 import android.content.Context
+import android.os.Bundle
 import androidx.core.content.ContextCompat
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -9,6 +10,7 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.common.Player
 import androidx.media3.common.util.Util
 import androidx.media3.session.MediaController
+import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
 import io.github.deadeyebarb.tonearm.media.MediaItemFactory
@@ -48,6 +50,8 @@ data class PlayerUiState(
     val order: List<Int> = emptyList(),
     val error: String? = null,
     val format: AudioFormatInfo? = null,
+    /** The radio's title while a radio plays ("Radio · Middle C", "Picks radio"). */
+    val radio: String? = null,
 )
 
 /** The UI's handle on [PlaybackService], via a MediaController. Main thread only. */
@@ -71,10 +75,16 @@ class PlayerConnection(private val context: Context, private val factory: MediaI
         }
     }
 
+    private val sessionListener = object : MediaController.Listener {
+        override fun onExtrasChanged(controller: MediaController, extras: Bundle) {
+            if (controller === this@PlayerConnection.controller) _state.update { it.copy(radio = radioOf(extras)) }
+        }
+    }
+
     fun connect() {
         if (future != null) return
         val token = SessionToken(context, ComponentName(context, PlaybackService::class.java))
-        val f = MediaController.Builder(context, token).buildAsync()
+        val f = MediaController.Builder(context, token).setListener(sessionListener).buildAsync()
         future = f
         f.addListener({
             val c = runCatching { f.get() }.getOrNull()
@@ -125,8 +135,11 @@ class PlayerConnection(private val context: Context, private val factory: MediaI
             order = if (rebuildQueue || !previous.connected) playbackOrder(p) else previous.order,
             error = p.playerError?.let { e -> (e.cause ?: e).userMessage() },
             format = formatOf(p),
+            radio = if (p is MediaController) radioOf(p.sessionExtras) else previous.radio,
         )
     }
+
+    private fun radioOf(extras: Bundle): String? = extras.getString(PlaybackCommands.EXTRA_RADIO)
 
     private fun playbackOrder(p: Player): List<Int> {
         val timeline = p.currentTimeline
@@ -242,6 +255,16 @@ class PlayerConnection(private val context: Context, private val factory: MediaI
         it.seekToDefaultPosition(index)
         Util.handlePlayButtonAction(it)
     }
+
+    /** A radio from the current song ([PlaybackCommands.SEED_CURRENT]) or from the picks ([PlaybackCommands.SEED_PICKS]). */
+    fun startRadio(seed: String = PlaybackCommands.SEED_CURRENT) = withController {
+        it.sendCustomCommand(SessionCommand(PlaybackCommands.START_RADIO, Bundle.EMPTY), Bundle().apply { putString(PlaybackCommands.ARG_SEED, seed) })
+    }
+
+    fun stopRadio() = withController { it.sendCustomCommand(SessionCommand(PlaybackCommands.STOP_RADIO, Bundle.EMPTY), Bundle.EMPTY) }
+
+    /** Skips the song, takes it out of the queue and dislikes it. */
+    fun notThisOne() = withController { it.sendCustomCommand(SessionCommand(PlaybackCommands.NOT_THIS_ONE, Bundle.EMPTY), Bundle.EMPTY) }
 
     fun cycleRepeat() = withController {
         it.repeatMode = when (it.repeatMode) {
