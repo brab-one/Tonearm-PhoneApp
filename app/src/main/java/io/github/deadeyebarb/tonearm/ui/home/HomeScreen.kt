@@ -1,5 +1,12 @@
 package io.github.deadeyebarb.tonearm.ui.home
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import io.github.deadeyebarb.tonearm.integrations.ForYouItem
+import io.github.deadeyebarb.tonearm.integrations.ForYouKind
+import io.github.deadeyebarb.tonearm.ui.common.AlbumCard
+import io.github.deadeyebarb.tonearm.ui.theme.HudTag
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -65,6 +72,7 @@ private data class HomeData(
     val frequent: List<Album>,
     val random: List<Album>,
     val starred: List<Album>,
+    val forYou: List<ForYouItem>,
 )
 
 @Composable
@@ -80,7 +88,8 @@ fun HomeScreen() {
             val frequent = async { optional(AlbumListType.FREQUENT) }
             val random = async { optional(AlbumListType.RANDOM) }
             val starred = async { optional(AlbumListType.STARRED) }
-            HomeData(newest.await(), recent.await(), frequent.await(), random.await(), starred.await())
+            val forYou = async { runCatching { c.forYou.build(c.api.active()) }.getOrDefault(emptyList()) }
+            HomeData(newest.await(), recent.await(), frequent.await(), random.await(), starred.await(), forYou.await())
         }
     }
     val online by c.network.online.collectAsStateWithLifecycle()
@@ -106,6 +115,7 @@ fun HomeScreen() {
                         HudButton("Liked", { actions.launch { playStarred(actions) } }, Modifier.weight(1f), icon = Icons.Rounded.Favorite, filled = false)
                     }
                 }
+                if (data.forYou.isNotEmpty()) item(key = "for_you") { ForYouRow(data.forYou, actions) }
                 albumSection(actions, AlbumListType.NEWEST, data.newest)
                 albumSection(actions, AlbumListType.RECENT, data.recent)
                 albumSection(actions, AlbumListType.FREQUENT, data.frequent)
@@ -149,6 +159,34 @@ private fun HomeHeader(serverName: String?, mtls: Boolean, online: Boolean, onSe
 private suspend fun playStarred(actions: AppActions) {
     val songs = actions.container.api.starred().song
     if (songs.isEmpty()) actions.message("No liked songs yet") else actions.play(songs, shuffle = true, context = MediaIds.STARRED)
+}
+
+/** This week's picks, albums liked lately and ones not played in months, each with why it's there. */
+@Composable
+private fun ForYouRow(items: List<ForYouItem>, actions: AppActions) {
+    val hud = Hud.colors
+    Column {
+        SectionHeader("For you")
+        LazyRow(contentPadding = PaddingValues(horizontal = 10.dp)) {
+            items(items, key = { it.kind.name + it.album.id }) { item ->
+                val (tag, color) = when (item.kind) {
+                    ForYouKind.PICK -> "Pick" to hud.accent
+                    ForYouKind.LIKED -> "Liked" to hud.accent2
+                    ForYouKind.REDISCOVER -> "Rediscover" to hud.ok
+                }
+                AlbumCard(
+                    item.album, Modifier.width(156.dp),
+                    tag = {
+                        HudTag(
+                            tag, Modifier.background(hud.void.copy(alpha = 0.75f), MaterialTheme.shapes.extraSmall),
+                            color = color, filled = item.kind == ForYouKind.PICK,
+                        )
+                    },
+                    caption = item.caption to color,
+                ) { actions.openAlbum(item.album.id) }
+            }
+        }
+    }
 }
 
 private fun LazyListScope.albumSection(actions: AppActions, type: AlbumListType, albums: List<Album>) {

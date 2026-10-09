@@ -289,21 +289,35 @@ fun Badge(text: String, modifier: Modifier = Modifier, emphasized: Boolean = tru
     HudTag(text, modifier, color = if (emphasized) Hud.colors.accent else Hud.colors.dim)
 }
 
+/** An album's cover, name and artist; [tag] sits on the cover's corner, [caption] is a third line in its own color. */
 @Composable
-fun AlbumCard(album: Album, modifier: Modifier = Modifier, serverId: String? = null, onClick: () -> Unit) {
+fun AlbumCard(
+    album: Album,
+    modifier: Modifier = Modifier,
+    serverId: String? = null,
+    tag: (@Composable () -> Unit)? = null,
+    caption: Pair<String, Color>? = null,
+    onClick: () -> Unit,
+) {
     val hud = Hud.colors
     Column(modifier.clip(MaterialTheme.shapes.medium).clickable(onClick = onClick).padding(6.dp)) {
-        CoverArt(
-            album.coverArt,
-            Modifier.fillMaxWidth().aspectRatio(1f).border(1.dp, hud.accent.copy(alpha = 0.22f), MaterialTheme.shapes.medium),
-            serverId = serverId, size = CoverSize.CARD, shape = MaterialTheme.shapes.medium,
-        )
+        Box {
+            CoverArt(
+                album.coverArt,
+                Modifier.fillMaxWidth().aspectRatio(1f).border(1.dp, hud.accent.copy(alpha = 0.22f), MaterialTheme.shapes.medium),
+                serverId = serverId, size = CoverSize.CARD, shape = MaterialTheme.shapes.medium,
+            )
+            if (tag != null) Box(Modifier.padding(6.dp)) { tag() }
+        }
         Spacer(Modifier.height(8.dp))
         Text(album.name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis, color = hud.text)
         Text(
             listOfNotNull(album.artistLabel.ifEmpty { null }, album.year?.toString()).joinToString(" // ").uppercase(),
             style = MaterialTheme.typography.labelSmall, color = hud.dim, maxLines = 1, overflow = TextOverflow.Ellipsis,
         )
+        if (caption != null) {
+            Text(caption.first, style = MaterialTheme.typography.labelSmall, color = caption.second, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
     }
 }
 
