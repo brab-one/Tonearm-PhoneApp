@@ -141,7 +141,12 @@ data class AiPicks(
     val model: String = "",
     /** What they were asked to be like ("more like this"), if anything. */
     val seed: String? = null,
-)
+    /** The latest picks from all you play (no [seed]), which weekly picks take; null from servers before 1.7.0. */
+    val weekly: AiPicks? = null,
+) {
+    /** The picks weekly picks go by: a "more like this" asked meanwhile doesn't take their place. */
+    val forWeek: AiPicks get() = weekly ?: this
+}
 
 /** An artist you don't have, found through artists you play (on Deezer), with the album to start with. */
 @Serializable

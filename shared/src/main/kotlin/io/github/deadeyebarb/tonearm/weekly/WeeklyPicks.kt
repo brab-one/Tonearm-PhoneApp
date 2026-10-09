@@ -270,8 +270,8 @@ class WeeklyPicks(
         }
         val refused = try {
             // The picks there are now, so the new ones are told apart by the server's own clock.
-            val before = connect.aiPicks(session)
-            val asked = connect.aiPicks(session, refresh = true)
+            val before = connect.aiPicks(session).forWeek
+            val asked = connect.aiPicks(session, refresh = true).forWeek
             // Nothing started (the server couldn't read what you play, say): no use waiting a day for it.
             if (!asked.running && asked.madeAt <= before.madeAt) {
                 asked.problem ?: "the AI didn't start"
@@ -303,7 +303,7 @@ class WeeklyPicks(
             runFile.delete()
             return null
         }
-        val picks = runCatching { connect.aiPicks(session) }.getOrNull()
+        val picks = runCatching { connect.aiPicks(session).forWeek }.getOrNull()
         val since = run.since ?: run.started
         val fresh = picks != null && !picks.running && picks.madeAt > since
         val failed = picks != null && !picks.running && picks.madeAt <= since && picks.problem != null

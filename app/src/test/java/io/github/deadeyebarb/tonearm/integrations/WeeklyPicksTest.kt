@@ -494,6 +494,17 @@ class WeeklyPicksTest {
     }
 
     @Test
+    fun `a more like this asked meanwhile doesn't take the week's place`() = runTest {
+        oldLists = false
+        weekly.tick(config, "k", session, now = T)
+        // Someone asked for more like Portishead: the server answers with those, and the weekly ones beside them.
+        picks = """{"running":true,"madeAt":${T + 150_000},"seed":"Portishead","picks":[{"artist":"Massive Attack","album":"Mezzanine"}],
+            "weekly":$week}"""
+        assertEquals("This week's picks: 3 albums are downloading", weekly.tick(config, "k", session, now = T + 180_000))
+        assertFalse(addedAlbums.any { "Mezzanine" in it })
+    }
+
+    @Test
     fun `two checks at once ask lidarr for the run's albums only once`() = runTest {
         weekly.tick(config, "k", session, now = T)
         picks = six
