@@ -14,6 +14,8 @@ Log in with user "demo", password "demo". From the Android emulator the host is 
 The same address also serves a mock Lidarr (API key "lidarr-key", under /api/v1/) so requests can be
 tried, and a mock Maloja (API key "maloja-key", under /apis/mlj_1/) for the Tonearm server's one-time
 import of a Maloja's history (MALOJA_URL=http://127.0.0.1:8444).
+Test hooks: GET /mock/arrive?title=&artist=&album= (Lidarr downloaded a song), /mock/replace?id=&from= (a better file),
+/mock/plays?album=al3&count=5&daysAgo=120 (those songs were played; also id= for one song).
 With --connect http://127.0.0.1:8790 and --plain-port 8444 it also stands in for the proxy in front of a
 Tonearm server (run that with NAVIDROME_URL=http://127.0.0.1:8444).
 Only Python's standard library is used.
@@ -48,8 +50,9 @@ ALBUMS = [
     ("al1", "Hi-Res Tones", "ar1", 2024, "Electronic", 24, 96000, ["Low Hum", "Middle C", "Bright Sine", "Octave Up"]),
     ("al2", "CD Quality", "ar1", 2019, "Electronic", 16, 44100, ["Forty-Four", "One Kilohertz", "Two Kilohertz"]),
     ("al3", "Studio Masters", "ar2", 2022, "Ambient", 24, 192000, ["Deep Drone", "Shimmer"]),
+    ("al4", "Blue Hour", "ar3", 1997, "Jazz", 16, 44100, ["Slow Rain", "Late Set", "Brushes"]),
 ]
-ARTISTS = {"ar1": "The Oscillators", "ar2": "Signal Garden"}
+ARTISTS = {"ar1": "The Oscillators", "ar2": "Signal Garden", "ar3": "Midnight Quartet"}
 
 # --- Maloja mock data: listening history (some artists aren't in the library) ---------------
 MALOJA_KEY = "maloja-key"
@@ -120,7 +123,7 @@ def make_media(d: Path):
     for album_id, _, _, _, _, depth, rate, tracks in ALBUMS:
         cover = d / f"{album_id}.jpg"
         if not cover.exists():
-            pattern = {"al1": "testsrc2", "al2": "smptehdbars", "al3": "mandelbrot"}[album_id]
+            pattern = {"al1": "testsrc2", "al2": "smptehdbars", "al3": "mandelbrot", "al4": "gradients"}[album_id]
             run(["ffmpeg", "-y", "-f", "lavfi", "-i", f"{pattern}=s=800x800", "-frames:v", "1", str(cover)])
         for n, _ in enumerate(tracks, 1):
             f = d / f"{album_id}-{n}.flac"
@@ -139,6 +142,8 @@ class Library:
         self.starred: dict[str, str] = {}
         self.playlists: dict[str, dict] = {}
         self.plays: dict[str, int] = {}
+        # When each song was last played (a submission scrobble or /mock/plays), as Navidrome's "played".
+        self.last_played: dict[str, str] = {}
         self.maloja_scrobbles: list[dict] = []
         self.lidarr_artists: dict[str, dict] = {}
         self.lidarr_tags: list[dict] = []
@@ -199,7 +204,17 @@ class Library:
         out = {k: v for k, v in a.items() if not k.startswith("_")}
         if a["id"] in self.starred:
             out["starred"] = self.starred[a["id"]]
+        out["playCount"] = self.album_plays(a)
+        played = self.album_played(a)
+        if played:
+            out["played"] = played
         return out
+
+    def album_plays(self, a):
+        return sum(self.plays.get(s["id"], 0) for s in a["_songs"])
+
+    def album_played(self, a):
+        return max((self.last_played[s["id"]] for s in a["_songs"] if s["id"] in self.last_played), default=None)
 
     def song(self, s):
         out = dict(s)
@@ -381,6 +396,19 @@ class Handler(BaseHTTPRequestHandler):
                 song = self.lib.arrive(one("title", "Untitled"), one("artist", "Unknown"), one("album") or one("title", "Untitled"))
             print(f"    arrived: {song['artist']} - {song['title']} ({song['id']})", flush=True)
             return self.send_raw(song, 200)
+        if url.path == "/mock/plays":
+            # Test hook: an album's songs (or one song, id=) were played count times, the last one daysAgo days ago.
+            with self.lib.lock:
+                album = self.lib.albums.get(one("album"))
+                songs = album["_songs"] if album else [s for s in [self.lib.songs.get(one("id"))] if s]
+                if not songs:
+                    return self.send_raw({"error": "no such album or song"}, 404)
+                at = (datetime.now(timezone.utc) - timedelta(days=float(one("daysAgo", 0)))).strftime("%Y-%m-%dT%H:%M:%SZ")
+                for s in songs:
+                    self.lib.plays[s["id"]] = self.lib.plays.get(s["id"], 0) + int(one("count", 1))
+                    self.lib.last_played[s["id"]] = at
+            print(f"    plays: {len(songs)} songs x {one('count', 1)}, last {at}", flush=True)
+            return self.send_raw({"songs": [s["id"] for s in songs], "played": at})
         if url.path == "/mock/replace":
             # Test hook: a song's file is replaced by a better one under the same id, like a Lidarr upgrade.
             with self.lib.lock:
@@ -849,8 +877,10 @@ class Handler(BaseHTTPRequestHandler):
             albums = [a for a in albums if a["id"] in self.lib.starred]
         elif kind == "byGenre":
             albums = [a for a in albums if a["genre"] == one("genre")]
-        elif kind in ("recent", "frequent"):
-            albums = [a for a in albums if any(self.lib.plays.get(s["id"]) for s in a["_songs"])]
+        elif kind == "frequent":
+            albums = sorted((a for a in albums if self.lib.album_plays(a)), key=self.lib.album_plays, reverse=True)
+        elif kind == "recent":
+            albums = sorted((a for a in albums if self.lib.album_played(a)), key=self.lib.album_played, reverse=True)
         off, size = int(one("offset", 0)), int(one("size", 10))
         self.send_json({"albumList2": {"album": [self.lib.album(a) for a in albums[off:off + size]]}})
 
@@ -859,7 +889,8 @@ class Handler(BaseHTTPRequestHandler):
         return self.send_json({"song": self.lib.song(s)}) if s else self.error(70, "Song not found")
 
     def api_getRandomSongs(self, q, one):
-        songs = list(self.lib.songs.values())
+        songs = [s for s in self.lib.songs.values() if (not one("genre") or s["genre"] == one("genre"))
+                 and (not one("fromYear") or s["year"] >= int(one("fromYear"))) and (not one("toYear") or s["year"] <= int(one("toYear")))]
         random.shuffle(songs)
         self.send_json({"randomSongs": {"song": [self.lib.song(s) for s in songs[:int(one("size", 10))]]}})
 
@@ -912,6 +943,7 @@ class Handler(BaseHTTPRequestHandler):
     def api_scrobble(self, q, one):
         if one("submission", "true") == "true":
             self.lib.plays[one("id")] = self.lib.plays.get(one("id"), 0) + 1
+            self.lib.last_played[one("id")] = now()
         print(f"    scrobble id={one('id')} submission={one('submission')}", flush=True)
         self.send_json({})
 
