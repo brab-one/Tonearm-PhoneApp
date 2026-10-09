@@ -77,18 +77,21 @@ fun AiPicksPanel(actions: AppActions, modifier: Modifier = Modifier) {
     val settings by c.settings.state.collectAsStateWithLifecycle()
     var picks by remember { mutableStateOf<AiPicks?>(null) }
     var failed by remember { mutableStateOf<String?>(null) }
-    // "Ask again" starts a new run on the server; "Try again" only asks for the picks once more.
+    // "Ask again" starts a new run on the server, once (asked counts the asks that got there); "Try again" only asks for
+    // the picks once more.
     var asks by remember { mutableIntStateOf(0) }
+    var asked by remember { mutableIntStateOf(0) }
     var retries by remember { mutableIntStateOf(0) }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(server?.baseUrl, asks, retries, lifecycle) {
-        var refresh = asks > 0
+        var refresh = asks > asked
         failed = null
         // While a run is going, check on it, but only while this page is on screen.
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (true) {
                 try {
                     picks = c.connect.aiPicks(refresh)
+                    if (refresh) asked = asks
                     failed = null
                 } catch (e: CancellationException) {
                     throw e
