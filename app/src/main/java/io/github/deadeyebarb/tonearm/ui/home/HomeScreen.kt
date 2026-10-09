@@ -53,6 +53,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -83,6 +84,7 @@ import io.github.deadeyebarb.tonearm.ui.common.plural
 import io.github.deadeyebarb.tonearm.ui.common.rememberLoader
 import io.github.deadeyebarb.tonearm.ui.discover.MixCollage
 import io.github.deadeyebarb.tonearm.ui.mix.MixPromptField
+import io.github.deadeyebarb.tonearm.ui.mix.dailyMixDay
 import io.github.deadeyebarb.tonearm.ui.theme.Hud
 import io.github.deadeyebarb.tonearm.ui.theme.HudButton
 import io.github.deadeyebarb.tonearm.ui.theme.HudLoader
@@ -91,8 +93,8 @@ import io.github.deadeyebarb.tonearm.ui.theme.HudTag
 import io.github.deadeyebarb.tonearm.ui.theme.Orbitron
 import io.github.deadeyebarb.tonearm.ui.theme.PulseDot
 import io.github.deadeyebarb.tonearm.ui.theme.glow
-import java.time.LocalDate
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
@@ -127,9 +129,13 @@ fun HomeScreen() {
     val server by c.tonearmServer.server.collectAsStateWithLifecycle()
     // What the Tonearm server can do (History, daily mixes) shows once it has been looked for.
     LaunchedEffect(session?.id) { runCatching { c.tonearmServer.refresh(session) } }
-    // Outside Home's loader: the first call of the day makes them, which can take a while.
+    // Outside Home's loader: the first call of the day makes them, which can take a while. Checked on every return to
+    // Home, so a row left open overnight makes way for the new day's.
     val daily = viewModel { DailyMixesModel(c) }
-    LaunchedEffect(session?.id, server?.dailyMixes) { session?.let(daily::load) }
+    LifecycleResumeEffect(session?.id, server?.dailyMixes) {
+        session?.let(daily::load)
+        onPauseOrDispose {}
+    }
     Scaffold(
         containerColor = Color.Transparent,
         topBar = {
@@ -232,7 +238,10 @@ private fun ForYouRow(items: List<ForYouItem>, actions: AppActions) {
     }
 }
 
-/** Today's daily mixes for Home's row; kept while Home is on the back stack, asked for again on a new day. */
+/**
+ * Today's daily mixes for Home's row; kept while Home is on the back stack, asked for again on a new day (the server's,
+ * which starts at 4:00) or another server.
+ */
 private class DailyMixesModel(private val c: AppContainer) : ViewModel() {
     var mixes by mutableStateOf(emptyList<Mix>())
         private set
@@ -241,13 +250,19 @@ private class DailyMixesModel(private val c: AppContainer) : ViewModel() {
         private set
     var serverId by mutableStateOf<String?>(null)
         private set
-    private var loaded: Pair<String, LocalDate>? = null
+    /** The day [mixes] are for. */
+    private var day: String? = null
+    /** The server and day asked for; null to ask again. */
+    private var loaded: Pair<String, String>? = null
+    private var job: Job? = null
 
     fun load(session: ServerSession) {
-        val key = session.id to LocalDate.now()
+        val key = session.id to dailyMixDay()
         if (key == loaded) return
         loaded = key
-        viewModelScope.launch {
+        // An answer still on its way from the server before, or for the day before, isn't wanted any more.
+        job?.cancel()
+        job = viewModelScope.launch {
             val daily = try {
                 c.mixer.daily(session) { building = true }
             } catch (e: CancellationException) {
@@ -256,16 +271,19 @@ private class DailyMixesModel(private val c: AppContainer) : ViewModel() {
                 null
             }
             building = false
-            if (daily == null) {
-                // No answer, or no server that makes them (yet): asked again when Home shows next. A bad moment keeps
-                // what's shown; another music server's mixes go.
+            if (daily == null || daily.running) {
+                // No answer, no server that makes them (yet), or still at it after two minutes: asked again when Home
+                // shows next. A bad moment keeps what's shown; another music server's or another day's mixes go.
                 loaded = null
-                if (serverId != session.id) mixes = emptyList()
+                if (serverId != session.id || daily != null && day != daily.day) mixes = emptyList()
                 return@launch
             }
             // Nothing to make them from yet: no row, and Home stays calm about it.
             daily.problem?.let { Log.i("Tonearm", "Daily mixes: $it") }
             serverId = session.id
+            day = daily.day
+            // Kept as the day they're for: should the server's clock not be at 4:00 yet, Home asks again next time.
+            loaded = session.id to daily.day.ifEmpty { key.second }
             mixes = daily.mixes.filter { it.songs.isNotEmpty() }
         }
     }
