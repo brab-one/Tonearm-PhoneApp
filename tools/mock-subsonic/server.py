@@ -698,6 +698,11 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_raw([{"id": 1, "name": "Standard"}])
         if endpoint == "artist":
             return self.send_raw([self.lidarr_artist(e) for e in LIDARR_CATALOG if e["foreignArtistId"] in self.lib.lidarr_artists] + self.library_artists())
+        if endpoint == "album" and one("foreignAlbumId"):
+            # Like Lidarr: the album when it has it, else an empty list (not a 404).
+            mbid = one("foreignAlbumId")
+            return self.send_raw([self.lidarr_album(e, a) for e in LIDARR_CATALOG for a in e["albums"]
+                                  if a[1] == mbid and mbid in self.lib.lidarr_albums])
         if endpoint == "album" and one("artistId"):
             entry = self.lidarr_entry(int(one("artistId")))
             if entry:
