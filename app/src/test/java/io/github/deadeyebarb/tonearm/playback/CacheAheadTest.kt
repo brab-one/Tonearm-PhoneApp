@@ -2,8 +2,16 @@ package io.github.deadeyebarb.tonearm.playback
 
 import androidx.media3.common.Player
 import androidx.media3.common.Timeline
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 class CacheAheadTest {
     /** A queue of [count] songs (no shuffle order of its own, so shuffle plays in queue order). */
@@ -29,5 +37,29 @@ class CacheAheadTest {
         // Short queues don't wrap onto the current song.
         assertEquals(listOf(1, 2), CacheAhead.upcoming(Queue(3), 0, Player.REPEAT_MODE_ALL, false, 5))
         assertEquals(emptyList<Int>(), CacheAhead.upcoming(Queue(0), 0, Player.REPEAT_MODE_OFF, false, 3))
+    }
+
+    @Test
+    fun `cancelling stops a download that is under way`() = runBlocking {
+        val started = CountDownLatch(1)
+        val stopped = CountDownLatch(1)
+        val job = launch(Dispatchers.Default) {
+            // Like CacheWriter.cache(): blocks until it's told to stop.
+            CacheAhead.stoppable(stop = stopped::countDown) {
+                started.countDown()
+                stopped.await(5, TimeUnit.SECONDS)
+            }
+        }
+        assertTrue(started.await(5, TimeUnit.SECONDS))
+        job.cancel()
+        assertTrue("not stopped while still downloading", stopped.await(1, TimeUnit.SECONDS))
+        job.join()
+    }
+
+    @Test
+    fun `a finished download isn't stopped`() = runBlocking {
+        val stopped = AtomicBoolean(false)
+        assertEquals(42, CacheAhead.stoppable(stop = { stopped.set(true) }) { 42 })
+        assertFalse(stopped.get())
     }
 }

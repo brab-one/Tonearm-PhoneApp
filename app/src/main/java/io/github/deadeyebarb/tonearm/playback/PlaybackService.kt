@@ -189,6 +189,9 @@ class PlaybackService : MediaLibraryService() {
                 continueIfLast()
                 updateButtons()
                 useLibraryFiles()
+                // The songs playing and up next keep their quality; others choose again when they play.
+                val next = player.nextMediaItemIndex.takeIf { it != C.INDEX_UNSET }?.let(player::getMediaItemAt)
+                c.media.keepPinned(listOfNotNull(player.currentMediaItem, next).mapNotNull { it.localConfiguration?.uri })
             }
             if (events.containsAny(
                     Player.EVENT_TIMELINE_CHANGED, Player.EVENT_MEDIA_ITEM_TRANSITION, Player.EVENT_IS_PLAYING_CHANGED,
