@@ -45,6 +45,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.guava.future
 import kotlinx.coroutines.isActive
@@ -117,13 +118,15 @@ class PlaybackService : MediaLibraryService() {
         c.volume.attach(player)
         c.sleepTimer.attach(player)
         c.effects.attach(player.audioSessionId)
-        scrobbler = Scrobbler(c.api, c.sessions, c.settings, c.connect, scope).also(player::addListener)
+        scrobbler = c.scrobbler.also(player::addListener)
         cacheAhead = CacheAhead(player, c.media, c.settings, scope).also(player::addListener)
         player.addListener(listener)
 
         observeSettings()
         scope.launch { c.starred.overrides.collect { updateButtons() } }
         scope.launch { c.likes.pending.items.collect { updateButtons() } }
+        // Back online: what couldn't be scrobbled goes now.
+        scope.launch { c.network.online.filter { it }.collect { scrobbler.retry() } }
         // When a server is added (or switched), drop any "set up Tonearm" error the car is showing
         // and have connected browsers reload, so Android Auto picks up the library right away.
         scope.launch {
@@ -144,7 +147,9 @@ class PlaybackService : MediaLibraryService() {
     }
 
     override fun onDestroy() {
+        // It sends the last song after the service is gone.
         scrobbler.finish()
+        player.removeListener(scrobbler)
         cacheAhead.release()
         val snapshot = c.queueStore.snapshot(player)
         runBlocking { runCatching { c.queueStore.save(snapshot) } }

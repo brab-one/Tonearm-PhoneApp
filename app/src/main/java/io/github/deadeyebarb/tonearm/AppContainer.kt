@@ -38,6 +38,7 @@ import io.github.deadeyebarb.tonearm.playback.AudioEffects
 import io.github.deadeyebarb.tonearm.playback.PlayerConnection
 import io.github.deadeyebarb.tonearm.playback.QueueContinuation
 import io.github.deadeyebarb.tonearm.playback.QueueStore
+import io.github.deadeyebarb.tonearm.playback.Scrobbler
 import io.github.deadeyebarb.tonearm.playback.SleepTimer
 import io.github.deadeyebarb.tonearm.playback.SpectrumAnalyzer
 import io.github.deadeyebarb.tonearm.playback.VolumeMixer
@@ -135,6 +136,11 @@ class AppContainer(val app: Application) {
     val weekly = WeeklyPicks(api, LidarrClient(integrationHttp, json), connectClient, json, connect.deviceId, java.io.File(app.filesDir, "weekly-run.json"))
     val continuation = QueueContinuation(api, sessions, youtube, settings, dislikes)
     val media by lazy { MediaEngine(app, sessions, settings, network, youtube, youtubeHttpClient) }
+
+    /** The playback service's, but it outlives the service: the last song still gets sent after that stops. */
+    val scrobbler by lazy {
+        Scrobbler(api, sessions, settings, connect, CoroutineScope(scope.coroutineContext + Dispatchers.Main.immediate), java.io.File(app.filesDir, "scrobbles.json"), json)
+    }
 
     /** Touch first on the main thread: DownloadManager binds to the creating thread's looper. */
     val downloads by lazy { DownloadRepository(app, media, json, settings, scope) }
