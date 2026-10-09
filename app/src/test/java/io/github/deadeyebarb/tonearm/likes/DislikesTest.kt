@@ -5,6 +5,8 @@ import io.github.deadeyebarb.tonearm.connect.ConnectRouter
 import io.github.deadeyebarb.tonearm.data.ServerConfig
 import io.github.deadeyebarb.tonearm.integrations.IntegrationHttp
 import io.github.deadeyebarb.tonearm.subsonic.ServerSession
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import mockwebserver3.Dispatcher
@@ -19,12 +21,16 @@ import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /** Dislikes against a fake Tonearm server. */
 class DislikesTest {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true; coerceInputValues = true; explicitNulls = false }
     private val server = MockWebServer()
     private var dislikeAnswer = 200
+    /** Holds the answer to a dislike back until it's opened. */
+    @Volatile private var dislikeGate: CountDownLatch? = null
     private val dislikeCalls = mutableListOf<String>()
     private lateinit var dislikes: Dislikes
     private var session: ServerSession? = null
@@ -38,6 +44,7 @@ class DislikesTest {
                     "/connect-tonearm/api/disliked" -> """{"songs":[{"artist":"Kongos","title":"Come with Me Now","at":5}],"artists":["Mazzy Star"]}"""
                     "/connect-tonearm/api/dislike" -> {
                         synchronized(dislikeCalls) { dislikeCalls += request.url.query.orEmpty() }
+                        dislikeGate?.await(5, TimeUnit.SECONDS)
                         if (dislikeAnswer != 200) return MockResponse.Builder().code(dislikeAnswer).body("""{"error":"nope"}""").build()
                         """{"ok":true}"""
                     }
@@ -89,6 +96,21 @@ class DislikesTest {
         } catch (_: Exception) {
         }
         assertFalse(dislikes.isDisliked("Sia", "Sunday"))
+    }
+
+    @Test
+    fun `a refresh while a dislike is on its way doesn't drop it`() = runTest {
+        dislikes.refresh()
+        dislikeGate = CountDownLatch(1)
+        val disliking = launch(Dispatchers.Default) { dislikes.set("Sia", "Rewrite", null, true) }
+        while (synchronized(dislikeCalls) { dislikeCalls.isEmpty() }) Thread.sleep(10)
+        // The server's list doesn't have it yet.
+        dislikes.refresh()
+        assertTrue(dislikes.isDisliked("Sia", "Rewrite"))
+        dislikeGate?.countDown()
+        disliking.join()
+        assertTrue(dislikes.isDisliked("Sia", "Rewrite"))
+        assertTrue(dislikes.isDisliked("Kongos", "Come with Me Now"))
     }
 
     @Test

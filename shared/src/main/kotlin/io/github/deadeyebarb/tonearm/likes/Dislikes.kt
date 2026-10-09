@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.io.IOException
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -31,6 +32,8 @@ class Dislikes(
     @Volatile private var owner: String? = null
     /** Goes up with every change made here, so a refresh that began before one doesn't undo it. */
     private val changes = AtomicLong()
+    /** Changes on their way to the server: a list fetched meanwhile may not have them yet. */
+    private val inFlight = AtomicInteger()
 
     fun isDisliked(artist: String?, title: String): Boolean = songKey(artist.orEmpty(), title) in songKeys
 
@@ -52,7 +55,7 @@ class Dislikes(
         if (s == null) return
         if (router.refresh(s)?.dislikes != true) return update(who) { Disliked() }
         val seen = changes.get()
-        runCatching { client.disliked(s) }.onSuccess { fresh -> update(who) { if (changes.get() == seen) fresh else it } }
+        runCatching { client.disliked(s) }.onSuccess { fresh -> update(who) { if (changes.get() == seen && inFlight.get() == 0) fresh else it } }
     }
 
     /** Dislikes a song or takes that back: shown at once, then saved on the server. Undone and thrown when that fails. */
@@ -64,6 +67,7 @@ class Dislikes(
         val before = _state.value.songs.firstOrNull { songKey(it.artist, it.title) == key }
         val now = DislikedSong(artist, title, album, System.currentTimeMillis()).takeIf { disliked }
         changes.incrementAndGet()
+        inFlight.incrementAndGet()
         update(who) { it.with(key, now) }
         try {
             if (router.refresh(s)?.dislikes != true) throw IOException("Dislikes are kept by the Tonearm server (1.5.4 or later) on your music server")
@@ -74,6 +78,7 @@ class Dislikes(
             throw e
         } finally {
             changes.incrementAndGet()
+            inFlight.decrementAndGet()
         }
     }
 

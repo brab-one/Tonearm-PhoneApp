@@ -80,8 +80,10 @@ class Likes(
             return
         }
         pending.add(ref)
-        // Maybe the library has it already (downloaded since it was found on YouTube Music).
-        if (resolveNow().isNotEmpty()) return
+        // Maybe the library has it already (downloaded since it was found on YouTube Music). Other likes that arrived
+        // may settle here too: only this one being found makes the request unneeded.
+        resolveNow()
+        if (!pending.isLiked(ref)) return
         syncSoon()
         request(ref)
     }

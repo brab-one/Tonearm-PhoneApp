@@ -14,17 +14,19 @@ import kotlinx.serialization.json.Json
 class LikesSync(private val client: ConnectClient, private val json: Json) {
     private val lock = Mutex()
 
-    /** Syncs once; true when it got through. */
+    /**
+     * Syncs once; true when it got through. False when another device kept saving in between: the other side's likes
+     * are taken in by then, and this side's go up with the next sync.
+     */
     suspend fun sync(route: ConnectRoute, pending: PendingLikes): Boolean = lock.withLock {
         repeat(ATTEMPTS) {
             val stored = client.storeGet(route, STORE_KEY)
             val remote = stored.value?.let { runCatching { json.decodeFromString(LikesDocument.serializer(), it) }.getOrNull() } ?: LikesDocument()
-            val merged = PendingLikes.merge(pending.document(), remote)
-            pending.replace(merged)
+            val merged = pending.mergeFrom(remote)
             if (merged == remote) return true
             if (client.storePut(route, STORE_KEY, json.encodeToString(LikesDocument.serializer(), merged), stored.version) != null) return true
         }
-        true
+        false
     }
 
     companion object {

@@ -58,6 +58,10 @@ class PendingLikes(private val file: File, private val json: Json) {
         if (document.likes != _items.value) save(document.likes)
     }
 
+    /** Merges [remote] in, in one go so a like made meanwhile isn't lost; returns the merged likes to share. */
+    @Synchronized
+    fun mergeFrom(remote: LikesDocument): LikesDocument = merge(document(), remote).also(::replace)
+
     fun isLiked(ref: TrackRef): Boolean = _items.value.any { key(it.ref) == key(ref) }
 
     fun isLiked(youtubeId: String): Boolean = _items.value.any { it.ref.youtubeId == youtubeId }

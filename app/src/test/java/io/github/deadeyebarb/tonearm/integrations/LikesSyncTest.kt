@@ -108,4 +108,26 @@ class LikesSyncTest {
         val final = json.decodeFromString(LikesDocument.serializer(), stored!!)
         assertEquals(setOf("mine", "other"), final.likes.map { it.ref.youtubeId }.toSet())
     }
+
+    @Test
+    fun `a sync that loses every race says so, and the next one takes this side's likes up`() = runTest {
+        val phone = PendingLikes(tmp.newFile("p.json").also { it.delete() }, json)
+        phone.add(TrackRef("Mine", "Me", youtubeId = "mine"))
+        putsBeforeConflict = 10
+        assertFalse(sync().sync(route, phone))
+        // The other device's like is here already; this one's waits for the next sync.
+        assertEquals(setOf("mine", "other"), phone.items.value.map { it.ref.youtubeId }.toSet())
+        putsBeforeConflict = 0
+        assertTrue(sync().sync(route, phone))
+        assertEquals(setOf("mine", "other"), json.decodeFromString(LikesDocument.serializer(), stored!!).likes.map { it.ref.youtubeId }.toSet())
+    }
+
+    @Test
+    fun `merging keeps a like made since the last look`() {
+        val phone = PendingLikes(tmp.newFile("m.json").also { it.delete() }, json)
+        phone.add(TrackRef("Mine", "Me", youtubeId = "mine"))
+        val merged = phone.mergeFrom(LikesDocument(listOf(like("other", 5))))
+        assertEquals(setOf("mine", "other"), merged.likes.map { it.ref.youtubeId }.toSet())
+        assertEquals(merged.likes, phone.items.value)
+    }
 }
