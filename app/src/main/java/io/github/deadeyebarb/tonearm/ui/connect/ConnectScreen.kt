@@ -224,7 +224,9 @@ private fun RemoteControl(devices: List<ConnectDevice>, device: ConnectDevice, o
                         if (queue.isEmpty()) {
                             actions.message(if (phone.queue.isEmpty()) "Nothing is playing on this phone" else "Songs stored on this phone can only play here")
                         } else {
-                            val index = entries.indexOfFirst { it.first == phone.currentIndex }.coerceAtLeast(0)
+                            // The song playing, or the next one when the one playing is stored on the phone.
+                            val here = order.indexOf(phone.currentIndex)
+                            val index = entries.indexOfFirst { order.indexOf(it.first) >= here }.takeIf { it >= 0 } ?: 0
                             val position = if (entries[index].first == phone.currentIndex) actions.player.position else 0L
                             actions.launch {
                                 c.connect.send(device.state.id, ConnectCommand(ConnectCommand.LOAD, queue = queue.map { it.toConnect() }, index = index, positionMs = position))

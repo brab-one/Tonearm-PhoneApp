@@ -111,12 +111,12 @@ fun MiniPlayer(state: PlayerUiState, onOpen: () -> Unit) {
                     Modifier.size(38.dp).border(1.5.dp, hud.accent, CircleShape).background(hud.accent.copy(alpha = 0.12f), CircleShape),
                     contentAlignment = Alignment.Center,
                 ) {
-                    if (state.buffering && state.playWhenReady) {
+                    if (state.buffering && !state.showPlay) {
                         CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = hud.accent)
                     } else {
                         Icon(
-                            if (state.playWhenReady) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                            if (state.playWhenReady) "Pause" else "Play", tint = hud.accent,
+                            if (state.showPlay) Icons.Rounded.PlayArrow else Icons.Rounded.Pause,
+                            if (state.showPlay) "Play" else "Pause", tint = hud.accent,
                         )
                     }
                 }

@@ -34,6 +34,8 @@ data class PlayerUiState(
     val currentIndex: Int = C.INDEX_UNSET,
     val isPlaying: Boolean = false,
     val playWhenReady: Boolean = false,
+    /** The play button shows Play, not Pause: also when the queue has ended or after an error. */
+    val showPlay: Boolean = true,
     val buffering: Boolean = false,
     val durationMs: Long = 0,
     /** Position at the last player event; poll [PlayerConnection.position] for a live value. */
@@ -113,6 +115,7 @@ class PlayerConnection(private val context: Context, private val factory: MediaI
             currentIndex = p.currentMediaItemIndex,
             isPlaying = p.isPlaying,
             playWhenReady = p.playWhenReady,
+            showPlay = Util.shouldShowPlayButton(p, false),
             buffering = p.playbackState == Player.STATE_BUFFERING,
             durationMs = p.duration.takeIf { it != C.TIME_UNSET } ?: p.currentMediaItem?.mediaMetadata?.durationMs ?: 0,
             positionMs = p.currentPosition,
@@ -220,7 +223,8 @@ class PlayerConnection(private val context: Context, private val factory: MediaI
         c.prepare()
         c.play()
     }
-    fun togglePlayPause() = withController { Util.handlePlayPauseButtonAction(it) }
+    /** Does what the button shows ([PlayerUiState.showPlay]): during a call, say, Pause pauses. */
+    fun togglePlayPause() = withController { Util.handlePlayPauseButtonAction(it, false) }
     fun pause() = withController { it.pause() }
     fun next() = withController { it.seekToNext() }
     fun previous() = withController { it.seekToPrevious() }
