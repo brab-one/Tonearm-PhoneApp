@@ -11,6 +11,7 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.Timeline
 import androidx.media3.common.TrackSelectionParameters.AudioOffloadPreferences
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
@@ -67,8 +68,8 @@ class PlaybackService : MediaLibraryService() {
     /** The YouTube Music item auto-request last ran for, so pausing and resuming doesn't repeat it. */
     private var swapJob: Job? = null
 
-    /** The last song the queue was extended after ("When the queue ends"). */
-    private var continuedAfter: String? = null
+    /** The queue entry the queue was last extended after ("When the queue ends"); a new queue has new entries. */
+    private var continuedAfter: Any? = null
     private val searchResults = mutableMapOf<String, List<MediaItem>>()
     private var saveJob: Job? = null
 
@@ -102,6 +103,8 @@ class PlaybackService : MediaLibraryService() {
             .setHandleAudioBecomingNoisy(true)
             .setWakeMode(C.WAKE_MODE_NETWORK)
             .build()
+        // Shuffle plays the whole queue from the song picked, and songs added keep their place.
+        player.setShuffleOrder(QueueShuffleOrder())
 
         tree = LibraryTree(c)
         session = MediaLibrarySession.Builder(this, player, Callback())
@@ -178,6 +181,10 @@ class PlaybackService : MediaLibraryService() {
 
         override fun onEvents(player: Player, events: Player.Events) {
             if (events.containsAny(Player.EVENT_SHUFFLE_MODE_ENABLED_CHANGED, Player.EVENT_REPEAT_MODE_CHANGED)) updateButtons()
+            if (events.contains(Player.EVENT_SHUFFLE_MODE_ENABLED_CHANGED) && player.shuffleModeEnabled && player.mediaItemCount > 0) {
+                // Shuffle turned on: everything else plays after the song playing (see QueueShuffleOrder).
+                this@PlaybackService.player.setShuffleOrder(QueueShuffleOrder().cloneAndSet(player.mediaItemCount, player.currentMediaItemIndex))
+            }
             if (events.containsAny(Player.EVENT_MEDIA_ITEM_TRANSITION, Player.EVENT_TIMELINE_CHANGED, Player.EVENT_REPEAT_MODE_CHANGED)) {
                 continueIfLast()
                 updateButtons()
@@ -278,14 +285,17 @@ class PlaybackService : MediaLibraryService() {
         if (player.mediaItemCount == 0 || player.hasNextMediaItem() || player.repeatMode != Player.REPEAT_MODE_OFF) return
         if (c.settings.state.value.whenQueueEnds == QueueEnd.STOP) return
         val item = player.currentMediaItem ?: return
-        if (continuedAfter == item.mediaId) return
-        continuedAfter = item.mediaId
+        // The entry, not the song: the same song played again in a new queue gets its continuation too.
+        val entry = player.currentTimeline.getWindow(player.currentMediaItemIndex, Timeline.Window()).uid
+        if (continuedAfter == entry) return
+        continuedAfter = entry
         val last = item.toQueueSong() ?: return
         val played = (0 until player.mediaItemCount).mapNotNull { player.getMediaItemAt(it).toQueueSong() }.map(QueueContinuation::key).toSet()
         scope.launch {
             val more = runCatching { c.continuation.next(last, played) }.getOrDefault(emptyList())
             if (more.isEmpty() || player.hasNextMediaItem()) return@launch
-            player.addMediaItems(more.map { c.mediaItems.song(it) })
+            // Right after the song playing, which is the last to play, shuffled or not.
+            player.addMediaItems(player.currentMediaItemIndex + 1, more.map { c.mediaItems.song(it) })
         }
     }
 

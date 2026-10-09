@@ -199,6 +199,9 @@ class PlayerConnection(private val context: Context, private val factory: MediaI
             if (c.mediaItemCount == 0) {
                 c.setMediaItems(media)
                 c.prepare()
+            } else if (c.shuffleModeEnabled) {
+                // After the last song to play, which is the end of the queue only when not shuffling (see QueueShuffleOrder).
+                c.addMediaItems(c.currentTimeline.getLastWindowIndex(true) + 1, media)
             } else {
                 c.addMediaItems(media)
             }
@@ -244,14 +247,14 @@ class PlayerConnection(private val context: Context, private val factory: MediaI
         }
     }
 
-    /** Removes everything that would play after the current song. */
+    /**
+     * Removes everything that would play after the current song (when shuffling, everything else). The song
+     * playing carries on undisturbed.
+     */
     fun clearUpcoming() = withController { c ->
         val current = c.currentMediaItemIndex
-        if (c.shuffleModeEnabled) {
-            val keep = c.currentMediaItem ?: return@withController
-            c.setMediaItems(listOf(keep), 0, c.currentPosition)
-        } else if (current + 1 < c.mediaItemCount) {
-            c.removeMediaItems(current + 1, c.mediaItemCount)
-        }
+        if (current == C.INDEX_UNSET) return@withController
+        if (current + 1 < c.mediaItemCount) c.removeMediaItems(current + 1, c.mediaItemCount)
+        if (c.shuffleModeEnabled && current > 0) c.removeMediaItems(0, current)
     }
 }
