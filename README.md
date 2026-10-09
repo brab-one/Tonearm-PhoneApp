@@ -110,6 +110,10 @@ Related repositories:
   "Download" on a YouTube Music song saves your library's own file once Lidarr has it
 - The next songs in the queue play from your library's file as soon as it has one: a YouTube Music song switches
   to the FLAC Lidarr downloaded, and a song whose file was upgraded isn't served from the old cached copy
+- **Keep offline** (Settings → Downloads): every night on Wi-Fi while charging, the newest weekly picks and your
+  liked songs (newest first) are downloaded into the space you give them (4 GB by default), and the ones that left
+  those lists are removed. Your own downloads are never touched; a kept song you remove stays off. Kept songs play
+  in the car's Downloads tab
 - 2 GB streaming cache (configurable) so replays don't hit the network
 - Cache ahead: the next 3 songs of the queue (configurable up to the whole queue, shuffle-aware) are cached
   while one plays, so skips are instant and a dead spot in the car doesn't stop the music
@@ -267,10 +271,27 @@ address, since song ids are per server; the phone warns when they don't.
 ## Android Auto
 
 Tonearm shows up in Android Auto (and in cars running Android Automotive) with four tabs:
-**Home** (Daily Discovery, Your mix, shuffle all, recently added/played, most played, random picks), **Library** (artists, albums,
-playlists, genres), **Favorites** and **Downloads**. Albums show as cover grids, picking a song plays
-its album or playlist from there, search and voice ("play … on Tonearm") work, and the player has
-favorite / shuffle / repeat buttons. Streaming, mTLS and downloads all run on the phone as usual.
+**Home** (Daily Discovery, Your mix, today's daily mixes from the Tonearm server, shuffle all, recently added/played,
+most played, random picks), **Library** (artists, albums, playlists, genres), **Favorites** and **Downloads**. Albums
+show as cover grids, picking a song plays its album or playlist from there, search and voice ("play … on Tonearm")
+work, and the player has these buttons, in this order (the car shows the first ones next to play, the rest under ⋯):
+
+- **Not this one** (thumbs down): skips the song, takes it out of the queue and dislikes it, so mixes and picks
+  steer away from it. It needs the Tonearm server, which keeps the dislikes; without a connection the dislike is
+  sent once the phone is back online
+- **Like**, **Radio**, **Shuffle**, **Repeat**
+
+**Radio** keeps the song playing and replaces what follows with music like it, and more keeps coming as it plays.
+The Tonearm server (1.7 or later) picks the songs from your library; without it they come from Navidrome's similar
+songs (and YouTube Music, with *Play what you don't have* on). With nothing playing it's a radio from your weekly
+picks and likes. Playing something else or turning shuffle on ends it; it carries on after a restart.
+
+**Continue from the desktop**: when the car starts and the phone isn't playing, the phone takes over what the
+[desktop player](https://github.com/brab-one/Tonearm-Desktop) played last (its song, place and queue), if the
+desktop played after the phone did, and pauses the desktop once the car plays. It needs the Tonearm server (1.7 or
+later), waits for it three seconds at most, and can be turned off in Settings → Car.
+
+Streaming, mTLS and downloads all run on the phone as usual.
 
 **Because Tonearm isn't installed from the Play Store, Android Auto hides it until you allow it once:**
 
