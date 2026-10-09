@@ -25,6 +25,8 @@ data class SavedQueue(
     val repeatMode: Int = Player.REPEAT_MODE_OFF,
     /** The radio playing, so it carries on after a restart; null when none does. */
     val radio: SavedRadio? = null,
+    /** When this phone last played (ms), playing now or not; 0 when it never did. Restoring or editing the queue doesn't count. */
+    val playedAt: Long = 0,
 )
 
 /** Persists the play queue so it survives process death and powers playback resumption. */
@@ -32,7 +34,7 @@ class QueueStore(context: Context, private val json: Json, private val factory: 
     private val file = File(context.filesDir, "queue.json")
 
     /** Main thread: reads the player. */
-    fun snapshot(player: Player, radio: SavedRadio? = null): SavedQueue {
+    fun snapshot(player: Player, radio: SavedRadio? = null, playedAt: Long = 0): SavedQueue {
         val items = (0 until player.mediaItemCount).mapNotNull { i ->
             val item = player.getMediaItemAt(i)
             item.toQueueSong()?.let { SavedItem(it.serverId, it.song, MediaIds.parse(item.mediaId).context) }
@@ -44,6 +46,7 @@ class QueueStore(context: Context, private val json: Json, private val factory: 
             shuffle = player.shuffleModeEnabled,
             repeatMode = player.repeatMode,
             radio = radio,
+            playedAt = playedAt,
         )
     }
 

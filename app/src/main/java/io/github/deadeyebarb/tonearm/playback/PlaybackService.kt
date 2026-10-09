@@ -76,13 +76,18 @@ class PlaybackService : MediaLibraryService() {
         SupervisorJob() + Dispatchers.Main.immediate + CoroutineExceptionHandler { _, e -> Log.w(TAG, "Playback service job failed", e) },
     )
     private lateinit var player: ExoPlayer
+    /** What the session controls: the player, held back from playing while the car start looks for the desktop's queue. */
+    private lateinit var gate: HandoffGatePlayer
     private lateinit var session: MediaLibrarySession
     private lateinit var tree: LibraryTree
     private lateinit var scrobbler: Scrobbler
     private lateinit var cacheAhead: CacheAhead
     private lateinit var radio: RadioQueue
-    /** Puts the saved queue back; a radio from the shortcut waits for it. */
+    private lateinit var carHandoff: CarHandoff
+    /** Puts the saved queue back; playback resumption, the car start and a radio from the shortcut wait for it. */
     private lateinit var restoreJob: Job
+    /** When this phone last played (ms); saved with the queue. */
+    private var lastPlayedAt = 0L
     /** Songs said "Not this one" to whose dislike couldn't be saved yet: sent again once online, left out meanwhile. */
     private val unsavedDislikes = mutableListOf<QueueSong>()
     private var continueJob: Job? = null
@@ -135,7 +140,8 @@ class PlaybackService : MediaLibraryService() {
         player.setShuffleOrder(QueueShuffleOrder())
 
         tree = LibraryTree(c)
-        session = MediaLibrarySession.Builder(this, player, Callback())
+        gate = HandoffGatePlayer(player)
+        session = MediaLibrarySession.Builder(this, gate, Callback())
             .setSessionActivity(
                 PendingIntent.getActivity(
                     this, 0,
@@ -152,6 +158,9 @@ class PlaybackService : MediaLibraryService() {
         scrobbler = c.scrobbler.also(player::addListener)
         cacheAhead = CacheAhead(player, c.media, c.settings, scope).also(player::addListener)
         radio = RadioQueue(player, c, scope, leaveOut = ::isUnsavedDislike, onChange = ::onRadioChanged).also(player::addListener)
+        carHandoff = CarHandoff(
+            c, player, gate, scope, restored = { restoreJob.join() }, phonePlayedAt = { lastPlayedAt }, beforeTakeOver = radio::stop,
+        ).also(player::addListener)
         player.addListener(listener)
 
         observeSettings()
@@ -197,7 +206,7 @@ class PlaybackService : MediaLibraryService() {
         scrobbler.finish()
         player.removeListener(scrobbler)
         cacheAhead.release()
-        val snapshot = c.queueStore.snapshot(player, radio.current)
+        val snapshot = c.queueStore.snapshot(player, radio.current, playedAt())
         runBlocking { runCatching { c.queueStore.save(snapshot) } }
         // The widget and the tile show it paused; their controls start the service again.
         c.nowPlaying.update { it?.copy(playing = false, live = false) }
@@ -226,6 +235,8 @@ class PlaybackService : MediaLibraryService() {
         }
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
+            // Playing, or played until now.
+            lastPlayedAt = System.currentTimeMillis()
             if (isPlaying) {
                 recoveries = 0
                 recoverJob?.cancel()
@@ -267,6 +278,9 @@ class PlaybackService : MediaLibraryService() {
     private fun publishNowPlaying() {
         c.nowPlaying.value = NowPlayingCard.from(player.currentMediaItem?.toQueueSong(), player.playWhenReady, player.currentMediaItemIndex, player.mediaItemCount)
     }
+
+    /** When this phone last played: now while it plays. */
+    private fun playedAt(): Long = if (player.isPlaying) System.currentTimeMillis().also { lastPlayedAt = it } else lastPlayedAt
 
     private fun onRadioChanged() {
         updateButtons()
@@ -504,6 +518,7 @@ class PlaybackService : MediaLibraryService() {
     private fun restoreQueue() {
         restoreJob = scope.launch {
             val saved = c.queueStore.load() ?: return@launch
+            lastPlayedAt = maxOf(lastPlayedAt, saved.playedAt)
             if (player.mediaItemCount > 0) return@launch
             player.setMediaItems(c.queueStore.mediaItems(saved), saved.index, saved.positionMs)
             player.shuffleModeEnabled = saved.shuffle
@@ -520,7 +535,7 @@ class PlaybackService : MediaLibraryService() {
             delay(1_000)
             while (isActive) {
                 try {
-                    c.queueStore.save(c.queueStore.snapshot(player, radio.current))
+                    c.queueStore.save(c.queueStore.snapshot(player, radio.current, playedAt()))
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -562,9 +577,14 @@ class PlaybackService : MediaLibraryService() {
             val commands = defaults.buildUpon().add(toggleStarCommand).add(shuffleCommand).add(repeatCommand)
                 .add(notThisOneCommand).add(toggleRadioCommand).add(startRadioCommand).add(stopRadioCommand)
                 .build()
+            carHandoff.onConnect(session, controller)
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session, controller)
                 .setAvailableSessionCommands(commands)
                 .build()
+        }
+
+        override fun onDisconnected(session: MediaSession, controller: MediaSession.ControllerInfo) {
+            carHandoff.onDisconnected(session, controller)
         }
 
         override fun onCustomCommand(
@@ -688,8 +708,15 @@ class PlaybackService : MediaLibraryService() {
             controller: MediaSession.ControllerInfo,
             isForPlayback: Boolean,
         ): ListenableFuture<MediaItemsWithStartPosition> = scope.future {
-            val saved = c.queueStore.load() ?: throw UnsupportedOperationException("Nothing to resume")
-            MediaItemsWithStartPosition(c.queueStore.mediaItems(saved), saved.index, saved.positionMs)
+            // The saved queue, or the desktop's when the car start takes that over.
+            restoreJob.join()
+            carHandoff.awaitDecision()
+            if (player.mediaItemCount > 0) {
+                MediaItemsWithStartPosition((0 until player.mediaItemCount).map(player::getMediaItemAt), player.currentMediaItemIndex, player.currentPosition)
+            } else {
+                val saved = c.queueStore.load() ?: throw UnsupportedOperationException("Nothing to resume")
+                MediaItemsWithStartPosition(c.queueStore.mediaItems(saved), saved.index, saved.positionMs)
+            }
         }
     }
 

@@ -214,6 +214,8 @@ fun SettingsScreen() {
                 }
             }
 
+            carSettings(settings, ::update)
+
             item { Group("Downloads") }
             item {
                 Toggle("Download on Wi-Fi only", "Wait for an unmetered network before downloading", settings.downloadOnWifiOnly) { v ->
@@ -250,7 +252,7 @@ fun SettingsScreen() {
 }
 
 @Composable
-private fun Group(title: String) = HudSectionHeader(title)
+internal fun Group(title: String) = HudSectionHeader(title)
 
 /** Neon swatches; the selected one glows. */
 @Composable
@@ -290,7 +292,7 @@ private fun AccentPicker(selected: AccentColor, onSelect: (AccentColor) -> Unit)
 }
 
 @Composable
-private fun Item(title: String, subtitle: String? = null, icon: (@Composable () -> Unit)? = null, onClick: (() -> Unit)? = null) {
+internal fun Item(title: String, subtitle: String? = null, icon: (@Composable () -> Unit)? = null, onClick: (() -> Unit)? = null) {
     ListItem(
         modifier = if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier,
         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
@@ -301,7 +303,7 @@ private fun Item(title: String, subtitle: String? = null, icon: (@Composable () 
 }
 
 @Composable
-private fun Toggle(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+internal fun Toggle(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
     // The whole row is the switch, so TalkBack reads its name and state together.
     ListItem(
         modifier = Modifier.toggleable(value = checked, role = Role.Switch, onValueChange = onChange),

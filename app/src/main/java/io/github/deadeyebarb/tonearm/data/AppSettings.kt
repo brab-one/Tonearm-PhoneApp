@@ -80,6 +80,8 @@ data class AppSettings(
     val pureBlack: Boolean = false,
     val visualizer: Boolean = true,
     val equalizer: EqualizerSettings = EqualizerSettings(),
+    /** When the car starts and the desktop played last, the phone takes over its song, place and queue. */
+    val continueFromDesktop: Boolean = true,
 ) {
     companion object {
         /** "Cache ahead" setting for the whole rest of the queue. */
