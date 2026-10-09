@@ -110,6 +110,7 @@ class PlaybackService : MediaLibraryService() {
     private val toggleRadioCommand = SessionCommand(PlaybackCommands.TOGGLE_RADIO, Bundle.EMPTY)
     private val startRadioCommand = SessionCommand(PlaybackCommands.START_RADIO, Bundle.EMPTY)
     private val stopRadioCommand = SessionCommand(PlaybackCommands.STOP_RADIO, Bundle.EMPTY)
+    private val playFromSearchCommand = SessionCommand(PlaybackCommands.PLAY_FROM_SEARCH, Bundle.EMPTY)
 
     override fun onCreate() {
         super.onCreate()
@@ -528,6 +529,34 @@ class PlaybackService : MediaLibraryService() {
         return SessionResult(error)
     }
 
+    /**
+     * Voice search on the phone: plays what it finds, through the session's player like a controller's play would. When
+     * nothing is found (or the server can't be asked) it says so, and the queue stays as it was, paused or playing.
+     */
+    private suspend fun playFromSearch(query: String): SessionResult {
+        val search = MediaItem.Builder().setRequestMetadata(MediaItem.RequestMetadata.Builder().setSearchQuery(query).build()).build()
+        val found = try {
+            tree.resolveForPlayback(listOf(search), 0, C.TIME_UNSET)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            val notFound = e is NoSuchElementException
+            val error = SessionError(
+                if (notFound) SessionError.ERROR_BAD_VALUE else SessionError.ERROR_IO,
+                if (notFound) e.message ?: "Nothing found" else e.userMessage(),
+            )
+            c.messages.show(error.message)
+            session.sendError(error)
+            return SessionResult(error)
+        }
+        // A new queue: the radio playing doesn't go on with it.
+        radio.stop()
+        gate.setMediaItems(found.mediaItems, found.startIndex, found.startPositionMs)
+        gate.prepare()
+        gate.play()
+        return SessionResult(SessionResult.RESULT_SUCCESS)
+    }
+
     private fun restoreQueue() {
         restoreJob = scope.launch {
             val saved = c.queueStore.load() ?: return@launch
@@ -589,6 +618,7 @@ class PlaybackService : MediaLibraryService() {
             }
             val commands = defaults.buildUpon().add(toggleStarCommand).add(shuffleCommand).add(repeatCommand)
                 .add(notThisOneCommand).add(toggleRadioCommand).add(startRadioCommand).add(stopRadioCommand)
+                .add(playFromSearchCommand)
                 .build()
             carHandoff.onConnect(session, controller)
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session, controller)
@@ -619,6 +649,7 @@ class PlaybackService : MediaLibraryService() {
                 PlaybackCommands.STOP_RADIO -> radio.stop()
                 // Answered once the radio plays, so a controller made just for this can let go after it.
                 PlaybackCommands.START_RADIO -> return scope.future { startRadio(args.getString(PlaybackCommands.ARG_SEED), play = true) }
+                PlaybackCommands.PLAY_FROM_SEARCH -> return scope.future { playFromSearch(args.getString(PlaybackCommands.ARG_QUERY).orEmpty()) }
                 else -> return super.onCustomCommand(session, controller, customCommand, args)
             }
             return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))

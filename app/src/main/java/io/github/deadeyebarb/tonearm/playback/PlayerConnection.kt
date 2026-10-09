@@ -226,15 +226,12 @@ class PlayerConnection(private val context: Context, private val factory: MediaI
 
     fun retry() = withController { it.prepare() }
 
-    /** Voice search ("play X on Tonearm"); the service resolves the query, an empty one shuffles everything. */
-    fun playFromSearch(query: String) = withController { c ->
-        c.setMediaItem(
-            MediaItem.Builder()
-                .setRequestMetadata(MediaItem.RequestMetadata.Builder().setSearchQuery(query).build())
-                .build(),
-        )
-        c.prepare()
-        c.play()
+    /**
+     * Voice search ("play X on Tonearm"); the service resolves the query, an empty one shuffles everything. It plays only
+     * once something is found, so a search that finds nothing doesn't start the paused queue.
+     */
+    fun playFromSearch(query: String) = withController {
+        it.sendCustomCommand(SessionCommand(PlaybackCommands.PLAY_FROM_SEARCH, Bundle.EMPTY), Bundle().apply { putString(PlaybackCommands.ARG_QUERY, query) })
     }
     /** Does what the button shows ([PlayerUiState.showPlay]): during a call, say, Pause pauses. */
     fun togglePlayPause() = withController { Util.handlePlayPauseButtonAction(it, false) }
