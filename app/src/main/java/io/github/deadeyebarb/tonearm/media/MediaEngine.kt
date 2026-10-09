@@ -97,6 +97,19 @@ class MediaEngine(
 
     fun currentQuality(): StreamQuality = settings.state.value.let { if (network.isMetered()) it.mobileQuality else it.wifiQuality }
 
+    /** Whether a song plays without a connection: it's on the phone, downloaded or cached in full. Blocking. */
+    fun playsOffline(uri: Uri): Boolean {
+        val parts = SongUri.parse(uri) ?: return false
+        if (LocalMusic.isLocal(parts.serverId) || isDownloaded(parts.serverId, parts.songId)) return true
+        val s = settings.state.value
+        val qualities = if (YouTubeMusic.isYouTube(parts.serverId)) listOf(SongUri.YOUTUBE) else listOf(SongUri.RAW, qualityOf(s.wifiQuality), qualityOf(s.mobileQuality))
+        return qualities.any { quality ->
+            val key = streamKey(parts.serverId, parts.songId, quality, parts.version)
+            val length = ContentMetadata.getContentLength(streamCache.getContentMetadata(key))
+            length != C.LENGTH_UNSET.toLong() && streamCache.isCached(key, 0, length)
+        }
+    }
+
     /** Forgets the quality of every song but [keep] (the one playing and the next), so a later play picks afresh. */
     fun keepPinned(keep: Collection<Uri>) {
         val keys = keep.mapNotNull(SongUri::parse).map { pinKey(it) }.toSet()

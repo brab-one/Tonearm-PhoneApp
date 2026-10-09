@@ -45,6 +45,8 @@ Related repositories:
 - **When the queue ends**: stop, keep going with similar music (library first, then YouTube Music's radio
   for the last song), or play another of your playlists
 - Seeking works even behind proxies that drop range requests: the file size from the server fills in
+- Dead zones: playback carries on by itself once the connection is back, and meanwhile skips ahead to songs
+  that play offline (downloaded, cached or on the phone)
 
 **Library**
 - Home: recently added / played, most played, liked, discover, shuffle all
