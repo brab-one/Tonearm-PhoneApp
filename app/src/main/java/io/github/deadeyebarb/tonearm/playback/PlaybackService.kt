@@ -31,13 +31,19 @@ import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import io.github.deadeyebarb.tonearm.MainActivity
+import io.github.deadeyebarb.tonearm.R
 import io.github.deadeyebarb.tonearm.container
+import io.github.deadeyebarb.tonearm.likes.Dislikes
 import io.github.deadeyebarb.tonearm.media.MediaIds
+import io.github.deadeyebarb.tonearm.media.QueueSong
 import io.github.deadeyebarb.tonearm.media.toQueueSong
+import io.github.deadeyebarb.tonearm.mixes.RadioSeed
 import io.github.deadeyebarb.tonearm.subsonic.NoServerException
+import io.github.deadeyebarb.tonearm.subsonic.Song
 import io.github.deadeyebarb.tonearm.subsonic.StarKind
 import io.github.deadeyebarb.tonearm.subsonic.SubsonicApiException
 import io.github.deadeyebarb.tonearm.subsonic.userMessage
+import io.github.deadeyebarb.tonearm.widget.NowPlayingCard
 import io.github.deadeyebarb.tonearm.youtube.YouTubeMusic
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
@@ -51,11 +57,13 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.guava.future
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Owns the ExoPlayer and the media session: background playback, the media notification,
@@ -72,6 +80,12 @@ class PlaybackService : MediaLibraryService() {
     private lateinit var tree: LibraryTree
     private lateinit var scrobbler: Scrobbler
     private lateinit var cacheAhead: CacheAhead
+    private lateinit var radio: RadioQueue
+    /** Puts the saved queue back; a radio from the shortcut waits for it. */
+    private lateinit var restoreJob: Job
+    /** Songs said "Not this one" to whose dislike couldn't be saved yet: sent again once online, left out meanwhile. */
+    private val unsavedDislikes = mutableListOf<QueueSong>()
+    private var continueJob: Job? = null
     /** The YouTube Music item auto-request last ran for, so pausing and resuming doesn't repeat it. */
     private var swapJob: Job? = null
 
@@ -86,6 +100,10 @@ class PlaybackService : MediaLibraryService() {
     private val toggleStarCommand = SessionCommand(CMD_TOGGLE_STAR, Bundle.EMPTY)
     private val shuffleCommand = SessionCommand(CMD_TOGGLE_SHUFFLE, Bundle.EMPTY)
     private val repeatCommand = SessionCommand(CMD_CYCLE_REPEAT, Bundle.EMPTY)
+    private val notThisOneCommand = SessionCommand(PlaybackCommands.NOT_THIS_ONE, Bundle.EMPTY)
+    private val toggleRadioCommand = SessionCommand(PlaybackCommands.TOGGLE_RADIO, Bundle.EMPTY)
+    private val startRadioCommand = SessionCommand(PlaybackCommands.START_RADIO, Bundle.EMPTY)
+    private val stopRadioCommand = SessionCommand(PlaybackCommands.STOP_RADIO, Bundle.EMPTY)
 
     override fun onCreate() {
         super.onCreate()
@@ -133,14 +151,22 @@ class PlaybackService : MediaLibraryService() {
         c.effects.attach(player.audioSessionId)
         scrobbler = c.scrobbler.also(player::addListener)
         cacheAhead = CacheAhead(player, c.media, c.settings, scope).also(player::addListener)
+        radio = RadioQueue(player, c, scope, leaveOut = ::isUnsavedDislike, onChange = ::onRadioChanged).also(player::addListener)
         player.addListener(listener)
 
         observeSettings()
         scope.launch { c.starred.overrides.collect { updateButtons() } }
         scope.launch { c.likes.pending.items.collect { updateButtons() } }
         scope.launch { c.likes.phone.collect { updateButtons() } }
-        // Back online: what couldn't be scrobbled goes now.
-        scope.launch { c.network.online.filter { it }.collect { scrobbler.retry() } }
+        // "Not this one" shows once the Tonearm server that keeps dislikes is found.
+        scope.launch { c.tonearmServer.server.map { it?.dislikes == true }.distinctUntilChanged().collect { updateButtons() } }
+        // Back online: what couldn't be scrobbled or disliked goes now.
+        scope.launch {
+            c.network.online.filter { it }.collect {
+                scrobbler.retry()
+                retryDislikes()
+            }
+        }
         // When a server is added (or switched), drop any "set up Tonearm" error the car is showing
         // and have connected browsers reload, so Android Auto picks up the library right away.
         scope.launch {
@@ -171,8 +197,10 @@ class PlaybackService : MediaLibraryService() {
         scrobbler.finish()
         player.removeListener(scrobbler)
         cacheAhead.release()
-        val snapshot = c.queueStore.snapshot(player)
+        val snapshot = c.queueStore.snapshot(player, radio.current)
         runBlocking { runCatching { c.queueStore.save(snapshot) } }
+        // The widget and the tile show it paused; their controls start the service again.
+        c.nowPlaying.update { it?.copy(playing = false, live = false) }
         c.effects.release()
         c.sleepTimer.detach()
         c.volume.detach()
@@ -225,7 +253,26 @@ class PlaybackService : MediaLibraryService() {
             ) {
                 scheduleSave()
             }
+            if (events.containsAny(
+                    Player.EVENT_TIMELINE_CHANGED, Player.EVENT_MEDIA_ITEM_TRANSITION, Player.EVENT_PLAY_WHEN_READY_CHANGED,
+                    Player.EVENT_IS_PLAYING_CHANGED,
+                )
+            ) {
+                publishNowPlaying()
+            }
         }
+    }
+
+    /** For the widget and the quick settings tile. */
+    private fun publishNowPlaying() {
+        c.nowPlaying.value = NowPlayingCard.from(player.currentMediaItem?.toQueueSong(), player.playWhenReady, player.currentMediaItemIndex, player.mediaItemCount)
+    }
+
+    private fun onRadioChanged() {
+        updateButtons()
+        // The phone's Now Playing and the widget read it from here.
+        session.setSessionExtras(Bundle().apply { radio.current?.let { putString(PlaybackCommands.EXTRA_RADIO, it.title) } })
+        scheduleSave()
     }
 
     private fun observeSettings() {
@@ -261,6 +308,13 @@ class PlaybackService : MediaLibraryService() {
     private fun updateButtons() {
         val entry = player.currentMediaItem?.toQueueSong()
         val liked = entry != null && c.likes.isLiked(entry)
+        // Dislikes are kept by the Tonearm server: without it there's no "Not this one".
+        val notThisOne = CommandButton.Builder(CommandButton.ICON_THUMB_DOWN_UNFILLED)
+            .setDisplayName("Not this one")
+            .setSessionCommand(notThisOneCommand)
+            .setEnabled(entry != null)
+            .build()
+            .takeIf { c.tonearmServer.server.value?.dislikes == true }
         val star = CommandButton.Builder(if (liked) CommandButton.ICON_HEART_FILLED else CommandButton.ICON_HEART_UNFILLED)
             .setDisplayName(if (liked) "Unlike" else "Like")
             .setSessionCommand(toggleStarCommand)
@@ -280,8 +334,15 @@ class PlaybackService : MediaLibraryService() {
             .setDisplayName("Repeat")
             .setSessionCommand(repeatCommand)
             .build()
-        // Phone notification, lock screen, Android Auto and Automotive all pick these up.
-        session.setMediaButtonPreferences(listOf(star, shuffle, repeat))
+        val radioOn = radio.current != null
+        // Its own drawables, not ICON_RADIO: Automotive draws that one the same whether the radio is on or off.
+        val radioButton = CommandButton.Builder(CommandButton.ICON_UNDEFINED)
+            .setCustomIconResId(if (radioOn) R.drawable.ic_car_radio_on else R.drawable.ic_car_radio)
+            .setDisplayName(if (radioOn) "Stop radio" else "Start radio")
+            .setSessionCommand(toggleRadioCommand)
+            .build()
+        // Phone notification, lock screen, Android Auto and Automotive all pick these up, the first ones first.
+        session.setMediaButtonPreferences(listOfNotNull(notThisOne, star, radioButton, shuffle, repeat))
     }
 
     /**
@@ -310,6 +371,8 @@ class PlaybackService : MediaLibraryService() {
 
     /** On the last song, appends what "When the queue ends" asks for, so playback carries on gaplessly. */
     private fun continueIfLast() {
+        // A radio adds its own.
+        if (radio.current != null) return
         if (player.mediaItemCount == 0 || player.hasNextMediaItem() || player.repeatMode != Player.REPEAT_MODE_OFF) return
         if (c.settings.state.value.whenQueueEnds == QueueEnd.STOP) return
         val item = player.currentMediaItem ?: return
@@ -319,9 +382,9 @@ class PlaybackService : MediaLibraryService() {
         continuedAfter = entry
         val last = item.toQueueSong() ?: return
         val played = (0 until player.mediaItemCount).mapNotNull { player.getMediaItemAt(it).toQueueSong() }.map(QueueContinuation::key).toSet()
-        scope.launch {
-            val more = runCatching { c.continuation.next(last, played) }.getOrDefault(emptyList())
-            if (more.isEmpty() || player.hasNextMediaItem()) return@launch
+        continueJob = scope.launch {
+            val more = runCatching { c.continuation.next(last, played) }.getOrDefault(emptyList()).filterNot { isUnsavedDislike(it.song) }
+            if (more.isEmpty() || player.hasNextMediaItem() || radio.current != null) return@launch
             // Right after the song playing, which is the last to play, shuffled or not.
             player.addMediaItems(player.currentMediaItemIndex + 1, more.map { c.mediaItems.song(it) })
         }
@@ -372,13 +435,80 @@ class PlaybackService : MediaLibraryService() {
         }
     }
 
-    private fun restoreQueue() {
+    /**
+     * Not this one: skips the song, takes it out of the queue and dislikes it (it isn't liked anymore either). On the last
+     * song the radio or "When the queue ends" adds the next ones first, so there's something to move on to.
+     */
+    private fun notThisOne() {
+        val item = player.currentMediaItem ?: return
+        val entry = item.toQueueSong() ?: return
+        val index = player.currentMediaItemIndex
         scope.launch {
+            if (!player.hasNextMediaItem()) {
+                withTimeoutOrNull(MORE_FOR_SKIP_MS) { if (radio.current != null) radio.awaitMore() else continueJob?.join() }
+            }
+            if (player.currentMediaItemIndex == index && player.currentMediaItem?.mediaId == item.mediaId && player.hasNextMediaItem()) {
+                player.seekToNextMediaItem()
+            }
+            // Seeking leaves the queue as it was, so the song is still at its index (unless the queue changed meanwhile).
+            if (index < player.mediaItemCount && player.getMediaItemAt(index).mediaId == item.mediaId) player.removeMediaItem(index)
+            dislike(entry, announce = true)
+        }
+    }
+
+    private suspend fun dislike(entry: QueueSong, announce: Boolean) {
+        val song = entry.song
+        try {
+            c.dislikes.set(song.artist.orEmpty(), song.title, song.album, true)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Couldn't save the dislike", e)
+            // Without a server that keeps dislikes, trying again won't help.
+            if (c.tonearmServer.server.value?.dislikes != true) return c.messages.show(e.userMessage())
+            if (unsavedDislikes.none { it == entry }) unsavedDislikes += entry
+            return
+        }
+        if (announce) c.messages.show("Disliked “${song.title}”: it goes to the end of searches and out of mixes and picks")
+        // The dislike is saved; not liking it anymore may fail on its own.
+        if (c.likes.isLiked(entry)) runCatching { c.likes.set(entry, false) }
+    }
+
+    private fun retryDislikes() {
+        if (unsavedDislikes.isEmpty()) return
+        val waiting = unsavedDislikes.toList()
+        unsavedDislikes.clear()
+        scope.launch { for (entry in waiting) dislike(entry, announce = false) }
+    }
+
+    private fun isUnsavedDislike(song: Song): Boolean {
+        if (unsavedDislikes.isEmpty()) return false
+        val key = Dislikes.songKey(song.artistLabel, song.title)
+        return unsavedDislikes.any { Dislikes.songKey(it.song.artistLabel, it.song.title) == key }
+    }
+
+    /**
+     * Starts a radio from the current song ([PlaybackCommands.SEED_CURRENT]; the picks without one) or from the picks,
+     * once the saved queue is back. A problem is shown on the phone and, for a moment, in the car.
+     */
+    private suspend fun startRadio(seed: String?, play: Boolean): SessionResult {
+        restoreJob.join()
+        val from = if (seed == PlaybackCommands.SEED_PICKS) RadioSeed(RadioSeed.PICKS) else RadioQueue.seedOf(player.currentMediaItem?.toQueueSong())
+        val problem = radio.start(from, play).await() ?: return SessionResult(SessionResult.RESULT_SUCCESS)
+        val error = SessionError(SessionError.ERROR_UNKNOWN, problem)
+        c.messages.show(problem)
+        session.sendError(error)
+        return SessionResult(error)
+    }
+
+    private fun restoreQueue() {
+        restoreJob = scope.launch {
             val saved = c.queueStore.load() ?: return@launch
             if (player.mediaItemCount > 0) return@launch
             player.setMediaItems(c.queueStore.mediaItems(saved), saved.index, saved.positionMs)
             player.shuffleModeEnabled = saved.shuffle
             player.repeatMode = saved.repeatMode
+            radio.restore(saved.radio)
             // Not prepared on purpose: nothing is fetched until the user presses play.
         }
     }
@@ -390,7 +520,7 @@ class PlaybackService : MediaLibraryService() {
             delay(1_000)
             while (isActive) {
                 try {
-                    c.queueStore.save(c.queueStore.snapshot(player))
+                    c.queueStore.save(c.queueStore.snapshot(player, radio.current))
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -429,7 +559,9 @@ class PlaybackService : MediaLibraryService() {
             } else {
                 MediaSession.ConnectionResult.DEFAULT_UNTRUSTED_SESSION_AND_LIBRARY_COMMANDS
             }
-            val commands = defaults.buildUpon().add(toggleStarCommand).add(shuffleCommand).add(repeatCommand).build()
+            val commands = defaults.buildUpon().add(toggleStarCommand).add(shuffleCommand).add(repeatCommand)
+                .add(notThisOneCommand).add(toggleRadioCommand).add(startRadioCommand).add(stopRadioCommand)
+                .build()
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session, controller)
                 .setAvailableSessionCommands(commands)
                 .build()
@@ -449,10 +581,14 @@ class PlaybackService : MediaLibraryService() {
                     Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE
                     else -> Player.REPEAT_MODE_OFF
                 }
+                PlaybackCommands.NOT_THIS_ONE -> notThisOne()
+                PlaybackCommands.TOGGLE_RADIO -> if (radio.current != null) radio.stop() else scope.launch { startRadio(PlaybackCommands.SEED_CURRENT, play = false) }
+                PlaybackCommands.STOP_RADIO -> radio.stop()
+                // Answered once the radio plays, so a controller made just for this can let go after it.
+                PlaybackCommands.START_RADIO -> return scope.future { startRadio(args.getString(PlaybackCommands.ARG_SEED), play = true) }
                 else -> return super.onCustomCommand(session, controller, customCommand, args)
             }
             return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
-            return super.onCustomCommand(session, controller, customCommand, args)
         }
 
         override fun onGetLibraryRoot(
@@ -536,6 +672,8 @@ class PlaybackService : MediaLibraryService() {
             try {
                 // A song picked in the car plays its album or playlist; the app sends whole queues itself.
                 tree.resolveForPlayback(mediaItems, startIndex, startPositionMs, expandSongs = controller.packageName != packageName)
+                    // A new queue: the radio playing doesn't go on with it.
+                    .also { radio.stop() }
             } catch (e: NoSuchElementException) {
                 // A voice search found nothing: say so (the car too), and what was playing carries on.
                 val message = e.message ?: "Nothing found"
@@ -567,6 +705,8 @@ class PlaybackService : MediaLibraryService() {
         private val IO_ERRORS = 2000..2999
         private const val MAX_RECOVERIES = 10
         private const val RECOVER_DELAY_MS = 2_000L
+        /** How long "Not this one" on the last song waits for more songs to move on to. */
+        private const val MORE_FOR_SKIP_MS = 5_000L
         const val CMD_TOGGLE_STAR = "io.github.deadeyebarb.tonearm.TOGGLE_STAR"
         /** Subsonic codes meaning the login is wrong or not accepted. */
         private val AUTH_ERRORS = setOf(40, 41, 42, 43, 44)
