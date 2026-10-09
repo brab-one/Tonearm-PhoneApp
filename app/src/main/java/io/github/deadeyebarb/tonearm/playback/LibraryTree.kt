@@ -10,12 +10,15 @@ import androidx.media3.session.MediaConstants
 import androidx.media3.session.MediaSession.MediaItemsWithStartPosition
 import io.github.deadeyebarb.tonearm.AppContainer
 import io.github.deadeyebarb.tonearm.R
+import io.github.deadeyebarb.tonearm.download.DownloadRepository
 import io.github.deadeyebarb.tonearm.media.MediaIds
 import io.github.deadeyebarb.tonearm.media.QueueSong
 import io.github.deadeyebarb.tonearm.media.SongExtras
 import io.github.deadeyebarb.tonearm.media.SongUri
 import io.github.deadeyebarb.tonearm.subsonic.AlbumListType
+import io.github.deadeyebarb.tonearm.subsonic.Song
 import io.github.deadeyebarb.tonearm.youtube.YouTubeMusic
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * The browse tree for Android Auto, Android Automotive and other media browsers, plus the logic
@@ -56,6 +59,11 @@ class LibraryTree(private val c: AppContainer) {
     suspend fun children(parentId: String): List<MediaItem> {
         val session = c.sessions.awaitActive()
         val s = session.id
+        if (parentId == MediaIds.HOME && c.tonearmServer.server.value == null) {
+            // Right after a cold start the Tonearm server may not be found yet: a moment for it.
+            // The service reloads Home when it turns up later.
+            withTimeoutOrNull(1_500) { c.tonearmServer.refresh(session) }
+        }
         return when (parentId) {
             MediaIds.ROOT -> listOf(
                 tab(MediaIds.HOME, "Home", R.drawable.ic_car_home, MediaMetadata.MEDIA_TYPE_FOLDER_MIXED),
@@ -134,10 +142,22 @@ class LibraryTree(private val c: AppContainer) {
             }
             MediaIds.STARRED -> {
                 val session = c.sessions.awaitActive()
-                return api.starred(session).song.map { QueueSong(session.id, it) }
+                // As on the phone: songs liked on it and YouTube Music likes waiting for Lidarr too, and
+                // those still play when the server can't be reached.
+                val starred = runCatching { api.starred(session).song.map { QueueSong(session.id, it) } }
+                val onPhone = c.likes.phone.value.takeIf { it.isNotEmpty() }?.let { liked ->
+                    runCatching { c.local.load() }.getOrDefault(emptyList()).filter { it.id in liked }.map { QueueSong(LocalMusic.SOURCE_ID, it) }
+                }.orEmpty()
+                val waiting = c.likes.pending.items.value.mapNotNull { like ->
+                    like.ref.youtubeId?.let { id ->
+                        QueueSong(YouTubeMusic.SOURCE_ID, Song(id = id, title = like.ref.title, artist = like.ref.artist, duration = like.ref.duration, coverArt = like.ref.coverUrl))
+                    }
+                }
+                val songs = onPhone + waiting + starred.getOrDefault(emptyList())
+                return songs.ifEmpty { starred.getOrThrow() }
             }
             MediaIds.DOWNLOADS -> return c.downloads.entries.value.values.filter { it.completed }.map { it.item }
-                .sortedWith(compareBy({ it.song.album }, { it.song.discNumber }, { it.song.track }))
+                .sortedWith(DownloadRepository.ALBUM_ORDER)
         }
         val parsed = MediaIds.parse(containerId)
         val serverId = parsed.serverId ?: return emptyList()
@@ -187,10 +207,10 @@ class LibraryTree(private val c: AppContainer) {
     }
 
     /**
-     * A single song picked from a browsed album or playlist expands to the whole container;
-     * "Shuffle all" and voice searches ("play X on Tonearm") are resolved here too.
+     * With [expandSongs] (a car or another app), a single song picked from a browsed album or playlist
+     * expands to the whole container. "Shuffle all" and voice searches ("play X on Tonearm") are resolved here too.
      */
-    suspend fun resolveForPlayback(items: List<MediaItem>, startIndex: Int, startPositionMs: Long): MediaItemsWithStartPosition {
+    suspend fun resolveForPlayback(items: List<MediaItem>, startIndex: Int, startPositionMs: Long, expandSongs: Boolean = true): MediaItemsWithStartPosition {
         if (items.size == 1) {
             val item = items[0]
             val query = item.requestMetadata.searchQuery
@@ -201,7 +221,7 @@ class LibraryTree(private val c: AppContainer) {
                 item.mediaId == MediaIds.HISTORY_MIX -> MediaIds.HISTORY_MIX
                 item.mediaId == MediaIds.DAILY -> MediaIds.DAILY
                 parsed.type == MediaIds.ALBUM || parsed.type == MediaIds.PLAYLIST || parsed.type == MediaIds.GENRE -> item.mediaId
-                parsed.type == MediaIds.SONG && parsed.context != null -> parsed.context
+                parsed.type == MediaIds.SONG && parsed.context != null && expandSongs -> parsed.context
                 else -> null
             }
             if (container != null) {
@@ -219,8 +239,12 @@ class LibraryTree(private val c: AppContainer) {
         return MediaItemsWithStartPosition(resolve(items), startIndex, startPositionMs)
     }
 
+    /** Fails with a message to show when nothing is found, which leaves the queue as it was. */
     private suspend fun voiceSearch(query: String): MediaItemsWithStartPosition {
-        if (query.isBlank()) return MediaItemsWithStartPosition(songsOf(MediaIds.MIX).map { factory.song(it, MediaIds.MIX) }, 0, 0)
+        if (query.isBlank()) {
+            val mix = songsOf(MediaIds.MIX).ifEmpty { throw NoSuchElementException("Nothing to shuffle") }
+            return MediaItemsWithStartPosition(mix.map { factory.song(it, MediaIds.MIX) }, 0, 0)
+        }
         val session = c.sessions.awaitActive()
         val result = api.search(query, artistCount = 1, albumCount = 1, songCount = 20, session = session)
         val album = result.album.firstOrNull()
@@ -233,8 +257,9 @@ class LibraryTree(private val c: AppContainer) {
         if (songs.isEmpty() && c.settings.state.value.youtubeFallback) {
             // Not on the server: play it from YouTube Music (which also requests it in Lidarr).
             val youtube = runCatching { c.youtube.searchSongs(query, 20) }.getOrDefault(emptyList())
-            return MediaItemsWithStartPosition(youtube.map { factory.song(YouTubeMusic.SOURCE_ID, it) }, 0, 0)
+            if (youtube.isNotEmpty()) return MediaItemsWithStartPosition(youtube.map { factory.song(YouTubeMusic.SOURCE_ID, it) }, 0, 0)
         }
+        if (songs.isEmpty()) throw NoSuchElementException("Nothing found for “${query.trim()}”")
         return MediaItemsWithStartPosition(songs.map { factory.song(session.id, it) }, 0, 0)
     }
 

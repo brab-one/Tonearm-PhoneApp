@@ -41,6 +41,7 @@ import androidx.compose.material.icons.rounded.RepeatOne
 import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -105,6 +106,7 @@ import io.github.deadeyebarb.tonearm.ui.theme.Orbitron
 import io.github.deadeyebarb.tonearm.ui.theme.glow
 import io.github.deadeyebarb.tonearm.ui.theme.glowBorder
 import io.github.deadeyebarb.tonearm.youtube.YouTubeMusic
+import kotlinx.coroutines.delay
 
 private enum class Sheet { None, Queue, Lyrics, Sleep }
 
@@ -115,7 +117,20 @@ fun NowPlayingScreen(onBack: () -> Unit) {
     val settings by c.settings.state.collectAsStateWithLifecycle()
     val item = state.current
     if (item == null) {
-        LaunchedEffect(Unit) { onBack() }
+        if (state.connected) {
+            LaunchedEffect(Unit) { onBack() }
+        } else {
+            // Opened from the notification in a process the car or a headset started: the player is
+            // still connecting, and leaving now would land on Home.
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                HudBackground()
+                CircularProgressIndicator(color = Hud.colors.accent)
+            }
+            LaunchedEffect(Unit) {
+                delay(5_000)
+                if (c.player.state.value.current == null) onBack()
+            }
+        }
         return
     }
     val entry = remember(item) { item.toQueueSong() }
@@ -228,8 +243,9 @@ private fun Header(entry: QueueSong?, onBack: () -> Unit, onSleep: () -> Unit) {
                         song.albumId?.let { add(MenuAction("Go to album", Icons.Rounded.Album) { actions.openAlbum(it) }) }
                         song.artistId?.let { add(MenuAction("Go to artist", Icons.Rounded.Person) { actions.openArtist(it) }) }
                         add(MenuAction("Add to playlist", Icons.AutoMirrored.Rounded.PlaylistAdd) { actions.addToPlaylist(listOf(entry)) })
-                        add(MenuAction("Instant mix", Icons.Rounded.Radio) { actions.instantMix(entry) })
                     }
+                    // YouTube Music songs get YouTube Music's radio.
+                    if (sameServer || YouTubeMusic.isYouTube(entry.serverId)) add(MenuAction("Instant mix", Icons.Rounded.Radio) { actions.instantMix(entry) })
                     if (!LocalMusic.isLocal(entry.serverId)) add(MenuAction("Download", Icons.Rounded.Download) { actions.download(listOf(entry)) })
                 }
                 add(MenuAction("Equalizer", Icons.Rounded.Equalizer) { actions.navigate(EqualizerRoute) })
@@ -313,9 +329,9 @@ private fun Controls(state: PlayerUiState, visualizer: VisualizerState) {
             Icon(Icons.Rounded.SkipPrevious, "Previous", Modifier.size(38.dp), tint = hud.text)
         }
         ReactorPlayButton(
-            playing = state.playWhenReady, buffering = state.buffering, visualizer = visualizer,
-            icon = if (state.playWhenReady) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-            contentDescription = if (state.playWhenReady) "Pause" else "Play",
+            playing = !state.showPlay, buffering = state.buffering, visualizer = visualizer,
+            icon = if (state.showPlay) Icons.Rounded.PlayArrow else Icons.Rounded.Pause,
+            contentDescription = if (state.showPlay) "Play" else "Pause",
             onClick = player::togglePlayPause,
         )
         IconButton(onClick = player::next, modifier = Modifier.size(60.dp)) {

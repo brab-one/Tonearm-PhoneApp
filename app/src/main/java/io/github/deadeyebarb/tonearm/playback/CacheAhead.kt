@@ -7,8 +7,11 @@ import androidx.media3.common.Timeline
 import io.github.deadeyebarb.tonearm.data.SettingsRepository
 import io.github.deadeyebarb.tonearm.media.MediaEngine
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
@@ -53,15 +56,12 @@ class CacheAhead(
 
     private suspend fun cache(item: MediaItem) {
         val uri = item.localConfiguration?.uri ?: return
-        val writer = media.cacheWriter(uri) ?: return
-        val job = coroutineContext[Job]
-        val cancel = job?.invokeOnCompletion { writer.cancel() }
         try {
-            withContext(Dispatchers.IO) { writer.cache() }
+            // Off the main thread: a YouTube Music song may be looked up.
+            val writer = withContext(Dispatchers.IO) { media.cacheWriter(uri) } ?: return
+            stoppable(writer::cancel) { writer.cache() }
         } catch (_: IOException) {
             // Cancelled, offline or the song is gone: it just won't be cached ahead.
-        } finally {
-            cancel?.dispose()
         }
         coroutineContext.ensureActive()
     }
@@ -72,6 +72,27 @@ class CacheAhead(
 
     companion object {
         private const val START_DELAY_MS = 3_000L
+
+        /**
+         * Runs the blocking [work] on an IO thread. A blocked thread doesn't notice its coroutine being
+         * cancelled, so cancelling calls [stop] (which makes [work] give up) right away.
+         */
+        suspend fun <T> stoppable(stop: () -> Unit, work: () -> T): T = coroutineScope {
+            var done = false
+            val watcher = launch(start = CoroutineStart.UNDISPATCHED) {
+                try {
+                    awaitCancellation()
+                } finally {
+                    if (!done) stop()
+                }
+            }
+            try {
+                withContext(Dispatchers.IO) { work() }
+            } finally {
+                done = true
+                watcher.cancel()
+            }
+        }
 
         /** Indexes of the next [count] items after [current], in the order the player will play them. */
         fun upcoming(timeline: Timeline, current: Int, repeatMode: Int, shuffle: Boolean, count: Int): List<Int> {

@@ -21,6 +21,7 @@ import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Lyrics
 import androidx.compose.material.icons.rounded.Timer
 import androidx.compose.material.icons.rounded.TimerOff
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
@@ -88,6 +89,9 @@ fun QueueSheet(state: PlayerUiState, onDismiss: () -> Unit) {
         rows = rows.toMutableList().apply { add(to.index, removeAt(from.index)) }
     }
     val totalSeconds = state.queue.sumOf { (it.mediaMetadata.durationMs ?: 0L) / 1000 }
+    // What "Clear upcoming" takes out: what's after the song playing (when shuffling, all the others).
+    val upcoming = if (state.shuffle) state.queue.size - 1 else state.queue.size - state.currentIndex - 1
+    var confirmClear by remember { mutableStateOf(false) }
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -98,7 +102,7 @@ fun QueueSheet(state: PlayerUiState, onDismiss: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            TextButton(onClick = player::clearUpcoming) { Text("Clear upcoming") }
+            TextButton(onClick = { if (upcoming > 3) confirmClear = true else player.clearUpcoming() }, enabled = upcoming > 0) { Text("Clear upcoming") }
         }
         LazyColumn(state = listState, modifier = Modifier.fillMaxHeight(0.9f), contentPadding = PaddingValues(bottom = 24.dp)) {
             itemsIndexed(rows, key = { _, row -> row.key }) { _, row ->
@@ -144,6 +148,21 @@ fun QueueSheet(state: PlayerUiState, onDismiss: () -> Unit) {
                 }
             }
         }
+    }
+
+    if (confirmClear) {
+        AlertDialog(
+            onDismissRequest = { confirmClear = false },
+            title = { Text("Clear upcoming?") },
+            text = { Text("$upcoming songs will be taken out of the queue.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmClear = false
+                    player.clearUpcoming()
+                }) { Text("Clear") }
+            },
+            dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Cancel") } },
+        )
     }
 }
 

@@ -34,6 +34,8 @@ data class PlayerUiState(
     val currentIndex: Int = C.INDEX_UNSET,
     val isPlaying: Boolean = false,
     val playWhenReady: Boolean = false,
+    /** The play button shows Play, not Pause: also when the queue has ended or after an error. */
+    val showPlay: Boolean = true,
     val buffering: Boolean = false,
     val durationMs: Long = 0,
     /** Position at the last player event; poll [PlayerConnection.position] for a live value. */
@@ -113,6 +115,7 @@ class PlayerConnection(private val context: Context, private val factory: MediaI
             currentIndex = p.currentMediaItemIndex,
             isPlaying = p.isPlaying,
             playWhenReady = p.playWhenReady,
+            showPlay = Util.shouldShowPlayButton(p, false),
             buffering = p.playbackState == Player.STATE_BUFFERING,
             durationMs = p.duration.takeIf { it != C.TIME_UNSET } ?: p.currentMediaItem?.mediaMetadata?.durationMs ?: 0,
             positionMs = p.currentPosition,
@@ -199,6 +202,9 @@ class PlayerConnection(private val context: Context, private val factory: MediaI
             if (c.mediaItemCount == 0) {
                 c.setMediaItems(media)
                 c.prepare()
+            } else if (c.shuffleModeEnabled) {
+                // After the last song to play, which is the end of the queue only when not shuffling (see QueueShuffleOrder).
+                c.addMediaItems(c.currentTimeline.getLastWindowIndex(true) + 1, media)
             } else {
                 c.addMediaItems(media)
             }
@@ -217,7 +223,8 @@ class PlayerConnection(private val context: Context, private val factory: MediaI
         c.prepare()
         c.play()
     }
-    fun togglePlayPause() = withController { Util.handlePlayPauseButtonAction(it) }
+    /** Does what the button shows ([PlayerUiState.showPlay]): during a call, say, Pause pauses. */
+    fun togglePlayPause() = withController { Util.handlePlayPauseButtonAction(it, false) }
     fun pause() = withController { it.pause() }
     fun next() = withController { it.seekToNext() }
     fun previous() = withController { it.seekToPrevious() }
@@ -244,14 +251,14 @@ class PlayerConnection(private val context: Context, private val factory: MediaI
         }
     }
 
-    /** Removes everything that would play after the current song. */
+    /**
+     * Removes everything that would play after the current song (when shuffling, everything else). The song
+     * playing carries on undisturbed.
+     */
     fun clearUpcoming() = withController { c ->
         val current = c.currentMediaItemIndex
-        if (c.shuffleModeEnabled) {
-            val keep = c.currentMediaItem ?: return@withController
-            c.setMediaItems(listOf(keep), 0, c.currentPosition)
-        } else if (current + 1 < c.mediaItemCount) {
-            c.removeMediaItems(current + 1, c.mediaItemCount)
-        }
+        if (current == C.INDEX_UNSET) return@withController
+        if (current + 1 < c.mediaItemCount) c.removeMediaItems(current + 1, c.mediaItemCount)
+        if (c.shuffleModeEnabled && current > 0) c.removeMediaItems(0, current)
     }
 }

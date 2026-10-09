@@ -11,6 +11,8 @@ import androidx.work.WorkerParameters
 import io.github.deadeyebarb.tonearm.container
 import io.github.deadeyebarb.tonearm.media.LibraryVersions
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.util.concurrent.TimeUnit
 
 /**
@@ -21,11 +23,14 @@ object DownloadUpgrades {
     suspend fun run(context: Context): Int {
         val c = context.container
         val session = c.sessions.active.value ?: c.sessions.awaitActive()
+        // In a process started for the worker this creates the repository, which lists the downloads a moment later.
+        val downloads = withContext(Dispatchers.Main) { c.downloads }
+        downloads.awaitListed()
         var upgraded = 0
-        for (entry in c.downloads.entries.value.values.filter { it.completed && it.item.serverId == session.id }) {
+        for (entry in downloads.entries.value.values.filter { it.completed && it.item.serverId == session.id }) {
             val newer = c.versions.better(entry.item, session, force = true) ?: continue
             if (!LibraryVersions.isUpgrade(entry.item.song, newer.song)) continue
-            c.downloads.replace(entry, newer)
+            withContext(Dispatchers.Main) { downloads.replace(entry, newer) }
             upgraded++
         }
         return upgraded

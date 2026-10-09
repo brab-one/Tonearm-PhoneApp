@@ -11,6 +11,7 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.Timeline
 import androidx.media3.common.TrackSelectionParameters.AudioOffloadPreferences
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
@@ -38,6 +39,8 @@ import io.github.deadeyebarb.tonearm.subsonic.StarKind
 import io.github.deadeyebarb.tonearm.subsonic.SubsonicApiException
 import io.github.deadeyebarb.tonearm.subsonic.userMessage
 import io.github.deadeyebarb.tonearm.youtube.YouTubeMusic
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -45,11 +48,14 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.guava.future
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 
 /**
  * Owns the ExoPlayer and the media session: background playback, the media notification,
@@ -57,7 +63,10 @@ import kotlinx.coroutines.runBlocking
  */
 class PlaybackService : MediaLibraryService() {
     private val c by lazy { container }
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    // A failure in one of its jobs is logged; it mustn't take the music down with it.
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Main.immediate + CoroutineExceptionHandler { _, e -> Log.w(TAG, "Playback service job failed", e) },
+    )
     private lateinit var player: ExoPlayer
     private lateinit var session: MediaLibrarySession
     private lateinit var tree: LibraryTree
@@ -66,10 +75,13 @@ class PlaybackService : MediaLibraryService() {
     /** The YouTube Music item auto-request last ran for, so pausing and resuming doesn't repeat it. */
     private var swapJob: Job? = null
 
-    /** The last song the queue was extended after ("When the queue ends"). */
-    private var continuedAfter: String? = null
+    /** The queue entry the queue was last extended after ("When the queue ends"); a new queue has new entries. */
+    private var continuedAfter: Any? = null
     private val searchResults = mutableMapOf<String, List<MediaItem>>()
     private var saveJob: Job? = null
+    private var recoverJob: Job? = null
+    /** Tries at getting going again after network errors, since playback last ran. */
+    private var recoveries = 0
 
     private val toggleStarCommand = SessionCommand(CMD_TOGGLE_STAR, Bundle.EMPTY)
     private val shuffleCommand = SessionCommand(CMD_TOGGLE_SHUFFLE, Bundle.EMPTY)
@@ -101,6 +113,8 @@ class PlaybackService : MediaLibraryService() {
             .setHandleAudioBecomingNoisy(true)
             .setWakeMode(C.WAKE_MODE_NETWORK)
             .build()
+        // Shuffle plays the whole queue from the song picked, and songs added keep their place.
+        player.setShuffleOrder(QueueShuffleOrder())
 
         tree = LibraryTree(c)
         session = MediaLibrarySession.Builder(this, player, Callback())
@@ -117,13 +131,16 @@ class PlaybackService : MediaLibraryService() {
         c.volume.attach(player)
         c.sleepTimer.attach(player)
         c.effects.attach(player.audioSessionId)
-        scrobbler = Scrobbler(c.api, c.sessions, c.settings, c.connect, scope).also(player::addListener)
+        scrobbler = c.scrobbler.also(player::addListener)
         cacheAhead = CacheAhead(player, c.media, c.settings, scope).also(player::addListener)
         player.addListener(listener)
 
         observeSettings()
         scope.launch { c.starred.overrides.collect { updateButtons() } }
         scope.launch { c.likes.pending.items.collect { updateButtons() } }
+        scope.launch { c.likes.phone.collect { updateButtons() } }
+        // Back online: what couldn't be scrobbled goes now.
+        scope.launch { c.network.online.filter { it }.collect { scrobbler.retry() } }
         // When a server is added (or switched), drop any "set up Tonearm" error the car is showing
         // and have connected browsers reload, so Android Auto picks up the library right away.
         scope.launch {
@@ -132,6 +149,12 @@ class PlaybackService : MediaLibraryService() {
                     session.clearReplicatedLibraryError()
                     session.notifyChildrenChanged(MediaIds.ROOT, Int.MAX_VALUE, null)
                 }
+            }
+        }
+        // Daily Discovery and Your mix are on Home once the Tonearm server is found, which can take a while.
+        scope.launch {
+            c.tonearmServer.server.map { it?.history == true }.distinctUntilChanged().collect {
+                session.notifyChildrenChanged(MediaIds.HOME, Int.MAX_VALUE, null)
             }
         }
         restoreQueue()
@@ -144,7 +167,9 @@ class PlaybackService : MediaLibraryService() {
     }
 
     override fun onDestroy() {
+        // It sends the last song after the service is gone.
         scrobbler.finish()
+        player.removeListener(scrobbler)
         cacheAhead.release()
         val snapshot = c.queueStore.snapshot(player)
         runBlocking { runCatching { c.queueStore.save(snapshot) } }
@@ -169,14 +194,29 @@ class PlaybackService : MediaLibraryService() {
 
         override fun onPlayerError(error: PlaybackException) {
             Log.w(TAG, "Playback error", error)
+            recover(error)
+        }
+
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            if (isPlaying) {
+                recoveries = 0
+                recoverJob?.cancel()
+            }
         }
 
         override fun onEvents(player: Player, events: Player.Events) {
             if (events.containsAny(Player.EVENT_SHUFFLE_MODE_ENABLED_CHANGED, Player.EVENT_REPEAT_MODE_CHANGED)) updateButtons()
+            if (events.contains(Player.EVENT_SHUFFLE_MODE_ENABLED_CHANGED) && player.shuffleModeEnabled && player.mediaItemCount > 0) {
+                // Shuffle turned on: everything else plays after the song playing (see QueueShuffleOrder).
+                this@PlaybackService.player.setShuffleOrder(QueueShuffleOrder().cloneAndSet(player.mediaItemCount, player.currentMediaItemIndex))
+            }
             if (events.containsAny(Player.EVENT_MEDIA_ITEM_TRANSITION, Player.EVENT_TIMELINE_CHANGED, Player.EVENT_REPEAT_MODE_CHANGED)) {
                 continueIfLast()
                 updateButtons()
                 useLibraryFiles()
+                // The songs playing and up next keep their quality; others choose again when they play.
+                val next = player.nextMediaItemIndex.takeIf { it != C.INDEX_UNSET }?.let(player::getMediaItemAt)
+                c.media.keepPinned(listOfNotNull(player.currentMediaItem, next).mapNotNull { it.localConfiguration?.uri })
             }
             if (events.containsAny(
                     Player.EVENT_TIMELINE_CHANGED, Player.EVENT_MEDIA_ITEM_TRANSITION, Player.EVENT_IS_PLAYING_CHANGED,
@@ -273,14 +313,46 @@ class PlaybackService : MediaLibraryService() {
         if (player.mediaItemCount == 0 || player.hasNextMediaItem() || player.repeatMode != Player.REPEAT_MODE_OFF) return
         if (c.settings.state.value.whenQueueEnds == QueueEnd.STOP) return
         val item = player.currentMediaItem ?: return
-        if (continuedAfter == item.mediaId) return
-        continuedAfter = item.mediaId
+        // The entry, not the song: the same song played again in a new queue gets its continuation too.
+        val entry = player.currentTimeline.getWindow(player.currentMediaItemIndex, Timeline.Window()).uid
+        if (continuedAfter == entry) return
+        continuedAfter = entry
         val last = item.toQueueSong() ?: return
         val played = (0 until player.mediaItemCount).mapNotNull { player.getMediaItemAt(it).toQueueSong() }.map(QueueContinuation::key).toSet()
         scope.launch {
             val more = runCatching { c.continuation.next(last, played) }.getOrDefault(emptyList())
             if (more.isEmpty() || player.hasNextMediaItem()) return@launch
-            player.addMediaItems(more.map { c.mediaItems.song(it) })
+            // Right after the song playing, which is the last to play, shuffled or not.
+            player.addMediaItems(player.currentMediaItemIndex + 1, more.map { c.mediaItems.song(it) })
+        }
+    }
+
+    /**
+     * After a network error (a tunnel, a dead zone) while the music should play: while offline it skips
+     * to the next song that plays without a connection, otherwise it waits for one and carries on.
+     */
+    private fun recover(error: PlaybackException) {
+        val online = c.network.online.value
+        // Offline, any reading error is down to that (a YouTube Music song can't be looked up, say).
+        val lostConnection = error.errorCode in CONNECTION_ERRORS || (!online && error.errorCode in IO_ERRORS)
+        if (!lostConnection || !player.playWhenReady || recoveries >= MAX_RECOVERIES) return
+        recoveries++
+        recoverJob?.cancel()
+        recoverJob = scope.launch {
+            if (!online) {
+                val upcoming = CacheAhead.upcoming(player.currentTimeline, player.currentMediaItemIndex, player.repeatMode, player.shuffleModeEnabled, player.mediaItemCount)
+                val uris = upcoming.map { player.getMediaItemAt(it).localConfiguration?.uri }
+                val offline = withContext(Dispatchers.IO) { uris.indexOfFirst { it != null && c.media.playsOffline(it) } }
+                if (offline >= 0 && player.playerError != null) {
+                    player.seekToDefaultPosition(upcoming[offline])
+                    player.prepare()
+                    c.messages.show("Offline: skipped to a song that plays without a connection")
+                    return@launch
+                }
+                c.network.online.first { it }
+            }
+            delay(RECOVER_DELAY_MS * recoveries)
+            if (player.playerError != null) player.prepare()
         }
     }
 
@@ -291,7 +363,12 @@ class PlaybackService : MediaLibraryService() {
             runCatching {
                 c.likes.set(entry, !liked)
                 if (!liked) c.undislike(entry.song)
-            }.onFailure { c.messages.show(it.userMessage()) }
+            }.onFailure {
+                val message = it.userMessage()
+                c.messages.show(message)
+                // The car shows it for a moment too.
+                session.sendError(SessionError(SessionError.ERROR_UNKNOWN, message))
+            }
         }
     }
 
@@ -312,7 +389,14 @@ class PlaybackService : MediaLibraryService() {
         saveJob = scope.launch {
             delay(1_000)
             while (isActive) {
-                c.queueStore.save(c.queueStore.snapshot(player))
+                try {
+                    c.queueStore.save(c.queueStore.snapshot(player))
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // Storage full, say: it's saved next time.
+                    Log.w(TAG, "Couldn't save the queue", e)
+                }
                 if (!player.isPlaying) break
                 delay(15_000)
             }
@@ -449,7 +533,16 @@ class PlaybackService : MediaLibraryService() {
             startIndex: Int,
             startPositionMs: Long,
         ): ListenableFuture<MediaItemsWithStartPosition> = scope.future {
-            tree.resolveForPlayback(mediaItems, startIndex, startPositionMs)
+            try {
+                // A song picked in the car plays its album or playlist; the app sends whole queues itself.
+                tree.resolveForPlayback(mediaItems, startIndex, startPositionMs, expandSongs = controller.packageName != packageName)
+            } catch (e: NoSuchElementException) {
+                // A voice search found nothing: say so (the car too), and what was playing carries on.
+                val message = e.message ?: "Nothing found"
+                c.messages.show(message)
+                session.sendError(SessionError(SessionError.ERROR_BAD_VALUE, message))
+                throw e
+            }
         }
 
         override fun onPlaybackResumption(
@@ -466,6 +559,14 @@ class PlaybackService : MediaLibraryService() {
         private const val TAG = "PlaybackService"
         /** How many of the next songs are checked for a library file to play instead. */
         private const val UPGRADE_AHEAD = 3
+        private val CONNECTION_ERRORS = setOf(
+            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
+        )
+        /** PlaybackException's codes for errors reading the media. */
+        private val IO_ERRORS = 2000..2999
+        private const val MAX_RECOVERIES = 10
+        private const val RECOVER_DELAY_MS = 2_000L
         const val CMD_TOGGLE_STAR = "io.github.deadeyebarb.tonearm.TOGGLE_STAR"
         /** Subsonic codes meaning the login is wrong or not accepted. */
         private val AUTH_ERRORS = setOf(40, 41, 42, 43, 44)

@@ -12,14 +12,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.palette.graphics.Palette
+import coil3.request.ImageRequest
 import coil3.request.SuccessResult
 import coil3.request.allowHardware
 import coil3.toBitmap
 import io.github.deadeyebarb.tonearm.container
+import io.github.deadeyebarb.tonearm.local.LocalMusic
 import io.github.deadeyebarb.tonearm.playback.PlayerUiState
 import io.github.deadeyebarb.tonearm.ui.common.CoverSize
 import io.github.deadeyebarb.tonearm.ui.common.coverCacheKey
 import io.github.deadeyebarb.tonearm.ui.common.coverRequest
+import io.github.deadeyebarb.tonearm.youtube.YouTubeMusic
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -44,13 +47,18 @@ fun rememberArtworkColor(serverId: String?, coverId: String?): Color? {
     val c = context.container
     var color by remember(serverId, coverId) { mutableStateOf<Color?>(null) }
     LaunchedEffect(serverId, coverId) {
-        val session = serverId?.let(c.sessions::cached) ?: return@LaunchedEffect
-        if (coverId == null) return@LaunchedEffect
-        val request = coverRequest(context, session, coverId, CoverSize.THUMB).newBuilder()
-            .allowHardware(false)
-            .memoryCacheKey(coverCacheKey(session.id, coverId, CoverSize.THUMB) + ":sw")
-            .build()
-        val result = c.imageLoader.execute(request) as? SuccessResult ?: return@LaunchedEffect
+        if (serverId == null || coverId == null) return@LaunchedEffect
+        // The same covers CoverArt shows: YouTube Music's are URLs, the phone's come from its media library.
+        val request = when {
+            YouTubeMusic.isYouTube(serverId) -> ImageRequest.Builder(context).data(coverId)
+            LocalMusic.isLocal(serverId) -> ImageRequest.Builder(context).data(c.mediaItems.artworkUri(LocalMusic.SOURCE_ID, coverId))
+            else -> {
+                val session = c.sessions.cached(serverId) ?: return@LaunchedEffect
+                coverRequest(context, session, coverId, CoverSize.THUMB).newBuilder()
+                    .memoryCacheKey(coverCacheKey(session.id, coverId, CoverSize.THUMB) + ":sw")
+            }
+        }
+        val result = c.imageLoader.execute(request.allowHardware(false).build()) as? SuccessResult ?: return@LaunchedEffect
         color = withContext(Dispatchers.Default) {
             var bitmap = result.image.toBitmap()
             if (bitmap.config == Bitmap.Config.HARDWARE) bitmap = bitmap.copy(Bitmap.Config.ARGB_8888, false)

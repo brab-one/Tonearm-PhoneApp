@@ -21,7 +21,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
@@ -56,6 +55,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleStartEffect
 import io.github.deadeyebarb.tonearm.container
 import io.github.deadeyebarb.tonearm.playback.SpectrumAnalyzer
 import io.github.deadeyebarb.tonearm.ui.common.CoverArt
@@ -85,9 +85,11 @@ fun rememberVisualizerState(playing: Boolean, enabled: Boolean): VisualizerState
     val analyzer = LocalContext.current.container.spectrum
     val state = remember { VisualizerState() }
     if (enabled) {
-        DisposableEffect(Unit) {
+        // Only while the app is on screen: a stopped activity keeps its composition, and the analyzer
+        // would run its FFTs for the whole time the screen is off.
+        LifecycleStartEffect(Unit) {
             analyzer.watch()
-            onDispose { analyzer.unwatch() }
+            onStopOrDispose { analyzer.unwatch() }
         }
     }
     LaunchedEffect(playing, enabled) {
