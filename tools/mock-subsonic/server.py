@@ -895,7 +895,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json({"randomSongs": {"song": [self.lib.song(s) for s in songs[:int(one("size", 10))]]}})
 
     def api_getSimilarSongs2(self, q, one):
-        self.api_getRandomSongs(q, one)
+        # Like Navidrome: other songs, under similarSongs2 (random here, the seed left out).
+        songs = [s for s in self.lib.songs.values() if s["id"] != one("id")]
+        random.shuffle(songs)
+        self.send_json({"similarSongs2": {"song": [self.lib.song(s) for s in songs[:int(one("count", 50))]]}})
 
     def api_getGenres(self, q, one):
         genres = {}
