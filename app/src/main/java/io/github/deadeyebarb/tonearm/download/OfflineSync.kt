@@ -142,8 +142,23 @@ class OfflineSync(private val c: AppContainer) {
         if (ours.isEmpty()) s else s.copy(kept = s.kept - ours.toSet(), skipped = s.skipped + ours)
     }
 
-    /** Every download was removed. */
-    fun cleared() = update { it.copy(kept = emptySet()) }
+    /**
+     * Every download was removed, kept ones too: Keep offline goes off, or its next night would download them all again.
+     * Turning it on again brings them back.
+     */
+    fun cleared() {
+        c.scope.launch {
+            var hadKept = false
+            store.updateData {
+                hadKept = it.kept.isNotEmpty()
+                it.copy(kept = emptySet())
+            }
+            if (!hadKept || !c.settings.current().keepOffline) return@launch
+            c.settings.update { it.copy(keepOffline = false) }
+            OfflineSyncWorker.schedule(c.app, false)
+            c.messages.show("Keep offline is off now, so the kept songs don't come back tonight")
+        }
+    }
 
     /**
      * A kept download is being swapped for a better file with another id: the new one is kept too. The old one stays

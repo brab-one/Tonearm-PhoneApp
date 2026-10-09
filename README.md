@@ -125,8 +125,8 @@ Related repositories:
   to the FLAC Lidarr downloaded, and a song whose file was upgraded isn't served from the old cached copy
 - **Keep offline** (Settings → Downloads): every night on Wi-Fi while charging, the newest weekly picks and your
   liked songs (newest first) are downloaded into the space you give them (4 GB by default), and the ones that left
-  those lists are removed. Your own downloads are never touched; a kept song you remove stays off. Kept songs play
-  in the car's Downloads tab
+  those lists are removed. Your own downloads are never touched; a kept song you remove stays off, and deleting
+  all downloads turns Keep offline off. Kept songs play in the car's Downloads tab
 - 2 GB streaming cache (configurable) so replays don't hit the network
 - Cache ahead: the next 3 songs of the queue (configurable up to the whole queue, shuffle-aware) are cached
   while one plays, so skips are instant and a dead spot in the car doesn't stop the music
