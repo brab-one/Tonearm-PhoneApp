@@ -16,13 +16,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.automirrored.rounded.ArrowForward
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -31,18 +26,23 @@ import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -72,11 +72,11 @@ import io.github.deadeyebarb.tonearm.ui.theme.HudLoader
 import io.github.deadeyebarb.tonearm.ui.theme.HudTag
 import io.github.deadeyebarb.tonearm.ui.theme.Orbitron
 import io.github.deadeyebarb.tonearm.ui.theme.glow
+import java.io.IOException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.io.IOException
 
 sealed interface MixState {
     /** Asking; [ai] once the server's AI is known to be working on it, since [since] (elapsed realtime). */
@@ -106,7 +106,10 @@ class MixViewModel(private val c: AppContainer, private val prompt: String?, pri
             state = try {
                 val session = c.sessions.awaitActive()
                 val mix = if (prompt != null) {
-                    c.mixer.prompt(session, prompt, refresh) { if ((state as? MixState.Waiting)?.ai == false) state = MixState.Waiting(SystemClock.elapsedRealtime(), ai = true) }
+                    c.mixer.prompt(session, prompt, refresh) {
+                        // The server's AI is on it: say so, and count from now.
+                        if ((state as? MixState.Waiting)?.ai == false) state = MixState.Waiting(SystemClock.elapsedRealtime(), ai = true)
+                    }
                 } else {
                     val daily = c.mixer.daily(session) ?: throw IOException("Daily mixes come from the Tonearm server (1.7 or later)")
                     daily.mixes.firstOrNull { it.id == dailyId } ?: throw IOException("This mix was replaced by today's")
