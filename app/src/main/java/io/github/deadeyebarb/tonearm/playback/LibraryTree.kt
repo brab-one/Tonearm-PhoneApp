@@ -10,14 +10,18 @@ import androidx.media3.session.MediaConstants
 import androidx.media3.session.MediaSession.MediaItemsWithStartPosition
 import io.github.deadeyebarb.tonearm.AppContainer
 import io.github.deadeyebarb.tonearm.R
+import io.github.deadeyebarb.tonearm.connect.DailyMixes
 import io.github.deadeyebarb.tonearm.download.DownloadRepository
 import io.github.deadeyebarb.tonearm.media.MediaIds
 import io.github.deadeyebarb.tonearm.media.QueueSong
 import io.github.deadeyebarb.tonearm.media.SongExtras
 import io.github.deadeyebarb.tonearm.media.SongUri
 import io.github.deadeyebarb.tonearm.subsonic.AlbumListType
+import io.github.deadeyebarb.tonearm.subsonic.ServerSession
 import io.github.deadeyebarb.tonearm.subsonic.Song
 import io.github.deadeyebarb.tonearm.youtube.YouTubeMusic
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
@@ -27,9 +31,15 @@ import kotlinx.coroutines.withTimeoutOrNull
  * Android Auto shows up to four browsable root children as tabs, so the root is
  * Home / Library / Favorites / Downloads. Folders of albums ask for a grid, songs for a list.
  */
-class LibraryTree(private val c: AppContainer) {
+class LibraryTree(
+    private val c: AppContainer,
+    /** Home has more to show than when it was last asked for (daily mixes that took a while). */
+    private val onHomeChanged: () -> Unit = {},
+) {
     private val factory get() = c.mediaItems
     private val api get() = c.api
+    /** Today's daily mixes: for which server, since when, and the answer (or the ask still under way). */
+    @Volatile private var daily: Triple<String, Long, Deferred<DailyMixes?>>? = null
 
     fun root(): MediaItem = factory.folder(MediaIds.ROOT, "Tonearm")
 
@@ -89,7 +99,7 @@ class LibraryTree(private val c: AppContainer) {
                         mediaType = MediaMetadata.MEDIA_TYPE_PLAYLIST, playable = true, browsable = false,
                     )
                 },
-            ) + listOf(
+            ) + dailyMixItems(session) + listOf(
                 albumFolder(MediaIds.NEWEST, "Recently added", R.drawable.ic_car_new),
                 albumFolder(MediaIds.RECENT, "Recently played", R.drawable.ic_car_history),
                 albumFolder(MediaIds.FREQUENT, "Most played", R.drawable.ic_car_trending),
@@ -131,6 +141,33 @@ class LibraryTree(private val c: AppContainer) {
         }
     }
 
+    /**
+     * Today's daily mixes as playable items, when the Tonearm server makes them. Home doesn't wait for mixes still being
+     * made: they show when it's reloaded once they're there.
+     */
+    private suspend fun dailyMixItems(session: ServerSession): List<MediaItem> {
+        if (c.tonearmServer.server.value?.dailyMixes != true) return emptyList()
+        val answer = dailyMixes(session)
+        val mixes = withTimeoutOrNull(DAILY_WAIT_MS) { answer.await() }
+        if (mixes == null && answer.isActive) answer.invokeOnCompletion { onHomeChanged() }
+        return mixes?.mixes.orEmpty().filter { it.songs.isNotEmpty() }.map { mix ->
+            factory.folder(
+                MediaIds.dailyMix(session.id, mix.id), mix.title, mix.subtitle,
+                artwork = mix.songs.firstNotNullOfOrNull { it.coverArt }?.let { factory.artworkUri(session.id, it) } ?: icon(R.drawable.ic_car_explore),
+                mediaType = MediaMetadata.MEDIA_TYPE_PLAYLIST, playable = true, browsable = false,
+            )
+        }
+    }
+
+    /** Today's daily mixes from the Tonearm server, asked for at most once a minute. */
+    private fun dailyMixes(session: ServerSession): Deferred<DailyMixes?> {
+        val now = System.currentTimeMillis()
+        daily?.let { (server, at, answer) -> if (server == session.id && (answer.isActive || now - at < DAILY_CACHE_MS)) return answer }
+        val answer = c.scope.async { runCatching { c.mixer.daily(session) }.getOrNull() }
+        daily = Triple(session.id, now, answer)
+        return answer
+    }
+
     /** All songs in a container media ID, in play order. */
     suspend fun songsOf(containerId: String): List<QueueSong> {
         when (containerId) {
@@ -170,6 +207,7 @@ class LibraryTree(private val c: AppContainer) {
             MediaIds.ALBUM -> api.album(parsed.id!!, session).song
             MediaIds.PLAYLIST -> api.playlist(parsed.id!!, session).entry
             MediaIds.GENRE -> api.songsByGenre(parsed.id!!, 500, session = session)
+            MediaIds.DAILY_MIX -> dailyMixes(session).await()?.mixes?.firstOrNull { it.id == parsed.id }?.songs.orEmpty()
             else -> emptyList()
         }.map { QueueSong(serverId, it) }
     }
@@ -220,7 +258,7 @@ class LibraryTree(private val c: AppContainer) {
                 item.mediaId == MediaIds.MIX -> MediaIds.MIX
                 item.mediaId == MediaIds.HISTORY_MIX -> MediaIds.HISTORY_MIX
                 item.mediaId == MediaIds.DAILY -> MediaIds.DAILY
-                parsed.type == MediaIds.ALBUM || parsed.type == MediaIds.PLAYLIST || parsed.type == MediaIds.GENRE -> item.mediaId
+                parsed.type in CONTAINERS -> item.mediaId
                 parsed.type == MediaIds.SONG && parsed.context != null && expandSongs -> parsed.context
                 else -> null
             }
@@ -268,5 +306,10 @@ class LibraryTree(private val c: AppContainer) {
     private companion object {
         /** MediaBrowserCompat's root hint that makes Android Auto show its search button. */
         const val SEARCH_SUPPORTED = "android.media.browse.SEARCH_SUPPORTED"
+        /** Media ID types that play as a whole, from the song picked. */
+        val CONTAINERS = setOf(MediaIds.ALBUM, MediaIds.PLAYLIST, MediaIds.GENRE, MediaIds.DAILY_MIX)
+        /** How long Home waits for the daily mixes. */
+        const val DAILY_WAIT_MS = 3_000L
+        const val DAILY_CACHE_MS = 60_000L
     }
 }

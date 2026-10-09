@@ -139,7 +139,7 @@ class PlaybackService : MediaLibraryService() {
         // Shuffle plays the whole queue from the song picked, and songs added keep their place.
         player.setShuffleOrder(QueueShuffleOrder())
 
-        tree = LibraryTree(c)
+        tree = LibraryTree(c, onHomeChanged = { scope.launch { session.notifyChildrenChanged(MediaIds.HOME, Int.MAX_VALUE, null) } })
         gate = HandoffGatePlayer(player)
         session = MediaLibrarySession.Builder(this, gate, Callback())
             .setSessionActivity(

@@ -17,6 +17,16 @@ class MediaIdsTest {
     }
 
     @Test
+    fun `daily mix ids round-trip, also as a song's context`() {
+        val id = MediaIds.dailyMix("srv", "daily-2026-10-09-1")
+        val parsed = MediaIds.parse(id)
+        assertEquals(MediaIds.DAILY_MIX, parsed.type)
+        assertEquals("srv", parsed.serverId)
+        assertEquals("daily-2026-10-09-1", parsed.id)
+        assertEquals(id, MediaIds.parse(MediaIds.song("srv", "al1-2", id)).context)
+    }
+
+    @Test
     fun `root containers parse as their own type`() {
         assertEquals(MediaIds.STARRED, MediaIds.parse(MediaIds.STARRED).type)
     }

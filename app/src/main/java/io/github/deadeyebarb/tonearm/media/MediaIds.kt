@@ -32,6 +32,8 @@ object MediaIds {
     const val PLAYLIST = "playlist"
     const val ARTIST = "artist"
     const val GENRE = "genre"
+    /** One of today's daily mixes from the Tonearm server. */
+    const val DAILY_MIX = "daily_mix"
 
     data class Parsed(val type: String, val serverId: String? = null, val id: String? = null, val context: String? = null)
 
@@ -40,6 +42,7 @@ object MediaIds {
     fun playlist(serverId: String, playlistId: String) = join(PLAYLIST, serverId, playlistId)
     fun artist(serverId: String, artistId: String) = join(ARTIST, serverId, artistId)
     fun genre(serverId: String, name: String) = join(GENRE, serverId, name)
+    fun dailyMix(serverId: String, mixId: String) = join(DAILY_MIX, serverId, mixId)
 
     fun parse(mediaId: String): Parsed {
         val parts = mediaId.split('/').map { URLDecoder.decode(it, "UTF-8") }
