@@ -142,7 +142,8 @@ fun HomeScreen() {
             HomeHeader(
                 serverName = session?.config?.name,
                 mtls = session?.config?.clientCert != null,
-                online = online && vm.state !is Load.Failed,
+                // Down too while a refresh that failed leaves the last content up.
+                online = online && vm.state !is Load.Failed && vm.stale == null,
                 history = server?.stats == true,
                 onSettings = { actions.navigate(SettingsRoute) },
             )
