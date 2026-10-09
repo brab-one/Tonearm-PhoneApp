@@ -101,7 +101,8 @@ class DailyDiscovery(
         val fresh = stored != null && stored.date == today && stored.serverId == session.id && stored.songs.isNotEmpty()
         if (!force && fresh) return stored!!
         val mix = generate(session, today, previous = stored?.takeIf { it.serverId == session.id })
-        store.updateData { DailyState(mix) }
+        // Only the mix: keeping it on the server stays as it is (generate turns it off when the playlist was deleted).
+        store.updateData { it.copy(mix = mix) }
         mix
     }
 
@@ -170,7 +171,7 @@ class DailyDiscovery(
         val ids = songs.map { it.id }
         val id = existingId?.takeIf { id -> runCatching { api.playlist(id, session) }.isSuccess }?.also { api.replacePlaylist(it, ids, session) }
             ?: api.createPlaylist(PLAYLIST_NAME, ids, session)?.id
-            ?: api.playlists(session).firstOrNull { it.name == PLAYLIST_NAME }?.id
+            ?: api.playlists(session).firstOrNull { it.name == PLAYLIST_NAME && it.ownedBy(session.user) }?.id
         id?.let { runCatching { api.setPlaylistComment(it, "Tonearm: recommendations for $today, from what you play", session) } }
         return id
     }
