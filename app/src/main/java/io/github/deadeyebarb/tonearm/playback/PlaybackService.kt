@@ -520,6 +520,7 @@ class PlaybackService : MediaLibraryService() {
      * once the saved queue is back. A problem is shown on the phone and, for a moment, in the car.
      */
     private suspend fun startRadio(seed: String?, play: Boolean): SessionResult {
+        carHandoff.picked()
         restoreJob.join()
         val from = if (seed == PlaybackCommands.SEED_PICKS) RadioSeed(RadioSeed.PICKS) else RadioQueue.seedOf(player.currentMediaItem?.toQueueSong())
         val problem = radio.start(from, play).await() ?: return SessionResult(SessionResult.RESULT_SUCCESS)
@@ -534,6 +535,7 @@ class PlaybackService : MediaLibraryService() {
      * nothing is found (or the server can't be asked) it says so, and the queue stays as it was, paused or playing.
      */
     private suspend fun playFromSearch(query: String): SessionResult {
+        carHandoff.picked()
         val search = MediaItem.Builder().setRequestMetadata(MediaItem.RequestMetadata.Builder().setSearchQuery(query).build()).build()
         val found = try {
             tree.resolveForPlayback(listOf(search), 0, C.TIME_UNSET)
@@ -724,7 +726,10 @@ class PlaybackService : MediaLibraryService() {
             mediaSession: MediaSession,
             controller: MediaSession.ControllerInfo,
             mediaItems: MutableList<MediaItem>,
-        ): ListenableFuture<MutableList<MediaItem>> = scope.future { tree.resolve(mediaItems).toMutableList() }
+        ): ListenableFuture<MutableList<MediaItem>> {
+            carHandoff.picked()
+            return scope.future { tree.resolve(mediaItems).toMutableList() }
+        }
 
         override fun onSetMediaItems(
             mediaSession: MediaSession,
@@ -732,19 +737,22 @@ class PlaybackService : MediaLibraryService() {
             mediaItems: MutableList<MediaItem>,
             startIndex: Int,
             startPositionMs: Long,
-        ): ListenableFuture<MediaItemsWithStartPosition> = scope.future {
-            try {
-                // A song picked in the car plays its album or playlist; the app sends whole queues itself.
-                tree.resolveForPlayback(mediaItems, startIndex, startPositionMs, expandSongs = controller.packageName != packageName)
-                    // A new queue: the radio playing doesn't go on with it.
-                    .also { radio.stop() }
-            } catch (e: NoSuchElementException) {
-                // Nothing to play (a voice search found nothing, a mix couldn't be had): say so (the car too), and what was
-                // playing carries on.
-                val message = e.message ?: "Nothing found"
-                c.messages.show(message)
-                session.sendError(SessionError(SessionError.ERROR_BAD_VALUE, message))
-                throw e
+        ): ListenableFuture<MediaItemsWithStartPosition> {
+            carHandoff.picked()
+            return scope.future {
+                try {
+                    // A song picked in the car plays its album or playlist; the app sends whole queues itself.
+                    tree.resolveForPlayback(mediaItems, startIndex, startPositionMs, expandSongs = controller.packageName != packageName)
+                        // A new queue: the radio playing doesn't go on with it.
+                        .also { radio.stop() }
+                } catch (e: NoSuchElementException) {
+                    // Nothing to play (a voice search found nothing, a mix couldn't be had): say so (the car too), and
+                    // what was playing carries on.
+                    val message = e.message ?: "Nothing found"
+                    c.messages.show(message)
+                    session.sendError(SessionError(SessionError.ERROR_BAD_VALUE, message))
+                    throw e
+                }
             }
         }
 

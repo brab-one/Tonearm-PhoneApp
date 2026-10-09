@@ -3,7 +3,6 @@ package io.github.deadeyebarb.tonearm.playback
 import android.util.Log
 import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.Player
-import androidx.media3.common.Timeline
 import androidx.media3.session.MediaSession
 import io.github.deadeyebarb.tonearm.AppContainer
 import io.github.deadeyebarb.tonearm.connect.ConnectCommand
@@ -72,8 +71,8 @@ class CarHandoff(
     /** When the last car controller went away; 0 before any came. */
     private var carLeftAt = 0L
     private var decision: Job? = null
-    /** Queue replacements since the service started, to see the user picked something during the lookup. */
-    private var queueChanges = 0
+    /** How often something was picked since the service started ([picked]), to see the user chose something during the lookup. */
+    private var picks = 0
     /** The device to pause once this phone plays. */
     private var pauseOnPlay: String? = null
 
@@ -88,9 +87,10 @@ class CarHandoff(
         // Without the setting, a connection or a server that keeps where devices left off, nothing waits.
         if (!c.settings.state.value.continueFromDesktop || !c.network.online.value || resume == false || player.playWhenReady) return
         gate.hold = true
+        val picked = picks
         decision = scope.launch {
             try {
-                takeOver()
+                takeOver(picked)
             } finally {
                 // The play asked for meanwhile, unless the service is going away.
                 if (gate.endHold() && isActive) {
@@ -112,8 +112,12 @@ class CarHandoff(
         decision?.join()
     }
 
-    override fun onTimelineChanged(timeline: Timeline, reason: Int) {
-        if (reason == Player.TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED) queueChanges++
+    /**
+     * Something to play was picked in the car or on the phone (a queue, songs added, a radio, a voice search): it wins
+     * over the desktop's queue. The app's own changes to the queue (the saved one put back, a radio's next songs) don't count.
+     */
+    fun picked() {
+        picks++
     }
 
     override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -125,7 +129,8 @@ class CarHandoff(
         }
     }
 
-    private suspend fun takeOver() {
+    /** Takes the desktop's queue over, unless something was picked since the car connected (when there had been [picked]). */
+    private suspend fun takeOver(picked: Int) {
         // Right after a cold start the settings' state may not be loaded yet.
         if (!c.settings.current().continueFromDesktop) return
         val session = c.sessions.active.value ?: runCatching { c.sessions.awaitActive() }.getOrNull() ?: return
@@ -133,7 +138,6 @@ class CarHandoff(
         // Tonearm server that keeps where devices left off, and then there's nothing to wait for.
         if (c.knownServers.resume(session) == false) return
         restored()
-        val changes = queueChanges
         val handoff = withTimeoutOrNull(LOOKUP_MS) {
             try {
                 c.connect.resume()
@@ -146,7 +150,7 @@ class CarHandoff(
         } ?: return
         val plan = planOf(handoff, session.config.baseUrl) ?: return
         // Something was picked in the car or on the phone meanwhile: that wins.
-        if (queueChanges != changes || player.playWhenReady) return
+        if (picks != picked || player.playWhenReady) return
         Log.i(TAG, "Continuing from ${handoff.name}: ${plan.queue.size} songs")
         beforeTakeOver()
         player.setMediaItems(plan.queue.map { c.mediaItems.song(it.toQueueSong(session.id)) }, plan.index, plan.positionMs)
