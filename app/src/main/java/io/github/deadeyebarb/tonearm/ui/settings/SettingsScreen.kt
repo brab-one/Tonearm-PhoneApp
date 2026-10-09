@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Dns
-import androidx.compose.material.icons.rounded.Equalizer
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
@@ -210,7 +209,8 @@ fun SettingsScreen() {
                 item { PreampSlider(settings.replayGainPreampDb) { db -> update { it.copy(replayGainPreampDb = db) } } }
             }
             item {
-                Item("Equalizer", if (settings.equalizer.enabled) "On" else "Off", icon = { Icon(Icons.Rounded.Equalizer, null) }) {
+                // No icon, so its text lines up with the other playback rows.
+                Item("Equalizer", if (settings.equalizer.enabled) "On" else "Off") {
                     actions.navigate(EqualizerRoute)
                 }
             }
