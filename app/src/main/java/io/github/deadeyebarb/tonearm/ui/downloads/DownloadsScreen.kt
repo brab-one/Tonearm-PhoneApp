@@ -20,6 +20,7 @@ import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.DownloadForOffline
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
@@ -48,6 +49,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.exoplayer.offline.Download
 import io.github.deadeyebarb.tonearm.container
 import io.github.deadeyebarb.tonearm.download.DownloadEntry
+import io.github.deadeyebarb.tonearm.download.DownloadRepository
 import io.github.deadeyebarb.tonearm.ui.common.ActionMenu
 import io.github.deadeyebarb.tonearm.ui.common.CoverArt
 import io.github.deadeyebarb.tonearm.ui.common.CoverSize
@@ -66,10 +68,10 @@ fun DownloadsScreen() {
     val entries by c.downloads.entries.collectAsStateWithLifecycle()
     val all = entries.values.toList()
     val pending = all.filterNot { it.completed }.sortedBy { it.item.song.title }
-    val done = all.filter { it.completed }.sortedWith(
-        compareBy({ it.item.song.album?.lowercase() }, { it.item.song.discNumber ?: 1 }, { it.item.song.track ?: 0 }, { it.item.song.title }),
-    )
+    val done = all.filter { it.completed }.sortedWith(compareBy(DownloadRepository.ALBUM_ORDER) { it.item })
     val albums = done.groupBy { it.item.serverId to (it.item.song.albumId ?: it.item.song.album.orEmpty()) }
+    // As listed, so a tap plays on through the album shown.
+    val listed = albums.values.flatten()
     val bytes = remember(done.size) { c.downloads.bytesUsed() }
     var menu by remember { mutableStateOf(false) }
     var confirmDeleteAll by remember { mutableStateOf(false) }
@@ -122,7 +124,7 @@ fun DownloadsScreen() {
                 items(songs, key = { "d:${it.id}" }) { entry ->
                     SongRow(
                         entry.item.song, serverId = entry.item.serverId, leading = SongLeading.TrackNumber, showAlbum = false,
-                        onClick = { actions.playEntries(done.map { it.item }, done.indexOf(entry)) },
+                        onClick = { actions.playEntries(listed.map { it.item }, listed.indexOf(entry)) },
                     )
                 }
             }
@@ -158,7 +160,7 @@ private fun PendingRow(entry: DownloadEntry) {
             Column {
                 Text(
                     when {
-                        entry.failed -> "Failed — tap × and download again"
+                        entry.failed -> "Download failed"
                         waitingForNetwork -> "Waiting for Wi-Fi"
                         entry.state == Download.STATE_QUEUED -> "Queued"
                         else -> "${entry.percent.toInt()}% · ${formatBytes(entry.bytes)}"
@@ -172,7 +174,10 @@ private fun PendingRow(entry: DownloadEntry) {
             }
         },
         trailingContent = {
-            IconButton(onClick = { actions.removeDownloads(listOf(entry.item)) }) { Icon(Icons.Rounded.Close, "Cancel") }
+            Row {
+                if (entry.failed) IconButton(onClick = { actions.download(listOf(entry.item)) }) { Icon(Icons.Rounded.Refresh, "Try again") }
+                IconButton(onClick = { actions.removeDownloads(listOf(entry.item)) }) { Icon(Icons.Rounded.Close, if (entry.failed) "Remove" else "Cancel") }
+            }
         },
     )
 }

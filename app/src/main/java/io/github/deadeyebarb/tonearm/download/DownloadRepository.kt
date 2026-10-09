@@ -11,6 +11,7 @@ import io.github.deadeyebarb.tonearm.data.SettingsRepository
 import io.github.deadeyebarb.tonearm.media.MediaEngine
 import io.github.deadeyebarb.tonearm.media.QueueSong
 import io.github.deadeyebarb.tonearm.media.SongUri
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -22,6 +23,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.util.concurrent.ConcurrentHashMap
@@ -69,6 +71,7 @@ class DownloadRepository(
     /** Downloads to start again once their old copy is gone (the same song id with a better file). */
     private val readd = ConcurrentHashMap<String, QueueSong>()
     private val loaded = CountDownLatch(1)
+    private val listed = CompletableDeferred<Unit>()
     private var progressJob: Job? = null
 
     init {
@@ -89,12 +92,17 @@ class DownloadRepository(
             }
         })
         scope.launch(Dispatchers.IO) {
-            val all = mutableListOf<Download>()
-            manager.downloadIndex.getDownloads().use { cursor ->
-                while (cursor.moveToNext()) all += cursor.download
+            try {
+                val all = mutableListOf<Download>()
+                manager.downloadIndex.getDownloads().use { cursor ->
+                    while (cursor.moveToNext()) all += cursor.download
+                }
+                withContext(Dispatchers.Main) { all.forEach(::put) }
+            } finally {
+                // Even when the index can't be read, nobody waits for it forever.
+                listed.complete(Unit)
+                loaded.countDown()
             }
-            withContext(Dispatchers.Main) { all.forEach(::put) }
-            loaded.countDown()
         }
         scope.launch(Dispatchers.Main) {
             settings.state.map { it.downloadOnWifiOnly }.distinctUntilChanged().collect { wifiOnly ->
@@ -109,6 +117,11 @@ class DownloadRepository(
 
     fun stateOf(serverId: String, songId: String): DownloadEntry? = _entries.value[key(serverId, songId)]
 
+    /** Waits (half a minute at most) until the downloads made before are in [entries]; right after creation they aren't yet. */
+    suspend fun awaitListed() {
+        withTimeoutOrNull(30_000) { listed.await() }
+    }
+
     fun download(items: List<QueueSong>) {
         for (item in items) {
             val id = key(item.serverId, item.song.id)
@@ -118,7 +131,7 @@ class DownloadRepository(
                 .setCustomCacheKey(engine.downloadKey(item.serverId, item.song.id))
                 .setData(json.encodeToString(DownloadMeta.serializer(), DownloadMeta(item.serverId, item.song)).encodeToByteArray())
                 .build()
-            DownloadService.sendAddDownload(context, TonearmDownloadService::class.java, request, false)
+            send({ DownloadService.sendAddDownload(context, TonearmDownloadService::class.java, request, false) }) { manager.addDownload(request) }
         }
     }
 
@@ -138,11 +151,24 @@ class DownloadRepository(
     }
 
     fun remove(ids: Collection<String>) {
-        for (id in ids) DownloadService.sendRemoveDownload(context, TonearmDownloadService::class.java, id, false)
+        for (id in ids) send({ DownloadService.sendRemoveDownload(context, TonearmDownloadService::class.java, id, false) }) { manager.removeDownload(id) }
     }
 
     fun removeAll() {
-        DownloadService.sendRemoveAllDownloads(context, TonearmDownloadService::class.java, false)
+        send({ DownloadService.sendRemoveAllDownloads(context, TonearmDownloadService::class.java, false) }) { manager.removeAllDownloads() }
+    }
+
+    /**
+     * Through the download service, which keeps downloads going in the background. Android doesn't let an
+     * app in the background (the upgrade worker) start it: then the manager takes the change [direct]ly,
+     * keeps it in its index and carries it out while the app runs. Main thread.
+     */
+    private fun send(viaService: () -> Unit, direct: () -> Unit) {
+        try {
+            viaService()
+        } catch (_: IllegalStateException) {
+            direct()
+        }
     }
 
     fun bytesUsed(): Long = engine.downloadCache.cacheSpace
@@ -177,5 +203,11 @@ class DownloadRepository(
 
     companion object {
         const val CHANNEL_ID = "downloads"
+
+        /** By album (title, then which album), then disc and track: the order the Downloads screen lists them in. */
+        val ALBUM_ORDER: Comparator<QueueSong> = compareBy(
+            { it.song.album?.lowercase() }, { it.serverId }, { it.song.albumId ?: it.song.album.orEmpty() },
+            { it.song.discNumber ?: 1 }, { it.song.track ?: 0 }, { it.song.title },
+        )
     }
 }

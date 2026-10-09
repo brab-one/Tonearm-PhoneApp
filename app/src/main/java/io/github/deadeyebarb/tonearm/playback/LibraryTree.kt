@@ -10,6 +10,7 @@ import androidx.media3.session.MediaConstants
 import androidx.media3.session.MediaSession.MediaItemsWithStartPosition
 import io.github.deadeyebarb.tonearm.AppContainer
 import io.github.deadeyebarb.tonearm.R
+import io.github.deadeyebarb.tonearm.download.DownloadRepository
 import io.github.deadeyebarb.tonearm.media.MediaIds
 import io.github.deadeyebarb.tonearm.media.QueueSong
 import io.github.deadeyebarb.tonearm.media.SongExtras
@@ -156,7 +157,7 @@ class LibraryTree(private val c: AppContainer) {
                 return songs.ifEmpty { starred.getOrThrow() }
             }
             MediaIds.DOWNLOADS -> return c.downloads.entries.value.values.filter { it.completed }.map { it.item }
-                .sortedWith(compareBy({ it.song.album }, { it.song.discNumber }, { it.song.track }))
+                .sortedWith(DownloadRepository.ALBUM_ORDER)
         }
         val parsed = MediaIds.parse(containerId)
         val serverId = parsed.serverId ?: return emptyList()
