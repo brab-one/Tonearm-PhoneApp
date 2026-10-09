@@ -167,6 +167,8 @@ data class Playlist(
     val duration: Int = 0,
     val coverArt: String? = null,
     val changed: String? = null,
+    /** OpenSubsonic: this account can't change it (someone else's, or a smart playlist). */
+    val readonly: Boolean? = null,
     val entry: List<Song> = emptyList(),
 ) {
     /**

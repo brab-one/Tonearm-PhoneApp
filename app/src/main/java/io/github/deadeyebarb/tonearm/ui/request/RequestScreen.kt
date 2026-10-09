@@ -43,7 +43,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -56,8 +55,11 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil3.compose.AsyncImage
@@ -90,6 +92,9 @@ class RequestViewModel(private val c: AppContainer) : androidx.lifecycle.ViewMod
     /** Foreign IDs requested during this visit, so their buttons flip right away. */
     var requested by mutableStateOf(setOf<String>())
         private set
+    /** Foreign IDs being requested right now. */
+    var sending by mutableStateOf(setOf<String>())
+        private set
     private var job: Job? = null
     private var lastQuery = ""
 
@@ -117,6 +122,8 @@ class RequestViewModel(private val c: AppContainer) : androidx.lifecycle.ViewMod
     }
 
     fun request(candidate: LidarrCandidate) {
+        if (candidate.foreignId in sending) return
+        sending = sending + candidate.foreignId
         viewModelScope.launch {
             try {
                 c.integrations.request(candidate)
@@ -126,6 +133,8 @@ class RequestViewModel(private val c: AppContainer) : androidx.lifecycle.ViewMod
                 throw e
             } catch (e: Exception) {
                 c.messages.show(e.userMessage())
+            } finally {
+                sending = sending - candidate.foreignId
             }
         }
     }
@@ -186,13 +195,16 @@ fun RequestScreen(initialQuery: String) {
             when (val state = vm.results) {
                 null -> QueueSection(c)
                 Load.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { HudLoader(label = "QUERYING LIDARR") }
-                is Load.Failed -> ErrorState(state.error.userMessage(), onRetry = { vm.search(query, debounce = false) })
+                is Load.Failed -> ErrorState(state.error, onRetry = { vm.search(query, debounce = false) })
                 is Load.Ready -> if (state.value.isEmpty()) {
                     EmptyState(Icons.Rounded.Search, "Nothing found", "Lidarr found no artist or album for “${query.trim()}”.")
                 } else {
                     LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
                         items(state.value, key = { (if (it.isAlbum) "al:" else "ar:") + it.foreignId }) { candidate ->
-                            CandidateRow(candidate, requested = candidate.foreignId in vm.requested, onRequest = { vm.request(candidate) })
+                            CandidateRow(
+                                candidate, requested = candidate.foreignId in vm.requested, sending = candidate.foreignId in vm.sending,
+                                onRequest = { vm.request(candidate) },
+                            )
                         }
                     }
                 }
@@ -202,13 +214,16 @@ fun RequestScreen(initialQuery: String) {
 }
 
 @Composable
-fun CandidateRow(candidate: LidarrCandidate, requested: Boolean, stacked: Boolean = false, onRequest: () -> Unit) {
+fun CandidateRow(candidate: LidarrCandidate, requested: Boolean, sending: Boolean = false, stacked: Boolean = false, onRequest: () -> Unit) {
     val hud = Hud.colors
     var details by remember { mutableStateOf(false) }
+    // MORE only when the overview doesn't fit in its two lines.
+    var cut by remember { mutableStateOf(false) }
     val status = @Composable {
         when {
             candidate.inLidarr -> HudTag("IN LIDARR", color = hud.ok)
             requested -> HudTag("REQUESTED", color = hud.ok, filled = true)
+            sending -> HudButton("Requesting…", {}, filled = false, enabled = false)
             else -> HudButton("Request", onRequest, filled = false)
         }
     }
@@ -224,12 +239,14 @@ fun CandidateRow(candidate: LidarrCandidate, requested: Boolean, stacked: Boolea
             candidate.overview?.takeIf { it.isNotBlank() }?.let {
                 Text(
                     it, style = MaterialTheme.typography.bodySmall, color = hud.dim, maxLines = 2, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 2.dp),
+                    modifier = Modifier.padding(top = 2.dp), onTextLayout = { layout -> cut = layout.hasVisualOverflow },
                 )
-                Text(
-                    "MORE ›", style = MaterialTheme.typography.labelSmall, color = hud.accent,
-                    modifier = Modifier.clickable { details = true }.padding(vertical = 6.dp),
-                )
+                if (cut) {
+                    Text(
+                        "MORE ›", style = MaterialTheme.typography.labelSmall, color = hud.accent,
+                        modifier = Modifier.clickable(onClickLabel = "Read more") { details = true }.padding(vertical = 6.dp),
+                    )
+                }
             }
             if (stacked) {
                 Spacer(Modifier.height(6.dp))
@@ -277,18 +294,22 @@ private fun QueueSection(c: AppContainer) {
         value = runCatching { c.integrations.requireLidarr().let { (config, key) -> c.integrations.lidarr.wanted(config, key) } }
             .getOrNull()?.sortedByDescending { it.releaseDate.orEmpty() }
     }
-    // Poll Lidarr's queue while this screen is open.
-    val queue by produceState<Load<List<LidarrQueueItem>>>(Load.Loading) {
-        while (true) {
-            value = try {
-                val (config, key) = c.integrations.requireLidarr()
-                Load.Ready(c.integrations.lidarr.queue(config, key))
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Load.Failed(e)
+    // Poll Lidarr's queue while this screen is on screen.
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val queue by produceState<Load<List<LidarrQueueItem>>>(Load.Loading, lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                value = try {
+                    val (config, key) = c.integrations.requireLidarr()
+                    Load.Ready(c.integrations.lidarr.queue(config, key))
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // A bad moment keeps the list that's showing.
+                    if (value is Load.Ready) value else Load.Failed(e)
+                }
+                delay(5_000)
             }
-            delay(5_000)
         }
     }
     LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
@@ -365,8 +386,8 @@ fun LidarrRequestDialog(name: String, onDismiss: () -> Unit) {
     val c = LocalContext.current.container
     val actions = LocalActions.current
     val hud = Hud.colors
-    val scope = rememberCoroutineScope()
     var requested by remember { mutableStateOf(setOf<String>()) }
+    var sending by remember { mutableStateOf(setOf<String>()) }
     val matches by produceState<Load<List<LidarrCandidate>>>(Load.Loading, name) {
         value = try {
             val (config, key) = c.integrations.requireLidarr()
@@ -391,18 +412,19 @@ fun LidarrRequestDialog(name: String, onDismiss: () -> Unit) {
                 } else {
                     LazyColumn(Modifier.heightIn(max = 420.dp)) {
                         items(m.value, key = { it.foreignId }) { candidate ->
-                            CandidateRow(candidate, requested = candidate.foreignId in requested, stacked = true) {
-                                scope.launch {
+                            CandidateRow(candidate, requested = candidate.foreignId in requested, sending = candidate.foreignId in sending, stacked = true) {
+                                if (candidate.foreignId in sending) return@CandidateRow
+                                sending = sending + candidate.foreignId
+                                // In the app's scope: closing the dialog doesn't stop a request that's on its way.
+                                actions.launch {
                                     try {
                                         c.integrations.request(candidate)
                                         requested = requested + candidate.foreignId
                                         actions.requestedArtists += Recommender.normalize(name)
                                         c.daily.markRequested(listOf(Recommender.normalize(name)))
-                                        c.messages.show("Requested “${candidate.title}”. Lidarr is on it.")
-                                    } catch (e: CancellationException) {
-                                        throw e
-                                    } catch (e: Exception) {
-                                        c.messages.show(e.userMessage())
+                                        actions.message("Requested “${candidate.title}”. Lidarr is on it.")
+                                    } finally {
+                                        sending = sending - candidate.foreignId
                                     }
                                 }
                             }

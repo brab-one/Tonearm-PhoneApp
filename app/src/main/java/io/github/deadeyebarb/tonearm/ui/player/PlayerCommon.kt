@@ -1,6 +1,7 @@
 package io.github.deadeyebarb.tonearm.ui.player
 
 import android.graphics.Bitmap
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
@@ -9,7 +10,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.palette.graphics.Palette
 import coil3.request.ImageRequest
@@ -18,6 +21,7 @@ import coil3.request.allowHardware
 import coil3.toBitmap
 import io.github.deadeyebarb.tonearm.container
 import io.github.deadeyebarb.tonearm.local.LocalMusic
+import io.github.deadeyebarb.tonearm.playback.PlayerConnection
 import io.github.deadeyebarb.tonearm.playback.PlayerUiState
 import io.github.deadeyebarb.tonearm.ui.common.CoverSize
 import io.github.deadeyebarb.tonearm.ui.common.coverCacheKey
@@ -26,6 +30,15 @@ import io.github.deadeyebarb.tonearm.youtube.YouTubeMusic
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+
+/** A sideways swipe skips: to the left to the next song, to the right to the previous one. */
+fun Modifier.swipeToSkip(player: PlayerConnection): Modifier = pointerInput(player) {
+    var total = 0f
+    detectHorizontalDragGestures(
+        onDragStart = { total = 0f },
+        onDragEnd = { if (total < -120) player.next() else if (total > 120) player.previous() },
+    ) { _, dx -> total += dx }
+}
 
 /** Live playback position, polled while playing. */
 @Composable

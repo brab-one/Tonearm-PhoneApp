@@ -1,6 +1,7 @@
 package io.github.deadeyebarb.tonearm
 
 import android.app.Application
+import androidx.compose.runtime.mutableStateListOf
 import coil3.ImageLoader
 import coil3.disk.DiskCache
 import coil3.memory.MemoryCache
@@ -53,6 +54,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
@@ -76,6 +78,12 @@ class AppContainer(val app: Application) {
     val tls = TlsFactory(app, secrets)
     val network = NetworkMonitor(app)
     val messages = Messages()
+
+    /** Goes up each time the app changes a playlist, so lists of playlists know to load again. */
+    val playlistsChanged = MutableStateFlow(0)
+
+    /** Normalized names of artists requested from Lidarr while the app runs, so they show as requested (also after a rotation). */
+    val requestedArtists = mutableStateListOf<String>()
 
     val baseHttpClient: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)

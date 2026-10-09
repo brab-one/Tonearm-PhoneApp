@@ -4,7 +4,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.NavHostController
+import androidx.navigation.toRoute
 import io.github.deadeyebarb.tonearm.AppContainer
 import io.github.deadeyebarb.tonearm.download.DownloadEntry
 import io.github.deadeyebarb.tonearm.integrations.IntegrationsService
@@ -34,6 +36,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 /** Everything a screen can ask the app to do, so rows and menus don't need to know about services. */
@@ -57,10 +60,19 @@ class AppActions(
     /** Whether music can be deleted from the server: Lidarr through the Tonearm server, with full rights there. */
     val canDeleteMusic: Boolean get() = container.integrations.state.value.lidarr?.limited == false
 
-    /** Normalized names of artists requested from Lidarr during this session. */
-    val requestedArtists = androidx.compose.runtime.mutableStateListOf<String>()
+    /** Normalized names of artists requested from Lidarr while the app runs. */
+    val requestedArtists get() = container.requestedArtists
 
-    fun navigate(route: Any) = nav.navigate(route) { launchSingleTop = true }
+    /**
+     * Opens [route] as a new page, so Back comes back here, also from one artist or album to another. When it's the page
+     * already showing (a double tap), nothing happens.
+     */
+    fun navigate(route: Any) {
+        val top = nav.currentBackStackEntry
+        if (top != null && top.destination.hasRoute(route::class) && top.toRoute<Any>(route::class) == route) return
+        nav.navigate(route)
+    }
+
     fun back() = nav.popBackStack()
     fun openAlbum(id: String) = navigate(AlbumRoute(id))
     fun openArtist(id: String) = navigate(ArtistRoute(id))
@@ -321,6 +333,9 @@ class AppActions(
     fun addToPlaylist(items: List<QueueSong>) {
         playlistPicker = items
     }
+
+    /** Tells lists of playlists that one was made, renamed, deleted or had songs added or removed. */
+    fun playlistsChanged() = container.playlistsChanged.update { it + 1 }
 
     fun message(text: String) = container.messages.show(text)
 

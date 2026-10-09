@@ -7,7 +7,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Block
 import androidx.compose.material.icons.rounded.CloudOff
+import androidx.compose.material.icons.rounded.SearchOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -30,8 +32,12 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import io.github.deadeyebarb.tonearm.subsonic.SubsonicApiException
 import io.github.deadeyebarb.tonearm.subsonic.userMessage
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 
 sealed interface Load<out T> {
@@ -40,20 +46,24 @@ sealed interface Load<out T> {
     data class Failed(val error: Throwable) : Load<Nothing>
 }
 
-/** Loads one value for a screen and keeps it across configuration changes. */
-class LoaderViewModel<T>(private val loader: suspend () -> T) : ViewModel() {
+/** Loads one value for a screen and keeps it across configuration changes; again, quietly, each time [reloadOn] moves on. */
+class LoaderViewModel<T>(private val loader: suspend () -> T, reloadOn: Flow<*>? = null) : ViewModel() {
     var state: Load<T> by mutableStateOf(Load.Loading)
         private set
     var refreshing by mutableStateOf(false)
         private set
 
+    private var loading: Job? = null
+
     init {
         reload()
+        if (reloadOn != null) viewModelScope.launch { reloadOn.drop(1).collect { reload(silent = true) } }
     }
 
-    /** With [silent], keeps showing the current value while reloading (pull to refresh). */
+    /** With [silent], keeps showing the current value while reloading (pull to refresh). A newer reload replaces an older one. */
     fun reload(silent: Boolean = false) {
-        viewModelScope.launch {
+        loading?.cancel()
+        loading = viewModelScope.launch {
             if (silent) refreshing = true else if (state !is Load.Ready) state = Load.Loading
             state = try {
                 Load.Ready(loader())
@@ -75,8 +85,8 @@ class LoaderViewModel<T>(private val loader: suspend () -> T) : ViewModel() {
 }
 
 @Composable
-fun <T> rememberLoader(vararg keys: Any?, loader: suspend () -> T): LoaderViewModel<T> =
-    viewModel(key = keys.joinToString("|")) { LoaderViewModel(loader) }
+fun <T> rememberLoader(vararg keys: Any?, reloadOn: Flow<*>? = null, loader: suspend () -> T): LoaderViewModel<T> =
+    viewModel(key = keys.joinToString("|")) { LoaderViewModel(loader, reloadOn) }
 
 @Composable
 fun <T> LoadContent(
@@ -87,7 +97,7 @@ fun <T> LoadContent(
 ) {
     when (val state = vm.state) {
         Load.Loading -> Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) { HudLoader() }
-        is Load.Failed -> ErrorState(state.error.userMessage(), onRetry = { vm.reload() }, modifier = modifier, extra = errorExtra)
+        is Load.Failed -> ErrorState(state.error, onRetry = { vm.reload() }, modifier = modifier, extra = errorExtra)
         is Load.Ready -> PullToRefreshBox(
             isRefreshing = vm.refreshing,
             onRefresh = { vm.reload(silent = true) },
@@ -96,17 +106,34 @@ fun <T> LoadContent(
     }
 }
 
+/** What went wrong with [error]. Something that's gone or not allowed says so, without a Retry that can't help. */
 @Composable
-fun ErrorState(message: String, onRetry: () -> Unit, modifier: Modifier = Modifier, extra: @Composable () -> Unit = {}) {
+fun ErrorState(error: Throwable, onRetry: () -> Unit, modifier: Modifier = Modifier, extra: @Composable () -> Unit = {}) {
+    when ((error as? SubsonicApiException)?.code) {
+        70 -> ErrorState(error.userMessage(), null, modifier, extra, title = "GONE", icon = Icons.Rounded.SearchOff)
+        50 -> ErrorState(error.userMessage(), null, modifier, extra, title = "NOT ALLOWED", icon = Icons.Rounded.Block)
+        else -> ErrorState(error.userMessage(), onRetry, modifier, extra)
+    }
+}
+
+@Composable
+fun ErrorState(
+    message: String,
+    onRetry: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+    extra: @Composable () -> Unit = {},
+    title: String = "SIGNAL LOST",
+    icon: ImageVector = Icons.Rounded.CloudOff,
+) {
     Column(
         modifier.fillMaxSize().padding(32.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Icon(Icons.Rounded.CloudOff, null, Modifier.size(48.dp), tint = Hud.colors.danger)
-        Text("SIGNAL LOST", style = MaterialTheme.typography.titleLarge.glow(Hud.colors.danger, 14f), color = Hud.colors.danger)
+        Icon(icon, null, Modifier.size(48.dp), tint = Hud.colors.danger)
+        Text(title, style = MaterialTheme.typography.titleLarge.glow(Hud.colors.danger, 14f), color = Hud.colors.danger)
         Text(message, style = MaterialTheme.typography.bodyLarge, textAlign = TextAlign.Center, color = Hud.colors.text)
-        HudButton("Retry", onRetry)
+        if (onRetry != null) HudButton("Retry", onRetry)
         extra()
     }
 }

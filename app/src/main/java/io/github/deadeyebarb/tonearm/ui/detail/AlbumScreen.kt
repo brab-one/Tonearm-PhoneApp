@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
@@ -28,6 +29,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -53,6 +55,9 @@ import io.github.deadeyebarb.tonearm.ui.common.SongLeading
 import io.github.deadeyebarb.tonearm.ui.common.SongRow
 import io.github.deadeyebarb.tonearm.ui.common.StarButton
 import io.github.deadeyebarb.tonearm.ui.common.formatTotal
+import io.github.deadeyebarb.tonearm.ui.common.isHiRes
+import io.github.deadeyebarb.tonearm.ui.common.isLossless
+import io.github.deadeyebarb.tonearm.ui.common.plural
 import io.github.deadeyebarb.tonearm.ui.common.rememberLoader
 import io.github.deadeyebarb.tonearm.ui.theme.Hud
 import io.github.deadeyebarb.tonearm.ui.theme.HudTag
@@ -67,8 +72,12 @@ fun AlbumScreen(id: String) {
     val serverId = actions.activeServerId
     val vm = rememberLoader("album", serverId, id) { c.api.album(id) }
     val album = vm.value
+    val list = rememberLazyListState()
+    // The header shows the name; the top bar takes it over once the header has scrolled away.
+    val headerGone by remember { derivedStateOf { list.firstVisibleItemIndex > 0 } }
     DetailScaffold(
         title = album?.name.orEmpty(),
+        showTitle = headerGone,
         actions = {
             if (album != null) {
                 StarButton(serverId, StarKind.ALBUM, album.id, album.starred != null)
@@ -80,7 +89,9 @@ fun AlbumScreen(id: String) {
         LoadContent(vm) { album ->
             val context = serverId?.let { MediaIds.album(it, album.id) }
             val discs = album.song.groupBy { it.discNumber ?: 1 }.toSortedMap()
-            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
+            // The header says HI-RES when every track is; then only the exceptions would need a tag, and there are none.
+            val allHiRes = album.song.all { isLossless(it.suffix) && isHiRes(it.bitDepth, it.samplingRate) }
+            LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = PaddingValues(bottom = 24.dp)) {
                 item { AlbumHeader(album, onPlay = { shuffle -> actions.play(album.song, shuffle = shuffle, context = context) }) }
                 for ((disc, songs) in discs) {
                     if (discs.size > 1) {
@@ -95,14 +106,14 @@ fun AlbumScreen(id: String) {
                     }
                     items(songs, key = { "s:${it.id}" }) { song ->
                         SongRow(
-                            song, leading = SongLeading.TrackNumber, showAlbum = false,
+                            song, leading = SongLeading.TrackNumber, showAlbum = false, showQuality = !allHiRes,
                             onClick = { actions.play(album.song, album.song.indexOf(song), context = context) },
                         )
                     }
                 }
                 item {
                     Text(
-                        "END OF ALBUM // ${album.song.size} TRACKS // ${formatTotal(album.duration).uppercase()}",
+                        "END OF ALBUM // ${plural(album.song.size, "track")} // ${formatTotal(album.duration)}".uppercase(),
                         style = MaterialTheme.typography.labelSmall, color = Hud.colors.dim,
                         modifier = Modifier.padding(16.dp),
                     )
@@ -129,7 +140,7 @@ private fun AlbumHeader(album: Album, onPlay: (shuffle: Boolean) -> Unit) {
         TextButton(onClick = { album.artistId?.let(actions::openArtist) }, enabled = album.artistId != null) {
             Text(album.artistLabel, style = MaterialTheme.typography.titleMedium, color = Hud.colors.accent2)
         }
-        MetaLine(listOfNotNull(album.year?.toString(), album.genre, "${album.songCount} tracks", formatTotal(album.duration)).joinToString(" // "))
+        MetaLine(listOfNotNull(album.year?.toString(), album.genre, plural(album.songCount, "track"), formatTotal(album.duration)).joinToString(" // "))
         summarizeQuality(album.song)?.let { quality ->
             Spacer(Modifier.height(6.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {

@@ -41,7 +41,6 @@ import androidx.compose.material.icons.rounded.RepeatOne
 import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -49,11 +48,13 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -101,12 +102,15 @@ import io.github.deadeyebarb.tonearm.ui.common.label
 import io.github.deadeyebarb.tonearm.ui.common.rememberFetchState
 import io.github.deadeyebarb.tonearm.ui.theme.Hud
 import io.github.deadeyebarb.tonearm.ui.theme.HudBackground
+import io.github.deadeyebarb.tonearm.ui.theme.HudLoader
 import io.github.deadeyebarb.tonearm.ui.theme.HudTag
 import io.github.deadeyebarb.tonearm.ui.theme.Orbitron
 import io.github.deadeyebarb.tonearm.ui.theme.glow
 import io.github.deadeyebarb.tonearm.ui.theme.glowBorder
 import io.github.deadeyebarb.tonearm.youtube.YouTubeMusic
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 
 private enum class Sheet { None, Queue, Lyrics, Sleep }
 
@@ -116,23 +120,20 @@ fun NowPlayingScreen(onBack: () -> Unit) {
     val state by c.player.state.collectAsStateWithLifecycle()
     val settings by c.settings.state.collectAsStateWithLifecycle()
     val item = state.current
+    // After the app was closed by Android, this page comes back before the player has its queue again: give it a moment.
+    var hadItem by remember { mutableStateOf(false) }
     if (item == null) {
-        if (state.connected) {
-            LaunchedEffect(Unit) { onBack() }
-        } else {
-            // Opened from the notification in a process the car or a headset started: the player is
-            // still connecting, and leaving now would land on Home.
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                HudBackground()
-                CircularProgressIndicator(color = Hud.colors.accent)
+        LaunchedEffect(Unit) {
+            if (!hadItem) {
+                withTimeoutOrNull(5_000) { snapshotFlow { state.connected }.first { it } }
+                delay(2_000)
             }
-            LaunchedEffect(Unit) {
-                delay(5_000)
-                if (c.player.state.value.current == null) onBack()
-            }
+            onBack()
         }
+        if (!hadItem) Box(Modifier.fillMaxSize()) { HudLoader(Modifier.align(Alignment.Center)) }
         return
     }
+    SideEffect { hadItem = true }
     val entry = remember(item) { item.toQueueSong() }
     var sheet by rememberSaveable { mutableStateOf(Sheet.None) }
     val visualizer = rememberVisualizerState(playing = state.isPlaying, enabled = settings.visualizer)
@@ -142,7 +143,8 @@ fun NowPlayingScreen(onBack: () -> Unit) {
         BoxWithConstraints(Modifier.fillMaxSize().systemBarsPadding()) {
             val header = @Composable { Header(entry, onBack, onSleep = { sheet = Sheet.Sleep }) }
             val reactor = @Composable { modifier: Modifier ->
-                Reactor(entry?.song?.coverArt, entry?.serverId, visualizer, modifier)
+                // Swipes like the mini player: left for the next song, right for the previous one.
+                Reactor(entry?.song?.coverArt, entry?.serverId, visualizer, modifier.swipeToSkip(c.player))
             }
             val controls = @Composable {
                 TrackInfo(entry)
@@ -160,7 +162,11 @@ fun NowPlayingScreen(onBack: () -> Unit) {
                 Spacer(Modifier.height(4.dp))
                 Controls(state, visualizer)
                 Spacer(Modifier.height(10.dp))
-                BottomActions(onLyrics = { sheet = Sheet.Lyrics }, onSleep = { sheet = Sheet.Sleep }, onQueue = { sheet = Sheet.Queue })
+                BottomActions(
+                    // Only the music server has lyrics.
+                    hasLyrics = entry != null && !YouTubeMusic.isYouTube(entry.serverId) && !LocalMusic.isLocal(entry.serverId),
+                    onLyrics = { sheet = Sheet.Lyrics }, onSleep = { sheet = Sheet.Sleep }, onQueue = { sheet = Sheet.Queue },
+                )
             }
             if (maxWidth > maxHeight) {
                 Row(Modifier.fillMaxSize().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -229,9 +235,17 @@ private fun Header(entry: QueueSong?, onBack: () -> Unit, onSleep: () -> Unit) {
                 "◢ NOW PLAYING ◣", style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 3.sp).glow(hud.accent, 12f),
                 color = hud.accent,
             )
+            // The album (tap to open it), or where the song plays from when it has none.
+            val albumId = song?.albumId?.takeIf { sameServer }
             Text(
-                song?.album.orEmpty().uppercase(), style = TextStyle(fontFamily = Orbitron, fontWeight = FontWeight.Medium, fontSize = 12.sp, letterSpacing = 1.sp),
+                (song?.album?.takeIf { it.isNotBlank() } ?: when {
+                    YouTubeMusic.isYouTube(entry?.serverId) -> "YouTube Music"
+                    LocalMusic.isLocal(entry?.serverId) -> "On this phone"
+                    else -> ""
+                }).uppercase(),
+                style = TextStyle(fontFamily = Orbitron, fontWeight = FontWeight.Medium, fontSize = 12.sp, letterSpacing = 1.sp),
                 maxLines = 1, overflow = TextOverflow.Ellipsis, color = hud.text,
+                modifier = Modifier.clickable(enabled = albumId != null, onClickLabel = "Go to album") { albumId?.let(actions::openAlbum) },
             )
         }
         IconButton(onClick = { actions.navigate(ConnectRoute) }) { Icon(Icons.Rounded.Devices, "Play on another device") }
@@ -340,16 +354,22 @@ private fun Controls(state: PlayerUiState, visualizer: VisualizerState) {
         HudToggleIcon(
             if (state.repeatMode == Player.REPEAT_MODE_ONE) Icons.Rounded.RepeatOne else Icons.Rounded.Repeat,
             "Repeat", state.repeatMode != Player.REPEAT_MODE_OFF, onClick = player::cycleRepeat,
+            state = when (state.repeatMode) {
+                Player.REPEAT_MODE_ONE -> "Repeat one"
+                Player.REPEAT_MODE_ALL -> "Repeat all"
+                else -> "Off"
+            },
         )
     }
 }
 
 @Composable
-private fun BottomActions(onLyrics: () -> Unit, onSleep: () -> Unit, onQueue: () -> Unit) {
+private fun BottomActions(hasLyrics: Boolean, onLyrics: () -> Unit, onSleep: () -> Unit, onQueue: () -> Unit) {
     val timer by LocalContext.current.container.sleepTimer.state.collectAsStateWithLifecycle()
     val hud = Hud.colors
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-        DeckButton(Icons.Rounded.Lyrics, "LYRICS", hud.dim, onLyrics)
+        // Dimmed where there are none; a tap still says why.
+        DeckButton(Icons.Rounded.Lyrics, "LYRICS", if (hasLyrics) hud.dim else hud.dim.copy(alpha = 0.4f), onLyrics)
         DeckButton(Icons.Rounded.Bedtime, if (timer != SleepTimer.State.Off) "TIMER ON" else "SLEEP", if (timer != SleepTimer.State.Off) hud.accent else hud.dim, onSleep)
         DeckButton(Icons.AutoMirrored.Rounded.QueueMusic, "QUEUE", hud.dim, onQueue)
     }

@@ -46,6 +46,7 @@ import io.github.deadeyebarb.tonearm.ui.common.LocalActions
 import io.github.deadeyebarb.tonearm.ui.common.PlayShuffleButtons
 import io.github.deadeyebarb.tonearm.ui.common.SectionHeader
 import io.github.deadeyebarb.tonearm.ui.common.SongRow
+import io.github.deadeyebarb.tonearm.ui.common.plural
 import io.github.deadeyebarb.tonearm.ui.common.rememberLoader
 import io.github.deadeyebarb.tonearm.ui.theme.Hud
 import io.github.deadeyebarb.tonearm.ui.theme.HudButton
@@ -155,7 +156,7 @@ fun YouTubeAlbumScreen(album: YtAlbum) {
                                 modifier = Modifier.clickable { actions.findOnYouTube(artist) },
                             )
                         }
-                        MetaLine(listOf("YouTube Music", "${songs.size} tracks").joinToString(" // "))
+                        MetaLine(listOf("YouTube Music", plural(songs.size, "track")).joinToString(" // "))
                         Spacer(Modifier.height(12.dp))
                         if (songs.isNotEmpty()) PlayShuffleButtons(onPlay = { actions.playEntries(songs) }, onShuffle = { actions.playEntries(songs, shuffle = true) })
                         Spacer(Modifier.height(8.dp))

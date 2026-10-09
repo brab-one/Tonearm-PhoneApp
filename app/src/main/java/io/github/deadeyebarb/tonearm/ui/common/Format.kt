@@ -13,6 +13,20 @@ fun formatDuration(seconds: Long): String {
 
 fun formatMs(ms: Long) = formatDuration(ms / 1000)
 
+/** "just now", "5 min ago", "3 h ago", "2 days ago". */
+fun formatAgo(seconds: Long): String {
+    val minutes = seconds.coerceAtLeast(0) / 60
+    return when {
+        minutes < 1 -> "just now"
+        minutes < 60 -> "$minutes min ago"
+        minutes < 24 * 60 -> "${minutes / 60} h ago"
+        else -> "${plural((minutes / (24 * 60)).toInt(), "day")} ago"
+    }
+}
+
+/** "1 song", "2 songs". */
+fun plural(n: Int, word: String) = if (n == 1) "1 $word" else "$n ${word}s"
+
 /** "1 h 12 min" style, for album and playlist totals. */
 fun formatTotal(seconds: Int): String {
     val minutes = (seconds + 30) / 60

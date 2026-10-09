@@ -33,6 +33,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -92,11 +93,23 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
-private fun YouTubeSearching() {
+private fun Searching(text: String = "Searching YouTube Music…") {
     Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
         CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
         Spacer(Modifier.width(12.dp))
-        Text("Searching YouTube Music…", style = MaterialTheme.typography.bodySmall, color = Hud.colors.dim)
+        Text(text, style = MaterialTheme.typography.bodySmall, color = Hud.colors.dim)
+    }
+}
+
+/** Your server couldn't be searched, but other sources could: says so above what they found. */
+@Composable
+private fun LibraryUnreachable(error: Throwable, onRetry: () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            "Your server can't be searched right now (${error.userMessage()}), so only other sources show.",
+            style = MaterialTheme.typography.bodySmall, color = Hud.colors.danger, modifier = Modifier.weight(1f),
+        )
+        TextButton(onClick = onRetry) { Text("RETRY") }
     }
 }
 
@@ -104,7 +117,7 @@ private fun YouTubeSearching() {
 private fun LazyListScope.youtubeResults(state: Load<List<Song>>?, order: (List<Song>) -> List<Song>, onPlay: (List<QueueSong>, Int) -> Unit) {
     when (state) {
         null -> Unit
-        Load.Loading -> item { YouTubeSearching() }
+        Load.Loading -> item { Searching() }
         is Load.Failed -> item {
             Text(
                 "YouTube Music: ${state.error.userMessage()}",
@@ -264,7 +277,7 @@ private fun BestMatchRow(match: BestMatch) {
     val actions = LocalActions.current
     when (match) {
         is BestMatch.Own -> SongRow(match.entry.song, serverId = match.entry.serverId, onClick = { actions.playEntries(listOf(match.entry), 0) })
-        is BestMatch.YouTube -> SongRow(match.entry.song, serverId = match.entry.serverId, showAlbum = false, onClick = { actions.playRadio(match.entry) })
+        is BestMatch.YouTube -> SongRow(match.entry.song, serverId = match.entry.serverId, showAlbum = false, showSource = true, onClick = { actions.playRadio(match.entry) })
         is BestMatch.Web -> FoundRow(match.song.title, "${match.song.artist}${match.song.album?.let { " · $it" } ?: ""}", "DEEZER // PLAYS FROM YOUTUBE MUSIC", match.song.coverUrl) {
             actions.playFound(match.song.artist, match.song.title)
         }
@@ -289,22 +302,23 @@ private fun FoundRow(title: String, subtitle: String, note: String, cover: Strin
 /** The AI's take on the search: a button to ask, then what it found (songs play, albums open). */
 private fun LazyListScope.aiResults(ai: AiSearch?, available: Boolean, onAsk: () -> Unit) {
     if (!available) return
+    if (ai != null && !ai.running && ai.problem == null && ai.hits.isNotEmpty()) {
+        item { SectionHeader("The AI suggests") }
+        items(ai.hits) { hit ->
+            val actions = LocalActions.current
+            FoundRow(hit.title ?: hit.album.orEmpty(), hit.artist + if (hit.title == null) " · album" else "", hit.why.uppercase(), null) {
+                if (hit.title != null) actions.playFound(hit.artist, hit.title) else actions.openFoundAlbum(hit.artist, hit.album.orEmpty())
+            }
+        }
+        return
+    }
     item {
-        val actions = LocalActions.current
         Column(Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
             when {
                 ai == null -> HudButton("Ask the AI about this search", onAsk, Modifier.fillMaxWidth(), icon = Icons.Rounded.AutoAwesome, filled = false)
                 ai.running -> Text("The AI is thinking… (it can take a minute)", style = MaterialTheme.typography.bodySmall, color = Hud.colors.dim)
                 ai.problem != null -> Text("AI: ${ai.problem}", style = MaterialTheme.typography.bodySmall, color = Hud.colors.danger)
-                ai.hits.isEmpty() -> Text("The AI found nothing for this.", style = MaterialTheme.typography.bodySmall, color = Hud.colors.dim)
-                else -> Column {
-                    SectionHeader("The AI suggests")
-                    ai.hits.forEach { hit ->
-                        FoundRow(hit.title ?: hit.album.orEmpty(), hit.artist + if (hit.title == null) " · album" else "", hit.why.uppercase(), null) {
-                            if (hit.title != null) actions.playFound(hit.artist, hit.title) else actions.openFoundAlbum(hit.artist, hit.album.orEmpty())
-                        }
-                    }
-                }
+                else -> Text("The AI found nothing for this.", style = MaterialTheme.typography.bodySmall, color = Hud.colors.dim)
             }
         }
     }
@@ -351,89 +365,106 @@ fun SearchScreen() {
         },
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
-            when (val state = vm.state) {
-                null -> EmptyState(Icons.Rounded.Search, "Search your library", "Find artists, albums and songs on your server.")
-                Load.Loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
-                is Load.Failed -> ErrorState(state.error.userMessage(), onRetry = { vm.search(query, debounce = false) })
-                is Load.Ready -> {
-                    val result = state.value
-                    val youtube = vm.youtube
-                    val youtubeHits = (youtube as? Load.Ready)?.value.orEmpty()
-                    if (result.artist.isEmpty() && result.album.isEmpty() && result.song.isEmpty() && youtubeHits.isEmpty() && vm.phone.isEmpty() &&
-                        vm.web?.songs.isNullOrEmpty() && vm.ai == null && server?.recommendations != true
-                    ) {
-                        Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
-                            EmptyState(Icons.Rounded.SearchOff, "Nothing found for “${query.trim()}”", modifier = Modifier.weight(1f))
-                            if (youtube == Load.Loading) YouTubeSearching()
-                            RequestPrompt(query.trim())
+            val state = vm.state
+            if (state == null) {
+                EmptyState(Icons.Rounded.Search, "Search your library", "Find artists, albums and songs on your server.")
+                return@Box
+            }
+            // The library's answer doesn't hold back the phone's and YouTube Music's: offline, those are what's left.
+            val result = (state as? Load.Ready)?.value ?: SearchResult()
+            val libraryFailed = (state as? Load.Failed)?.error
+            val retry = { vm.search(query, debounce = false) }
+            val youtube = vm.youtube
+            val youtubeHits = (youtube as? Load.Ready)?.value.orEmpty()
+            val elsewhere = youtubeHits.isNotEmpty() || vm.phone.isNotEmpty() || vm.ytArtists.isNotEmpty() || vm.ytAlbums.isNotEmpty() || !vm.web?.songs.isNullOrEmpty()
+            val libraryEmpty = result.artist.isEmpty() && result.album.isEmpty() && result.song.isEmpty()
+            when {
+                state == Load.Loading && !elsewhere -> CircularProgressIndicator(Modifier.align(Alignment.Center))
+                libraryFailed != null && !elsewhere && youtube != Load.Loading -> ErrorState(libraryFailed, onRetry = retry)
+                state is Load.Ready && libraryEmpty && !elsewhere && vm.ai == null && server?.recommendations != true -> {
+                    Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
+                        EmptyState(Icons.Rounded.SearchOff, "Nothing found for “${query.trim()}”", modifier = Modifier.weight(1f))
+                        if (youtube == Load.Loading) Searching()
+                        RequestPrompt(query.trim())
+                    }
+                }
+                else -> {
+                    // Disliked songs (and songs by artists said no to) go last, and never into the best matches.
+                    val dislikes by c.dislikes.state.collectAsStateWithLifecycle()
+                    val songs = remember(result, dislikes) { c.dislikes.demote(result.song, { it.artist }, { it.title }) }
+                    val best = remember(result, youtubeHits, vm.web, dislikes) {
+                        fun ok(artist: String?, title: String) = !c.dislikes.isDisliked(artist, title)
+                        bestMatches(
+                            query.trim(), result.song.filter { ok(it.artist, it.title) }, actions.activeServerId,
+                            youtubeHits.filter { ok(it.artist, it.title) }, vm.web?.songs.orEmpty().filter { ok(it.artist, it.title) },
+                        )
+                    }
+                    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+                        when {
+                            state == Load.Loading -> item { Searching("Searching your library…") }
+                            libraryFailed != null -> item { LibraryUnreachable(libraryFailed, retry) }
+                            libraryEmpty -> item {
+                                Text(
+                                    "Nothing in your library for “${query.trim()}”.",
+                                    style = MaterialTheme.typography.bodySmall, color = Hud.colors.dim,
+                                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp),
+                                )
+                            }
                         }
-                    } else {
-                        // Disliked songs (and songs by artists said no to) go last, and never into the best matches.
-                        val dislikes by c.dislikes.state.collectAsStateWithLifecycle()
-                        val songs = remember(result, dislikes) { c.dislikes.demote(result.song, { it.artist }, { it.title }) }
-                        val best = remember(result, youtubeHits, vm.web, dislikes) {
-                            fun ok(artist: String?, title: String) = !c.dislikes.isDisliked(artist, title)
-                            bestMatches(
-                                query.trim(), result.song.filter { ok(it.artist, it.title) }, actions.activeServerId,
-                                youtubeHits.filter { ok(it.artist, it.title) }, vm.web?.songs.orEmpty().filter { ok(it.artist, it.title) },
-                            )
+                        if (best.isNotEmpty()) {
+                            item { SectionHeader("Best matches") }
+                            items(best, key = { "best:" + it.key }) { match -> BestMatchRow(match) }
                         }
-                        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
-                            if (best.isNotEmpty()) {
-                                item { SectionHeader("Best matches") }
-                                items(best, key = { "best:" + it.key }) { match -> BestMatchRow(match) }
-                            }
-                            aiResults(vm.ai, server?.recommendations == true, onAsk = vm::askAi)
-                            if (result.artist.isNotEmpty()) {
-                                item {
-                                    Column {
-                                        SectionHeader("Artists")
-                                        LazyRow(contentPadding = PaddingValues(horizontal = 8.dp)) {
-                                            items(result.artist, key = { it.id }) { artist -> ArtistCircle(artist) { actions.openArtist(artist.id) } }
-                                        }
+                        aiResults(vm.ai, server?.recommendations == true, onAsk = vm::askAi)
+                        if (result.artist.isNotEmpty()) {
+                            item {
+                                Column {
+                                    SectionHeader("Artists")
+                                    LazyRow(contentPadding = PaddingValues(horizontal = 8.dp)) {
+                                        items(result.artist, key = { it.id }) { artist -> ArtistCircle(artist) { actions.openArtist(artist.id) } }
                                     }
                                 }
                             }
-                            if (result.album.isNotEmpty()) {
-                                item {
-                                    Column {
-                                        SectionHeader("Albums")
-                                        AlbumRow(result.album) { actions.openAlbum(it.id) }
-                                    }
-                                }
-                            }
-                            if (songs.isNotEmpty()) {
-                                item { SectionHeader("Songs") }
-                                itemsIndexed(songs, key = { _, s -> s.id }) { i, song ->
-                                    SongRow(song, onClick = { actions.play(songs, i) })
-                                }
-                            }
-                            if (vm.phone.isNotEmpty()) {
-                                val entries = vm.phone.map { QueueSong(LocalMusic.SOURCE_ID, it) }
-                                item { SectionHeader("On this phone") }
-                                itemsIndexed(entries, key = { _, e -> "ph:" + e.song.id }) { i, entry ->
-                                    SongRow(entry.song, serverId = LocalMusic.SOURCE_ID, onClick = { actions.playEntries(entries, i) })
-                                }
-                            }
-                            if (vm.ytArtists.isNotEmpty()) {
-                                item {
-                                    Column {
-                                        SectionHeader("Artists on YouTube Music")
-                                        YouTubeArtistRow(vm.ytArtists) { actions.openYouTubeArtist(it) }
-                                    }
-                                }
-                            }
-                            if (vm.ytAlbums.isNotEmpty()) {
-                                item {
-                                    Column {
-                                        SectionHeader("Albums on YouTube Music")
-                                        YouTubeAlbumRow(vm.ytAlbums) { actions.openYouTubeAlbum(it) }
-                                    }
-                                }
-                            }
-                            youtubeResults(youtube, { c.dislikes.demote(it, { s -> s.artist }, { s -> s.title }) }) { queue, index -> actions.playEntries(queue, index) }
-                            item { RequestPrompt(query.trim()) }
                         }
+                        if (result.album.isNotEmpty()) {
+                            item {
+                                Column {
+                                    SectionHeader("Albums")
+                                    AlbumRow(result.album) { actions.openAlbum(it.id) }
+                                }
+                            }
+                        }
+                        if (songs.isNotEmpty()) {
+                            item { SectionHeader("Songs") }
+                            itemsIndexed(songs, key = { _, s -> s.id }) { i, song ->
+                                SongRow(song, onClick = { actions.play(songs, i) })
+                            }
+                        }
+                        if (vm.phone.isNotEmpty()) {
+                            val entries = vm.phone.map { QueueSong(LocalMusic.SOURCE_ID, it) }
+                            item { SectionHeader("On this phone") }
+                            itemsIndexed(entries, key = { _, e -> "ph:" + e.song.id }) { i, entry ->
+                                SongRow(entry.song, serverId = LocalMusic.SOURCE_ID, onClick = { actions.playEntries(entries, i) })
+                            }
+                        }
+                        if (vm.ytArtists.isNotEmpty()) {
+                            item {
+                                Column {
+                                    SectionHeader("Artists on YouTube Music")
+                                    YouTubeArtistRow(vm.ytArtists) { actions.openYouTubeArtist(it) }
+                                }
+                            }
+                        }
+                        if (vm.ytAlbums.isNotEmpty()) {
+                            item {
+                                Column {
+                                    SectionHeader("Albums on YouTube Music")
+                                    YouTubeAlbumRow(vm.ytAlbums) { actions.openYouTubeAlbum(it) }
+                                }
+                            }
+                        }
+                        youtubeResults(youtube, { c.dislikes.demote(it, { s -> s.artist }, { s -> s.title }) }) { queue, index -> actions.playEntries(queue, index) }
+                        item { RequestPrompt(query.trim()) }
                     }
                 }
             }

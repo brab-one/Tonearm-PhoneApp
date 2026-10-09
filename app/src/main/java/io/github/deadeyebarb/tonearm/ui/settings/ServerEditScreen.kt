@@ -245,9 +245,10 @@ fun ServerEditScreen(serverId: String?, welcome: Boolean, onSaved: () -> Unit) {
             confirmButton = {
                 TextButton(onClick = {
                     confirmDelete = false
-                    scope.launch {
+                    actions.launch {
                         vm.delete()
-                        actions.back()
+                        // Without a server left, the welcome setup takes over instead.
+                        if (c.servers.load().servers.isNotEmpty()) actions.back()
                     }
                 }) { Text("Remove") }
             },

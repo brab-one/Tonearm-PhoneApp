@@ -51,6 +51,7 @@ import io.github.deadeyebarb.tonearm.container
 import io.github.deadeyebarb.tonearm.download.DownloadEntry
 import io.github.deadeyebarb.tonearm.download.DownloadRepository
 import io.github.deadeyebarb.tonearm.ui.common.ActionMenu
+import io.github.deadeyebarb.tonearm.ui.common.Confirm
 import io.github.deadeyebarb.tonearm.ui.common.CoverArt
 import io.github.deadeyebarb.tonearm.ui.common.CoverSize
 import io.github.deadeyebarb.tonearm.ui.common.EmptyState
@@ -60,6 +61,7 @@ import io.github.deadeyebarb.tonearm.ui.common.SectionHeader
 import io.github.deadeyebarb.tonearm.ui.common.SongLeading
 import io.github.deadeyebarb.tonearm.ui.common.SongRow
 import io.github.deadeyebarb.tonearm.ui.common.formatBytes
+import io.github.deadeyebarb.tonearm.ui.common.plural
 
 @Composable
 fun DownloadsScreen() {
@@ -81,7 +83,7 @@ fun DownloadsScreen() {
         topBar = {
             HudTopBar(
                 title = "Downloads",
-                subtitle = if (done.isNotEmpty()) "${done.size} TRACKS // ${formatBytes(bytes)} // OFFLINE CACHE" else "OFFLINE CACHE",
+                subtitle = if (done.isNotEmpty()) "${plural(done.size, "track").uppercase()} // ${formatBytes(bytes)} // OFFLINE CACHE" else "OFFLINE CACHE",
                 actions = {
                     if (done.isNotEmpty()) {
                         IconButton(onClick = { actions.playEntries(done.map { it.item }, shuffle = true) }) { Icon(Icons.Rounded.Shuffle, "Shuffle downloads") }
@@ -118,7 +120,13 @@ fun DownloadsScreen() {
                             Text(first.artistLabel.uppercase(), style = MaterialTheme.typography.labelSmall, color = Hud.colors.accent2, maxLines = 1)
                         }
                         IconButton(onClick = { actions.playEntries(songs.map { it.item }) }) { Icon(Icons.Rounded.PlayArrow, "Play album") }
-                        IconButton(onClick = { actions.removeDownloads(songs.map { it.item }) }) { Icon(Icons.Rounded.Delete, "Delete album download") }
+                        IconButton(onClick = {
+                            actions.confirm = Confirm(
+                                "Remove “${first.album ?: "Unknown album"}” from this phone?",
+                                "${plural(songs.size, "song")} (${formatBytes(songs.sumOf { it.bytes })}) are deleted from this phone. They stay on your server.",
+                                action = "Remove",
+                            ) { actions.removeDownloads(songs.map { it.item }) }
+                        }) { Icon(Icons.Rounded.Delete, "Remove album download") }
                     }
                 }
                 items(songs, key = { "d:${it.id}" }) { entry ->
@@ -135,7 +143,7 @@ fun DownloadsScreen() {
         AlertDialog(
             onDismissRequest = { confirmDeleteAll = false },
             title = { Text("Delete all downloads?") },
-            text = { Text("${done.size} songs (${formatBytes(bytes)}) will be removed from this device.") },
+            text = { Text("${plural(done.size, "song")} (${formatBytes(bytes)}) will be removed from this device.") },
             confirmButton = {
                 TextButton(onClick = {
                     confirmDeleteAll = false

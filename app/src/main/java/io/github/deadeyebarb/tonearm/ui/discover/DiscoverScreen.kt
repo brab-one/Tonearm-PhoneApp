@@ -36,6 +36,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -59,6 +60,7 @@ import io.github.deadeyebarb.tonearm.ui.common.AppActions
 import io.github.deadeyebarb.tonearm.ui.common.CoverArt
 import io.github.deadeyebarb.tonearm.ui.common.CoverSize
 import io.github.deadeyebarb.tonearm.ui.common.EmptyState
+import io.github.deadeyebarb.tonearm.ui.common.ErrorState
 import io.github.deadeyebarb.tonearm.ui.common.LoadContent
 import io.github.deadeyebarb.tonearm.ui.common.LocalActions
 import io.github.deadeyebarb.tonearm.ui.common.YouTubePlayButton
@@ -72,8 +74,11 @@ import io.github.deadeyebarb.tonearm.ui.theme.HudTag
 import io.github.deadeyebarb.tonearm.ui.theme.HudTopBar
 import io.github.deadeyebarb.tonearm.ui.theme.glowBorder
 import java.text.NumberFormat
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import io.github.deadeyebarb.tonearm.connect.ConnectUnavailableException
+import io.github.deadeyebarb.tonearm.subsonic.userMessage
 import kotlinx.coroutines.coroutineScope
 
 @Composable
@@ -84,10 +89,22 @@ fun DiscoverScreen() {
     val session by c.sessions.active.collectAsStateWithLifecycle()
     val server by c.tonearmServer.server.collectAsStateWithLifecycle()
     val lidarrReady = integrations.lidarr != null
-    // Until the Tonearm server has been looked for, "not there" would only be a guess.
+    // Until the Tonearm server has been looked for, "not there" would only be a guess; and when it couldn't be
+    // reached, that's no answer either.
     var looked by remember(session?.id) { mutableStateOf(false) }
-    LaunchedEffect(session?.id) {
-        runCatching { c.tonearmServer.refresh(session) }
+    var unreachable by remember(session?.id) { mutableStateOf<Throwable?>(null) }
+    var tries by remember { mutableIntStateOf(0) }
+    LaunchedEffect(session?.id, tries) {
+        unreachable = try {
+            c.connect.route()
+            null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: ConnectUnavailableException) {
+            null
+        } catch (e: Exception) {
+            e
+        }
         looked = true
     }
 
@@ -99,13 +116,16 @@ fun DiscoverScreen() {
                 subtitle = when {
                     server?.history == true -> "RECOMMENDATIONS FROM WHAT YOU PLAY"
                     !looked -> "LOOKING FOR THE TONEARM SERVER…"
+                    unreachable != null -> "CAN'T REACH THE TONEARM SERVER"
                     else -> "NEEDS THE TONEARM SERVER FOR RECOMMENDATIONS"
                 },
             )
         },
     ) { padding ->
         if (server?.history != true) {
-            if (looked) NotConnected(actions, lidarrReady, Modifier.padding(padding))
+            if (looked) {
+                NotConnected(actions, lidarrReady, unreachable, onRetry = { looked = false; tries++ }, Modifier.padding(padding))
+            }
             else Box(Modifier.padding(padding).fillMaxSize(), contentAlignment = Alignment.Center) { HudLoader() }
             return@Scaffold
         }
@@ -198,7 +218,12 @@ private fun EmptyLibraryBanner(lidarrReady: Boolean, actions: AppActions) {
 }
 
 @Composable
-private fun NotConnected(actions: AppActions, lidarrReady: Boolean, modifier: Modifier) {
+private fun NotConnected(actions: AppActions, lidarrReady: Boolean, unreachable: Throwable?, onRetry: () -> Unit, modifier: Modifier) {
+    if (unreachable != null) {
+        // It may well be there: the network wasn't ready, or the server is restarting.
+        ErrorState("Can't reach your Tonearm server: ${unreachable.userMessage()}", onRetry, modifier)
+        return
+    }
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         DiscoveryPicksPanel(actions, Modifier.padding(bottom = 8.dp))
         AiPicksPanel(actions, Modifier.padding(bottom = 8.dp))
