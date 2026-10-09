@@ -11,6 +11,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import io.github.deadeyebarb.tonearm.container
+import io.github.deadeyebarb.tonearm.download.OfflineSyncWorker
 import kotlinx.coroutines.CancellationException
 import java.io.File
 import java.io.IOException
@@ -27,10 +28,14 @@ class WeeklyPicksWorker(context: Context, params: WorkerParameters) : CoroutineW
         val (config, key) = c.integrations.requireLidarrOrNull()?.takeUnless { it.first.limited && c.tonearmServer.server.value?.picksFolder == null }
             ?: return Result.success()
         val session = c.sessions.active.value ?: return Result.success()
+        val run = File(applicationContext.filesDir, "weekly-run.json")
+        val wasRunning = run.exists()
         return try {
             c.weekly.tick(config, key, session)?.let(c.messages::show)
             // A run is under way (the AI takes a few minutes): look again soon rather than in an hour.
-            if (File(applicationContext.filesDir, "weekly-run.json").exists()) checkSoon(applicationContext)
+            if (run.exists()) checkSoon(applicationContext)
+            // The week's picks are ready: Keep offline gets them the same night.
+            else if (wasRunning && c.settings.current().keepOffline) OfflineSyncWorker.soon(applicationContext)
             Result.success()
         } catch (e: CancellationException) {
             throw e

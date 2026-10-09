@@ -2,6 +2,7 @@ package io.github.deadeyebarb.tonearm
 
 import io.github.deadeyebarb.tonearm.download.DownloadUpgradeWorker
 import io.github.deadeyebarb.tonearm.download.DownloadUpgrades
+import io.github.deadeyebarb.tonearm.download.OfflineSyncWorker
 import kotlinx.coroutines.launch
 import android.app.Application
 import android.content.Context
@@ -22,6 +23,7 @@ class TonearmApp : Application(), SingletonImageLoader.Factory {
         WeeklyPicksWorker.schedule(this)
         DownloadUpgradeWorker.schedule(this)
         container.likes.start()
+        container.scope.launch { OfflineSyncWorker.schedule(this@TonearmApp, container.settings.current().keepOffline) }
         // Downloads whose file got better on the server, checked soon after start too (not only every 12 hours).
         container.scope.launch {
             kotlinx.coroutines.delay(20_000)

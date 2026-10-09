@@ -82,6 +82,10 @@ data class AppSettings(
     val equalizer: EqualizerSettings = EqualizerSettings(),
     /** When the car starts and the desktop played last, the phone takes over its song, place and queue. */
     val continueFromDesktop: Boolean = true,
+    /** Every night on Wi-Fi while charging, the weekly picks and liked songs are downloaded (see OfflineSync). */
+    val keepOffline: Boolean = false,
+    /** Space for the songs Keep offline downloads. */
+    val keepOfflineGb: Int = 4,
 ) {
     companion object {
         /** "Cache ahead" setting for the whole rest of the queue. */

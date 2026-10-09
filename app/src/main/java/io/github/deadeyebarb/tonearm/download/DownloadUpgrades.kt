@@ -31,6 +31,8 @@ object DownloadUpgrades {
             val newer = c.versions.better(entry.item, session, force = true) ?: continue
             if (!LibraryVersions.isUpgrade(entry.item.song, newer.song)) continue
             withContext(Dispatchers.Main) { downloads.replace(entry, newer) }
+            // A song Keep offline keeps stays kept.
+            c.offline.renamed(entry.id, downloads.key(newer.serverId, newer.song.id))
             upgraded++
         }
         return upgraded

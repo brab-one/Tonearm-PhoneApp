@@ -18,6 +18,7 @@ import io.github.deadeyebarb.tonearm.data.ServerRepository
 import io.github.deadeyebarb.tonearm.data.SettingsRepository
 import io.github.deadeyebarb.tonearm.data.StarredStore
 import io.github.deadeyebarb.tonearm.download.DownloadRepository
+import io.github.deadeyebarb.tonearm.download.OfflineSync
 import io.github.deadeyebarb.tonearm.integrations.DailyDiscovery
 import io.github.deadeyebarb.tonearm.integrations.FetchTracker
 import io.github.deadeyebarb.tonearm.integrations.IntegrationHttp
@@ -173,6 +174,8 @@ class AppContainer(val app: Application) {
 
     /** Touch first on the main thread: DownloadManager binds to the creating thread's looper. */
     val downloads by lazy { DownloadRepository(app, media, json, settings, scope) }
+    /** Keep offline: the weekly picks and liked songs downloaded every night. */
+    val offline = OfflineSync(this)
 
     val spectrum = SpectrumAnalyzer()
     val volume = VolumeMixer()

@@ -226,6 +226,7 @@ fun SettingsScreen() {
                 val used = remember { c.downloads.bytesUsed() }
                 Item("Storage used", formatBytes(used))
             }
+            keepOfflineSettings(settings, ::update)
 
             item { Group("Scrobbling") }
             item {

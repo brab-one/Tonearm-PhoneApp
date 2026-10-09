@@ -7,6 +7,7 @@ import androidx.media3.exoplayer.offline.DownloadNotificationHelper
 import androidx.media3.exoplayer.offline.DownloadRequest
 import androidx.media3.exoplayer.offline.DownloadService
 import androidx.media3.exoplayer.scheduler.Requirements
+import io.github.deadeyebarb.tonearm.container
 import io.github.deadeyebarb.tonearm.data.SettingsRepository
 import io.github.deadeyebarb.tonearm.media.MediaEngine
 import io.github.deadeyebarb.tonearm.media.QueueSong
@@ -73,6 +74,7 @@ class DownloadRepository(
     private val loaded = CountDownLatch(1)
     private val listed = CompletableDeferred<Unit>()
     private var progressJob: Job? = null
+    private val offline get() = context.container.offline
 
     init {
         engine.isDownloaded = { serverId, songId ->
@@ -88,7 +90,7 @@ class DownloadRepository(
             override fun onDownloadRemoved(manager: DownloadManager, download: Download) {
                 completed -= download.request.id
                 _entries.value -= download.request.id
-                readd.remove(download.request.id)?.let { download(listOf(it)) }
+                readd.remove(download.request.id)?.let { add(listOf(it)) }
             }
         })
         scope.launch(Dispatchers.IO) {
@@ -113,7 +115,7 @@ class DownloadRepository(
         }
     }
 
-    fun key(serverId: String, songId: String) = "$serverId/$songId"
+    fun key(serverId: String, songId: String) = keyOf(serverId, songId)
 
     fun stateOf(serverId: String, songId: String): DownloadEntry? = _entries.value[key(serverId, songId)]
 
@@ -122,17 +124,28 @@ class DownloadRepository(
         withTimeoutOrNull(30_000) { listed.await() }
     }
 
+    /** Downloads songs for the user: kept ones (Keep offline's) become theirs too. */
     fun download(items: List<QueueSong>) {
+        offline.adopt(items.map { key(it.serverId, it.song.id) })
+        add(items)
+    }
+
+    private fun add(items: List<QueueSong>) {
         for (item in items) {
-            val id = key(item.serverId, item.song.id)
-            val existing = _entries.value[id]
+            val existing = _entries.value[key(item.serverId, item.song.id)]
             if (existing != null && !existing.failed) continue
-            val request = DownloadRequest.Builder(id, SongUri.build(item.serverId, item.song.id, SongUri.RAW))
-                .setCustomCacheKey(engine.downloadKey(item.serverId, item.song.id))
-                .setData(json.encodeToString(DownloadMeta.serializer(), DownloadMeta(item.serverId, item.song)).encodeToByteArray())
-                .build()
+            val request = request(item)
             send({ DownloadService.sendAddDownload(context, TonearmDownloadService::class.java, request, false) }) { manager.addDownload(request) }
         }
+    }
+
+    /** What the download manager gets for [item]: the original file, kept under the song's download key. */
+    fun request(item: QueueSong): DownloadRequest {
+        val id = key(item.serverId, item.song.id)
+        return DownloadRequest.Builder(id, SongUri.build(item.serverId, item.song.id, SongUri.RAW))
+            .setCustomCacheKey(engine.downloadKey(item.serverId, item.song.id))
+            .setData(json.encodeToString(DownloadMeta.serializer(), DownloadMeta(item.serverId, item.song)).encodeToByteArray())
+            .build()
     }
 
     /**
@@ -143,18 +156,25 @@ class DownloadRepository(
         val newId = key(newer.serverId, newer.song.id)
         if (newId == old.id) {
             readd[old.id] = newer
-            remove(listOf(old.id))
+            delete(listOf(old.id))
         } else {
-            download(listOf(newer))
-            remove(listOf(old.id))
+            add(listOf(newer))
+            delete(listOf(old.id))
         }
     }
 
+    /** Removes downloads for the user: Keep offline doesn't bring kept ones back while they're in its lists. */
     fun remove(ids: Collection<String>) {
+        offline.skip(ids)
+        delete(ids)
+    }
+
+    private fun delete(ids: Collection<String>) {
         for (id in ids) send({ DownloadService.sendRemoveDownload(context, TonearmDownloadService::class.java, id, false) }) { manager.removeDownload(id) }
     }
 
     fun removeAll() {
+        offline.cleared()
         send({ DownloadService.sendRemoveAllDownloads(context, TonearmDownloadService::class.java, false) }) { manager.removeAllDownloads() }
     }
 
@@ -203,6 +223,12 @@ class DownloadRepository(
 
     companion object {
         const val CHANNEL_ID = "downloads"
+
+        /** A song's download id. */
+        fun keyOf(serverId: String, songId: String) = "$serverId/$songId"
+
+        /** On kept downloads a Keep offline run couldn't finish: they only carry on in the next run, on Wi-Fi. */
+        const val STOP_REASON_KEEP_OFFLINE = 7
 
         /** By album (title, then which album), then disc and track: the order the Downloads screen lists them in. */
         val ALBUM_ORDER: Comparator<QueueSong> = compareBy(
