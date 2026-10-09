@@ -69,7 +69,8 @@ fun DownloadsScreen() {
     val actions = LocalActions.current
     val entries by c.downloads.entries.collectAsStateWithLifecycle()
     val all = entries.values.toList()
-    val pending = all.filterNot { it.completed }.sortedBy { it.item.song.title }
+    // Keep offline's held songs after the ones on their way.
+    val pending = all.filterNot { it.completed }.sortedWith(compareBy({ it.held }, { it.item.song.title }))
     val done = all.filter { it.completed }.sortedWith(compareBy(DownloadRepository.ALBUM_ORDER) { it.item })
     val albums = done.groupBy { it.item.serverId to (it.item.song.albumId ?: it.item.song.album.orEmpty()) }
     // As listed, so a tap plays on through the album shown.
@@ -169,6 +170,8 @@ private fun PendingRow(entry: DownloadEntry) {
                 Text(
                     when {
                         entry.failed -> "Download failed"
+                        // Held until Keep offline's next night: it carries on then.
+                        entry.held -> "Waiting for Wi-Fi and a charger"
                         waitingForNetwork -> "Waiting for Wi-Fi"
                         entry.state == Download.STATE_QUEUED -> "Queued"
                         else -> "${entry.percent.toInt()}% · ${formatBytes(entry.bytes)}"

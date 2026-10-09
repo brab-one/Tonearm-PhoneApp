@@ -42,12 +42,15 @@ data class DownloadEntry(
     val state: Int,
     val percent: Float,
     val bytes: Long,
+    val stopReason: Int = Download.STOP_REASON_NONE,
     /** The download this one is the better file of (see [DownloadRepository.replace]). */
     val replaces: String? = null,
 ) {
     val completed get() = state == Download.STATE_COMPLETED
     val failed get() = state == Download.STATE_FAILED
     val active get() = state == Download.STATE_DOWNLOADING || state == Download.STATE_QUEUED || state == Download.STATE_RESTARTING
+    /** A kept song the last Keep offline run didn't finish: it carries on in the next one. */
+    val held get() = state == Download.STATE_STOPPED && stopReason == DownloadRepository.STOP_REASON_KEEP_OFFLINE
 }
 
 /**
@@ -143,6 +146,13 @@ class DownloadRepository(
         for (item in items) {
             val id = key(item.serverId, item.song.id)
             val existing = _entries.value[id]
+            if (existing?.held == true) {
+                // Keep offline's, held until its next run: it carries on now.
+                send({ DownloadService.sendSetStopReason(context, TonearmDownloadService::class.java, id, Download.STOP_REASON_NONE, false) }) {
+                    manager.setStopReason(id, Download.STOP_REASON_NONE)
+                }
+                continue
+            }
             if (existing != null && !existing.failed) continue
             addRequest(request(item))
         }
@@ -245,6 +255,7 @@ class DownloadRepository(
             state = download.state,
             percent = download.percentDownloaded.coerceAtLeast(0f),
             bytes = download.bytesDownloaded,
+            stopReason = download.stopReason,
             replaces = meta.replaces,
         )
         _entries.value += id to entry

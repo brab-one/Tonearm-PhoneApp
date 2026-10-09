@@ -220,12 +220,15 @@ class AppActions(
 
     private fun downloadNow(items: List<QueueSong>) {
         requestNotificationPermission()
+        // Counted before: the ones downloaded already (kept ones that become the user's) aren't downloaded again.
+        val n = items.count { container.downloads.stateOf(it.serverId, it.song.id)?.completed != true }
         container.downloads.download(items)
         saveArtwork(items)
+        if (n == 0) return
         val wifiOnly = container.settings.state.value.downloadOnWifiOnly
         message(
             buildString {
-                append(if (items.size == 1) "Downloading 1 song" else "Downloading ${items.size} songs")
+                append(if (n == 1) "Downloading 1 song" else "Downloading $n songs")
                 if (wifiOnly && container.network.isMetered()) append(" when you're on Wi-Fi")
             },
         )

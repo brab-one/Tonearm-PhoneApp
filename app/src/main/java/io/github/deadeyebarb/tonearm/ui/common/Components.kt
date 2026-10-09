@@ -415,7 +415,8 @@ fun DownloadAllButton(items: List<QueueSong>) {
                 CircularProgressIndicator(progress = { progress.toFloat() }, modifier = Modifier.size(24.dp), strokeWidth = 3.dp)
             }
         }
-        else -> IconButton(onClick = { actions.download(items.filter { downloads["${it.serverId}/${it.song.id}"]?.completed != true }) }) {
+        // All of them: ones already there are skipped, and kept ones (Keep offline's) become the user's own.
+        else -> IconButton(onClick = { actions.download(items) }) {
             Icon(Icons.Rounded.Download, "Download")
         }
     }
