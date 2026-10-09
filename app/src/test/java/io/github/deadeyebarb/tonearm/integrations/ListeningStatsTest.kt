@@ -1,11 +1,31 @@
 package io.github.deadeyebarb.tonearm.integrations
 
+import io.github.deadeyebarb.tonearm.connect.AlbumCount
 import io.github.deadeyebarb.tonearm.connect.RecentPlay
+import io.github.deadeyebarb.tonearm.data.ServerConfig
+import io.github.deadeyebarb.tonearm.subsonic.Artist
+import io.github.deadeyebarb.tonearm.subsonic.ServerSession
+import io.github.deadeyebarb.tonearm.subsonic.SubsonicApi
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.util.Locale
+import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
+import mockwebserver3.Dispatcher
+import mockwebserver3.MockResponse
+import mockwebserver3.MockWebServer
+import mockwebserver3.RecordedRequest
+import okhttp3.OkHttpClient
+import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Before
 import org.junit.Test
 
 class ListeningStatsTest {
@@ -78,5 +98,80 @@ class ListeningStatsTest {
         // The same plays seen from London: 00:00 in Vienna is still the day before there.
         val london = ListeningStats.dayGroups(plays.take(2), wednesday, ZoneId.of("Europe/London"))
         assertEquals(listOf("YESTERDAY"), london.map { it.label })
+    }
+
+    // A fake Navidrome for the top albums: its search finds album titles, as many as asked for.
+    private val json = Json { ignoreUnknownKeys = true; isLenient = true; coerceInputValues = true; explicitNulls = false }
+    private val server = MockWebServer()
+
+    private fun album(id: String, name: String, artist: String, artistId: String = "", songs: List<String> = listOf(artist)) = buildJsonObject {
+        put("id", id); put("name", name); put("artist", artist); put("artistId", artistId)
+        put("song", JsonArray(songs.mapIndexed { i, by -> buildJsonObject { put("id", "$id-$i"); put("title", "Song $i"); put("artist", by) } }))
+    }
+
+    private val albums = listOf("ABBA", "Bee Gees", "Blondie", "Cher", "Eagles", "Fleetwood Mac").mapIndexed { i, artist -> album("gh$i", "Greatest Hits", artist) } + listOf(
+        album("q1", "Greatest Hits", "Queen", "ar-queen"),
+        album("q2", "A Night at the Opera", "Queen", "ar-queen"),
+        album("qb", "Under Pressure", "Queen & David Bowie"),
+        album("va2", "Now That's Ambient", "Various Artists", songs = listOf("Breakbeat Unit", "Vector Choir")),
+        album("va1", "Now That's Ambient", "Various Artists", songs = listOf("Breakbeat Unit", "Signal Garden feat. Someone")),
+    )
+
+    private fun JsonObject.text(key: String) = this[key]!!.jsonPrimitive.content
+    private fun brief(album: JsonObject) = JsonObject(album - "song")
+    private fun subsonic(body: String) = MockResponse(body = """{"subsonic-response":{"status":"ok","version":"1.16.1",$body}}""")
+
+    @Before
+    fun setUp() {
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                val q = { name: String -> request.url.queryParameter(name).orEmpty() }
+                return when (request.url.encodedPath.removePrefix("/rest/").removeSuffix(".view")) {
+                    "search3" -> subsonic(""""searchResult3":{"album":${JsonArray(albums.filter { q("query").lowercase() in it.text("name").lowercase() }.take(q("albumCount").toInt()).map(::brief))}}""")
+                    "getArtist" -> subsonic(""""artist":{"id":"${q("id")}","name":"Queen","album":${JsonArray(albums.filter { it.text("artistId") == q("id") }.map(::brief))}}""")
+                    "getAlbum" -> albums.firstOrNull { it.text("id") == q("id") }?.let { subsonic(""""album":$it""") } ?: MockResponse(code = 404)
+                    else -> MockResponse(code = 404)
+                }
+            }
+        }
+        server.start()
+    }
+
+    @After
+    fun tearDown() = server.close()
+
+    private val api by lazy {
+        val session = ServerSession(ServerConfig(name = "Music", baseUrl = server.url("/").toString(), username = "alice"), "secret", OkHttpClient())
+        SubsonicApi({ session }, json)
+    }
+    private val artists = mapOf("queen" to Artist("ar-queen", "Queen"))
+    private suspend fun libraryAlbum(artist: String, album: String, artists: Map<String, Artist> = this.artists) =
+        ListeningStats.libraryAlbum(api, AlbumCount(artist, album, plays = 9)) { artists }?.id
+
+    @Test
+    fun `a common title is found past other artists' albums of that name`() = runTest {
+        assertEquals("q1", libraryAlbum("Queen", "Greatest Hits", artists = emptyMap()))
+    }
+
+    @Test
+    fun `the first artist named is enough`() = runTest {
+        assertEquals("qb", libraryAlbum("Queen", "Under Pressure"))
+        assertEquals("qb", libraryAlbum("Queen feat. David Bowie", "Under Pressure"))
+    }
+
+    @Test
+    fun `a title the search doesn't find is looked for among the artist's albums`() = runTest {
+        assertEquals("q2", libraryAlbum("Queen", "A Night at the Opera (2011 Remaster)"))
+    }
+
+    @Test
+    fun `a compilation is the album of that title with a song by them`() = runTest {
+        assertEquals("va1", libraryAlbum("Signal Garden", "Now That's Ambient"))
+    }
+
+    @Test
+    fun `another artist's album of that title isn't theirs`() = runTest {
+        assertNull(libraryAlbum("Midnight Quartet", "Greatest Hits"))
+        assertNull(libraryAlbum("Queen", "Jazz"))
     }
 }
