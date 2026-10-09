@@ -103,11 +103,12 @@ class MediaEngine(
         if (LocalMusic.isLocal(parts.serverId) || isDownloaded(parts.serverId, parts.songId)) return true
         val s = settings.state.value
         val qualities = if (YouTubeMusic.isYouTube(parts.serverId)) listOf(SongUri.YOUTUBE) else listOf(SongUri.RAW, qualityOf(s.wifiQuality), qualityOf(s.mobileQuality))
-        return qualities.any { quality ->
-            val key = streamKey(parts.serverId, parts.songId, quality, parts.version)
-            val length = ContentMetadata.getContentLength(streamCache.getContentMetadata(key))
-            length != C.LENGTH_UNSET.toLong() && streamCache.isCached(key, 0, length)
-        }
+        return qualities.any { quality -> cachedInFull(streamKey(parts.serverId, parts.songId, quality, parts.version)) }
+    }
+
+    private fun cachedInFull(key: String): Boolean {
+        val length = ContentMetadata.getContentLength(streamCache.getContentMetadata(key))
+        return length != C.LENGTH_UNSET.toLong() && streamCache.isCached(key, 0, length)
     }
 
     /** Forgets the quality of every song but [keep] (the one playing and the next), so a later play picks afresh. */
@@ -135,7 +136,7 @@ class MediaEngine(
         val key = pinKey(parts)
         return synchronized(pinned) {
             qualityToOpen(pinned[key], downloaded, choices) { quality ->
-                streamCache.getCachedBytes(streamKey(parts.serverId, parts.songId, quality, parts.version), 0, C.LENGTH_UNSET.toLong())
+                cachedInFull(streamKey(parts.serverId, parts.songId, quality, parts.version))
             }.also { pinned[key] = it }
         }
     }
@@ -153,9 +154,8 @@ class MediaEngine(
      */
     private fun checkYouTubeStream(videoId: String) {
         val key = streamKey(YouTubeMusic.SOURCE_ID, videoId, SongUri.YOUTUBE, null)
+        if (cachedInFull(key)) return
         val metadata = streamCache.getContentMetadata(key)
-        val length = ContentMetadata.getContentLength(metadata)
-        if (length != C.LENGTH_UNSET.toLong() && streamCache.isCached(key, 0, length)) return
         // Looked up once and kept: opening the song right after needs it anyway.
         val stream = runCatching { youtubeStreamOf(youtube.audio(videoId).url) }.getOrNull() ?: return
         val cached = metadata.get(YOUTUBE_STREAM, null as String?)
@@ -199,14 +199,15 @@ class MediaEngine(
 
         /**
          * The quality to open a song at: the one it's [pinned] to (the original file switches to its
-         * download, the same bytes), else its download, else whichever of [choices] has the most cached
-         * already. The first choice, the current network's, wins when none has any.
+         * download, the same bytes), else its download, else the first of [choices] that's [complete]ly
+         * cached, else the first choice, the current network's. A song only partly cached at another
+         * quality doesn't pull the rest of that file over mobile data, or a transcode over Wi-Fi.
          */
-        fun qualityToOpen(pinned: String?, downloaded: Boolean, choices: List<String>, cachedBytes: (String) -> Long): String = when {
+        fun qualityToOpen(pinned: String?, downloaded: Boolean, choices: List<String>, complete: (String) -> Boolean): String = when {
             pinned == SongUri.RAW && downloaded -> SongUri.DOWNLOADED
             pinned != null -> pinned
             downloaded -> SongUri.DOWNLOADED
-            else -> choices.maxBy(cachedBytes)
+            else -> choices.firstOrNull(complete) ?: choices.first()
         }
 
         /** Which of a video's streams a googlevideo URL serves: format, file version and size. Null if it doesn't say. */
