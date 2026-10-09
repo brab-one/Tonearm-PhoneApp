@@ -70,6 +70,9 @@ class Mixer(
         val song = seed.song
         if (!picks && song == null) return null
         val library = !picks && !seed.youtube && !seed.local
+        // Only what was queued from the seed on steers a song radio, not what played before it (that still doesn't come again).
+        val from = song?.takeIf { !picks }?.let { keys.lastIndexOf(Continuation.key(it.id, seed.youtube)) } ?: -1
+        val steer = if (from >= 0) keys.drop(from) else keys
         val batch = try {
             // On the IO dispatcher, so the timeout runs on the clock, not a test's.
             withContext(Dispatchers.IO) {
@@ -79,7 +82,7 @@ class Mixer(
                         id = song?.id?.takeIf { library },
                         artist = song?.artistLabel?.takeIf { !picks && !library },
                         title = song?.title?.takeIf { !picks && !library },
-                        exclude = RadioPolicy.exclude(keys),
+                        exclude = RadioPolicy.exclude(steer),
                         count = RadioPolicy.BATCH,
                     )
                 }
@@ -89,6 +92,7 @@ class Mixer(
         } catch (_: Exception) {
             null
         } ?: return null
+        // The whole queue: what played before the seed doesn't come again either.
         val queued = keys.toSet()
         val songs = batch.songs.filterNot { dislikes.isDisliked(it.artistLabel, it.title) }.map { NextSong(it, false) }
             .filterNot { Continuation.key(it) in queued }.distinctBy(Continuation::key)
