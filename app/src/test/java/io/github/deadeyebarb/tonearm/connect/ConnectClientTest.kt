@@ -40,8 +40,8 @@ class ConnectClientTest {
 
     private fun respond(body: String, code: Int = 200) = server.enqueue(MockResponse.Builder().code(code).body(body).build())
 
-    private fun session(auth: AuthMethod = AuthMethod.TOKEN) =
-        ServerSession(ServerConfig(name = "Music", baseUrl = server.url("/").toString(), username = "alice", auth = auth), "wonderland", OkHttpClient())
+    private fun session(auth: AuthMethod = AuthMethod.TOKEN, username: String = "alice") =
+        ServerSession(ServerConfig(name = "Music", baseUrl = server.url("/").toString(), username = username, auth = auth), "wonderland", OkHttpClient())
 
     @Test
     fun `the tonearm server gets the music server's login and the data as the body`() = runTest {
@@ -104,6 +104,23 @@ class ConnectClientTest {
         assertTrue(router.route(session()) is ConnectRoute.Server)
         assertTrue(router.route(session()) is ConnectRoute.Server)
         assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun `what one user's tonearm server offers isn't kept for another whose lookup fails`() = runTest {
+        val router = ConnectRouter(client)
+        respond("""{"server":"tonearm","protocol":2,"user":"alice","lidarr":true,"lidarrAdmin":true}""")
+        val alice = router.refresh(session())
+        assertTrue(alice!!.lidarrAdmin)
+        assertEquals(alice, router.server.value)
+        // Bob on the same server, at a bad moment: alice's Lidarr isn't his.
+        respond("""{"error":"busy"}""", 503)
+        assertEquals(null, router.refresh(session(username = "bob")))
+        assertEquals(null, router.server.value)
+        // Back to alice: what was found for her is hers again.
+        assertEquals(alice, router.refresh(session()))
+        assertEquals(alice, router.server.value)
+        assertEquals(2, server.requestCount)
     }
 
     @Test

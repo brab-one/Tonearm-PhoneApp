@@ -4,6 +4,7 @@ import io.github.deadeyebarb.tonearm.data.LidarrConfig
 import io.github.deadeyebarb.tonearm.likes.findSong
 import io.github.deadeyebarb.tonearm.subsonic.ServerSession
 import io.github.deadeyebarb.tonearm.subsonic.SubsonicApi
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -49,11 +50,19 @@ class FetchTracker(private val lidarr: LidarrClient, private val api: SubsonicAp
         )
     }
 
-    /** Whether the library has [ref] (cached for a few minutes). */
+    /** Whether [session]'s library has [ref] (cached for a few minutes; a lookup that failed isn't). */
     suspend fun inLibrary(ref: TrackRef, session: ServerSession): Boolean {
-        val key = Names.key(SongMatch.primaryArtist(SongMatch.cleanArtist(ref.artist)), SongMatch.cleanTitle(ref.title))
+        val key = session.id + "|" + Names.key(SongMatch.primaryArtist(SongMatch.cleanArtist(ref.artist)), SongMatch.cleanTitle(ref.title))
         library[key]?.takeIf { System.currentTimeMillis() - it.second < LIBRARY_TTL }?.let { return it.first }
-        val found = gate.withPermit { runCatching { api.findSong(ref, session) != null }.getOrDefault(false) }
+        val found = gate.withPermit {
+            try {
+                api.findSong(ref, session) != null
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                null
+            }
+        } ?: return false
         library[key] = found to System.currentTimeMillis()
         return found
     }

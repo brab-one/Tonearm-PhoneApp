@@ -32,9 +32,11 @@ fun rememberFetchState(song: Song, serverId: String?): FetchState? {
     val c = LocalContext.current.container
     val activity by c.fetches.activity.collectAsStateWithLifecycle()
     val pending by c.likes.pending.items.collectAsStateWithLifecycle()
+    val session by c.sessions.active.collectAsStateWithLifecycle()
     val like = pending.firstOrNull { it.ref.youtubeId == song.id }
-    val state by produceState<FetchState?>(null, song.id, activity, like) {
-        value = c.fetches.stateOf(like?.ref ?: song.toTrackRef(), like?.requestedAlbum, like?.requestedArtist, c.sessions.active.value)
+    // Looked up again on another server too.
+    val state by produceState<FetchState?>(null, song.id, activity, like, session?.id) {
+        value = c.fetches.stateOf(like?.ref ?: song.toTrackRef(), like?.requestedAlbum, like?.requestedArtist, session)
             ?: if (like?.request != null && like.requestedAlbum != null) FetchState(Fetch.REQUESTED) else null
     }
     return state

@@ -405,6 +405,8 @@ class ConnectRouter(private val client: ConnectClient) {
     private val _server = MutableStateFlow<TonearmServerInfo?>(null)
     /** The Tonearm server of the active music server, once looked up; null if there's none. */
     val server: StateFlow<TonearmServerInfo?> = _server.asStateFlow()
+    /** Which music server and user [server] is about (guarded by [lock]). */
+    private var published: String? = null
 
     suspend fun route(session: ServerSession?): ConnectRoute {
         if (session != null && lookup(session) != null) return ConnectRoute.Server(session)
@@ -413,11 +415,11 @@ class ConnectRouter(private val client: ConnectClient) {
 
     /**
      * Looks the server up again if what's known is old (or about another music server). Network errors
-     * keep the last answer, so a bad moment doesn't make Lidarr and the picks disappear.
+     * keep the last answer for the same server and user, so a bad moment doesn't make Lidarr and the picks disappear.
      */
     suspend fun refresh(session: ServerSession?): TonearmServerInfo? {
         if (session == null) {
-            _server.value = null
+            lock.withLock { publish(null, null) }
             return null
         }
         return try {
@@ -425,19 +427,35 @@ class ConnectRouter(private val client: ConnectClient) {
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
-            _server.value?.takeIf { it.baseUrl == session.config.baseUrl }
+            lock.withLock { _server.value?.takeIf { published == keyOf(session) } }
         }
     }
 
     private suspend fun lookup(session: ServerSession): TonearmServerInfo? = lock.withLock {
-        val server = session.config.baseUrl + "|" + session.config.username
+        val key = keyOf(session)
         val now = System.currentTimeMillis()
-        found?.takeIf { it.server == server && now - it.at < if (it.info != null) RECHECK_FOUND_MS else RECHECK_MISSING_MS }?.let { return it.info }
-        client.findServer(session).also {
-            found = Found(server, it, now)
-            _server.value = it
+        found?.takeIf { it.server == key && now - it.at < if (it.info != null) RECHECK_FOUND_MS else RECHECK_MISSING_MS }?.let {
+            if (published != key) publish(key, it.info)
+            return it.info
         }
+        val info = try {
+            client.findServer(session)
+        } catch (e: Exception) {
+            // Another server or user: what the last one offered (its Lidarr, its picks folder) isn't this one's.
+            if (e !is CancellationException && published != key) publish(null, null)
+            throw e
+        }
+        found = Found(key, info, now)
+        publish(key, info)
+        info
     }
+
+    private fun publish(key: String?, info: TonearmServerInfo?) {
+        published = key
+        _server.value = info
+    }
+
+    private fun keyOf(session: ServerSession) = session.config.baseUrl + "|" + session.config.username
 
     private companion object {
         const val RECHECK_FOUND_MS = 10 * 60_000L
