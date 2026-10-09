@@ -9,7 +9,10 @@ data class NowPlayingCard(
     val coverArt: String?,
     val title: String,
     val artist: String,
-    /** Play wanted (playWhenReady), so buffering doesn't flicker the icon. */
+    /**
+     * Shows Pause: play wanted and something to play, as the player's own button (so buffering doesn't flicker the
+     * icon, and a queue that ended or a song that failed shows Play).
+     */
     val playing: Boolean,
     val index: Int,
     val count: Int,
@@ -17,8 +20,8 @@ data class NowPlayingCard(
     val live: Boolean,
 ) {
     companion object {
-        fun from(entry: QueueSong?, playWhenReady: Boolean, index: Int, count: Int): NowPlayingCard? = entry?.let {
-            NowPlayingCard(it.serverId, it.song.coverArt, it.song.title, it.song.artistLabel, playWhenReady, index, count, live = true)
+        fun from(entry: QueueSong?, playing: Boolean, index: Int, count: Int): NowPlayingCard? = entry?.let {
+            NowPlayingCard(it.serverId, it.song.coverArt, it.song.title, it.song.artistLabel, playing, index, count, live = true)
         }
 
         /** The saved queue's song, paused; null when there's none. */

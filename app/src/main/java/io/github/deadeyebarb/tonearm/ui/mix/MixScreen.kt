@@ -52,6 +52,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import io.github.deadeyebarb.tonearm.AppContainer
+import io.github.deadeyebarb.tonearm.connect.DailyMixes
 import io.github.deadeyebarb.tonearm.connect.Mix
 import io.github.deadeyebarb.tonearm.container
 import io.github.deadeyebarb.tonearm.media.QueueSong
@@ -73,6 +74,7 @@ import io.github.deadeyebarb.tonearm.ui.theme.HudTag
 import io.github.deadeyebarb.tonearm.ui.theme.Orbitron
 import io.github.deadeyebarb.tonearm.ui.theme.glow
 import java.io.IOException
+import java.time.LocalDateTime
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -81,7 +83,8 @@ import kotlinx.coroutines.launch
 sealed interface MixState {
     /** Asking; [ai] once the server's AI is known to be working on it, since [since] (elapsed realtime). */
     data class Waiting(val since: Long, val ai: Boolean = false) : MixState
-    data class Ready(val mix: Mix, val serverId: String) : MixState
+    /** [note] says why it isn't quite the one asked for. */
+    data class Ready(val mix: Mix, val serverId: String, val note: String? = null) : MixState
     data class Failed(val error: Throwable) : MixState
 }
 
@@ -105,16 +108,18 @@ class MixViewModel(private val c: AppContainer, private val prompt: String?, pri
         job = viewModelScope.launch {
             state = try {
                 val session = c.sessions.awaitActive()
-                val mix = if (prompt != null) {
-                    c.mixer.prompt(session, prompt, refresh) {
+                if (prompt != null) {
+                    val mix = c.mixer.prompt(session, prompt, refresh) {
                         // The server's AI is on it: say so, and count from now.
                         if ((state as? MixState.Waiting)?.ai == false) state = MixState.Waiting(SystemClock.elapsedRealtime(), ai = true)
                     }
+                    MixState.Ready(mix, session.id)
                 } else {
                     val daily = c.mixer.daily(session) ?: throw IOException("Daily mixes come from the Tonearm server (1.7 or later)")
-                    daily.mixes.firstOrNull { it.id == dailyId } ?: throw IOException("This mix was replaced by today's")
+                    if (daily.running) throw IOException("Today's daily mixes are still being made; try again in a minute")
+                    val mix = dailyMix(daily, dailyId.orEmpty()) ?: throw IOException("This mix was replaced by today's")
+                    MixState.Ready(mix, session.id, note = "The mix you opened was replaced by today's".takeIf { mix.id != dailyId })
                 }
-                MixState.Ready(mix, session.id)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -123,6 +128,21 @@ class MixViewModel(private val c: AppContainer, private val prompt: String?, pri
         }
     }
 }
+
+/**
+ * The daily mix [id] ("daily-2026-10-09-2") among [daily]'s. One of an earlier day's, from a row shown before 4:00, gives
+ * today's at its place; null when there's none.
+ */
+fun dailyMix(daily: DailyMixes, id: String): Mix? {
+    daily.mixes.firstOrNull { it.id == id }?.let { return it }
+    val day = id.removePrefix("daily-").substringBeforeLast('-')
+    val n = id.substringAfterLast('-')
+    if (!id.startsWith("daily-") || day == daily.day) return null
+    return daily.mixes.firstOrNull { it.id == "daily-${daily.day}-$n" }
+}
+
+/** The day the daily mixes at [now] are for: the server makes new ones at 4:00, so at 1:00 they're still yesterday's. */
+fun dailyMixDay(now: LocalDateTime = LocalDateTime.now()): String = now.minusHours(4).toLocalDate().toString()
 
 /** A mix made from a sentence by the server's AI (or matched in the library without it), or a daily mix. */
 @Composable
@@ -147,7 +167,7 @@ fun MixScreen(prompt: String?, dailyId: String?) {
                     if (prompt != null) HudButton("Try other words", { actions.back() }, Modifier.padding(24.dp), filled = false)
                 }
             } else {
-                MixList(state.mix, state.serverId, daily = prompt == null, actions)
+                MixList(state.mix, state.serverId, daily = prompt == null, state.note, actions)
             }
         }
     }
@@ -180,7 +200,7 @@ private fun Waiting(state: MixState.Waiting, prompt: String?) {
 }
 
 @Composable
-private fun MixList(mix: Mix, serverId: String, daily: Boolean, actions: AppActions) {
+private fun MixList(mix: Mix, serverId: String, daily: Boolean, note: String?, actions: AppActions) {
     val c = LocalContext.current.container
     val hud = Hud.colors
     val entries = remember(mix, serverId) { mix.songs.map { QueueSong(serverId, it) } }
@@ -215,6 +235,10 @@ private fun MixList(mix: Mix, serverId: String, daily: Boolean, actions: AppActi
                         "Matched in your library without the AI" + (mix.problem?.let { ": $it" } ?: ""),
                         style = MaterialTheme.typography.bodySmall, color = hud.dim,
                     )
+                }
+                note?.let {
+                    Spacer(Modifier.height(10.dp))
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = hud.dim)
                 }
                 Spacer(Modifier.height(14.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {

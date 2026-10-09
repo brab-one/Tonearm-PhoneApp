@@ -29,8 +29,8 @@ class NowPlayingCardTest {
 
     @Test
     fun `the playing song is live`() {
-        val card = NowPlayingCard.from(QueueSong("srv-1", items[0].song.copy(displayArtist = "The Oscillators & Co")), playWhenReady = true, index = 0, count = 2)!!
+        val card = NowPlayingCard.from(QueueSong("srv-1", items[0].song.copy(displayArtist = "The Oscillators & Co")), playing = true, index = 0, count = 2)!!
         assertEquals(NowPlayingCard("srv-1", "al1", "Low Hum", "The Oscillators & Co", playing = true, index = 0, count = 2, live = true), card)
-        assertNull(NowPlayingCard.from(null, playWhenReady = true, index = 0, count = 0))
+        assertNull(NowPlayingCard.from(null, playing = true, index = 0, count = 0))
     }
 }

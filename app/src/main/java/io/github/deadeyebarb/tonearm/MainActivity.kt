@@ -75,11 +75,14 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIntent(intent: Intent?) {
-        if (intent?.action == MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH) {
+        // Reopened from Recents: Android hands back the intent the task started with, whose search or radio has
+        // played already. Only opening the player is done again.
+        val fromRecents = intent != null && intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0
+        if (!fromRecents && intent?.action == MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH) {
             container.player.playFromSearch(intent.getStringExtra(SearchManager.QUERY).orEmpty())
             intent.action = null
         }
-        Shortcuts.seedFor(intent?.action)?.let { seed ->
+        Shortcuts.seedFor(intent?.action)?.takeIf { !fromRecents }?.let { seed ->
             intent?.action = null
             ShortcutManagerCompat.reportShortcutUsed(this, Shortcuts.idFor(seed))
             lifecycleScope.launch {

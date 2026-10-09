@@ -40,7 +40,7 @@ class ListeningStats(private val api: SubsonicApi, private val connect: PhoneCon
         val library = async { runCatching { api.artists().flatMap { it.artist }.associateBy { Names.normalize(it.name) } }.getOrDefault(emptyMap()) }
         val listening = connect.listeningBetween(window.from, window.to, artists = TOP, albums = TOP, recent = PAGE)
         // Four at a time, like the other lookups of many names.
-        val albums = listening.albums.chunked(4).flatMap { chunk -> chunk.map { async { libraryAlbum(it) } }.awaitAll() }
+        val albums = listening.albums.chunked(4).flatMap { chunk -> chunk.map { async { libraryAlbum(api, it) { library.await() } } }.awaitAll() }
         val artists = library.await().let { byName -> listening.artists.map { byName[Names.normalize(it.artist)] } }
         StatsPage(window, listening, artists, albums)
     }
@@ -51,17 +51,34 @@ class ListeningStats(private val api: SubsonicApi, private val connect: PhoneCon
         return connect.listeningBetween(window.from, window.to, artists = 0, albums = 0, recent = PAGE, before = before).recent
     }
 
-    private suspend fun libraryAlbum(count: AlbumCount): Album? = runCatching {
-        val title = Names.normalize(SongMatch.cleanTitle(count.album))
-        val artist = Names.normalize(count.artist)
-        api.search(count.album, artistCount = 0, albumCount = 5, songCount = 0).album
-            .firstOrNull { Names.normalize(SongMatch.cleanTitle(it.name)) == title && Names.normalize(it.artistLabel) == artist }
-    }.getOrNull()
-
     companion object {
         const val TOP = 10
         /** Recent plays asked for at a time. */
         const val PAGE = 100
+        /** Albums with the title of a top album that are looked into for a song by its artist. */
+        private const val COMPILATIONS = 3
+
+        /**
+         * The library's copy of a top album, or null. The history counts an album under the song's artist, so that is
+         * matched loosely: by name or first artist named, then among that artist's albums ([artists] = the library's,
+         * by normalized name), and last as an album of that title with a song by them (a compilation, say).
+         */
+        suspend fun libraryAlbum(api: SubsonicApi, count: AlbumCount, artists: suspend () -> Map<String, Artist>): Album? {
+            val title = Names.normalize(SongMatch.cleanTitle(count.album))
+            val artist = Names.normalize(count.artist)
+            val first = Names.normalize(SongMatch.primaryArtist(count.artist))
+            fun sameTitle(album: Album) = Names.normalize(SongMatch.cleanTitle(album.name)) == title
+            fun sameFirst(name: String) = Names.normalize(SongMatch.primaryArtist(name)) == first
+            // The title alone, since Gonic searches album titles only; 20, as a common one ("Greatest Hits") has many.
+            val found = runCatching { api.search(count.album, artistCount = 0, albumCount = 20, songCount = 0).album }
+                .getOrDefault(emptyList()).filter(::sameTitle)
+            (found.firstOrNull { Names.normalize(it.artistLabel) == artist } ?: found.firstOrNull { sameFirst(it.artistLabel) })?.let { return it }
+            val library = artists()
+            (library[artist] ?: library[first])?.let { a -> runCatching { api.artist(a.id).album }.getOrNull()?.firstOrNull(::sameTitle) }?.let { return it }
+            return found.take(COMPILATIONS).firstOrNull { album ->
+                runCatching { api.album(album.id).song.any { sameFirst(it.artistLabel) } }.getOrDefault(false)
+            }
+        }
 
         /** The week (starting on [locale]'s first day of the week) or month [offset] periods from the one [now] is in, midnight to midnight in [zone]. */
         fun window(period: Period, offset: Int, now: Long, zone: ZoneId, locale: Locale): StatsWindow {
