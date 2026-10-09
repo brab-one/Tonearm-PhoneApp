@@ -13,6 +13,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.Timeline
 import androidx.media3.common.TrackSelectionParameters.AudioOffloadPreferences
+import androidx.media3.common.util.Util
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.AudioSink
@@ -268,7 +269,7 @@ class PlaybackService : MediaLibraryService() {
             }
             if (events.containsAny(
                     Player.EVENT_TIMELINE_CHANGED, Player.EVENT_MEDIA_ITEM_TRANSITION, Player.EVENT_PLAY_WHEN_READY_CHANGED,
-                    Player.EVENT_IS_PLAYING_CHANGED,
+                    Player.EVENT_IS_PLAYING_CHANGED, Player.EVENT_PLAYBACK_STATE_CHANGED, Player.EVENT_PLAYER_ERROR,
                 )
             ) {
                 publishNowPlaying()
@@ -278,7 +279,9 @@ class PlaybackService : MediaLibraryService() {
 
     /** For the widget and the quick settings tile. */
     private fun publishNowPlaying() {
-        c.nowPlaying.value = NowPlayingCard.from(player.currentMediaItem?.toQueueSong(), player.playWhenReady, player.currentMediaItemIndex, player.mediaItemCount)
+        c.nowPlaying.value = NowPlayingCard.from(
+            player.currentMediaItem?.toQueueSong(), !Util.shouldShowPlayButton(player, false), player.currentMediaItemIndex, player.mediaItemCount,
+        )
     }
 
     /** When this phone last played: now while it plays. */

@@ -91,10 +91,11 @@ object PlayerWidgets {
         views.setViewVisibility(R.id.widget_play, View.VISIBLE)
         views.setImageViewResource(R.id.widget_play, if (playing) R.drawable.ic_widget_pause else R.drawable.ic_widget_play)
         views.setContentDescription(R.id.widget_play, context.getString(if (playing) R.string.widget_pause else R.string.widget_play))
-        // Play brings the saved song back when the player is gone; skipping needs it running.
+        // Play plays what it shows: the song again once the queue ended (the session's play/pause would pause first, as
+        // play is still wanted then), or the saved song when the player is gone. Skipping needs it running.
         views.setOnClickPendingIntent(
             R.id.widget_play,
-            MediaButtons.pendingIntent(context, if (card.live) KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE else KeyEvent.KEYCODE_MEDIA_PLAY),
+            MediaButtons.pendingIntent(context, if (playing) KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE else KeyEvent.KEYCODE_MEDIA_PLAY),
         )
         for ((id, key) in listOf(R.id.widget_prev to KeyEvent.KEYCODE_MEDIA_PREVIOUS, R.id.widget_next to KeyEvent.KEYCODE_MEDIA_NEXT)) {
             views.setViewVisibility(id, if (card.live) View.VISIBLE else View.GONE)
