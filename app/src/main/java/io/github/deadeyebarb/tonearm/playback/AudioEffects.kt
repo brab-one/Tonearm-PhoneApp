@@ -41,7 +41,8 @@ class AudioEffects(private val context: Context) {
                 bandCenterHz = (0 until eq.numberOfBands).map { eq.getCenterFreq(it.toShort()) / 1000 },
                 minLevel = range[0].toInt(),
                 maxLevel = range[1].toInt(),
-                presets = (0 until eq.numberOfPresets).map { eq.getPresetName(it.toShort()) },
+                // Some devices pad the names with NULs (and bytes of an earlier, longer name after them).
+                presets = (0 until eq.numberOfPresets).map { eq.getPresetName(it.toShort()).substringBefore('\u0000').trim() },
             )
         }
         apply(settings)

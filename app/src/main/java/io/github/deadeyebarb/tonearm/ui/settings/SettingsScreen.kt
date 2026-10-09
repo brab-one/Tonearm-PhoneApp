@@ -1,6 +1,7 @@
 package io.github.deadeyebarb.tonearm.ui.settings
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -301,12 +302,13 @@ private fun Item(title: String, subtitle: String? = null, icon: (@Composable () 
 
 @Composable
 private fun Toggle(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    // The whole row is the switch, so TalkBack reads its name and state together.
     ListItem(
-        modifier = Modifier.clickable { onChange(!checked) },
+        modifier = Modifier.toggleable(value = checked, role = Role.Switch, onValueChange = onChange),
         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
         headlineContent = { Text(title) },
         supportingContent = { Text(subtitle) },
-        trailingContent = { Switch(checked = checked, onCheckedChange = onChange) },
+        trailingContent = { Switch(checked = checked, onCheckedChange = null) },
     )
 }
 

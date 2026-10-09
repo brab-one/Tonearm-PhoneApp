@@ -39,6 +39,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -61,6 +63,7 @@ import io.github.deadeyebarb.tonearm.ui.common.LoadContent
 import io.github.deadeyebarb.tonearm.ui.common.formatDuration
 import io.github.deadeyebarb.tonearm.ui.common.formatMs
 import io.github.deadeyebarb.tonearm.ui.common.formatTotal
+import io.github.deadeyebarb.tonearm.ui.common.plural
 import io.github.deadeyebarb.tonearm.ui.common.rememberLoader
 import io.github.deadeyebarb.tonearm.ui.theme.Hud
 import io.github.deadeyebarb.tonearm.ui.theme.glow
@@ -68,7 +71,6 @@ import io.github.deadeyebarb.tonearm.youtube.YouTubeMusic
 import kotlinx.coroutines.delay
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
-import java.io.IOException
 
 private data class QueueRow(val index: Int, val item: MediaItem) {
     val key = "$index:${item.mediaId}"
@@ -94,19 +96,22 @@ fun QueueSheet(state: PlayerUiState, onDismiss: () -> Unit) {
             androidx.compose.foundation.layout.Column(Modifier.weight(1f)) {
                 Text("Queue", style = MaterialTheme.typography.titleLarge)
                 Text(
-                    "${state.queue.size} songs · ${formatTotal(totalSeconds.toInt())}" + if (state.shuffle) " · shuffled" else "",
+                    "${plural(state.queue.size, "song")} · ${formatTotal(totalSeconds.toInt())}" + if (state.shuffle) " · shuffled" else "",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             TextButton(onClick = player::clearUpcoming) { Text("Clear upcoming") }
         }
+        val currentRow = rows.indexOfFirst { it.index == state.currentIndex }
         LazyColumn(state = listState, modifier = Modifier.fillMaxHeight(0.9f), contentPadding = PaddingValues(bottom = 24.dp)) {
-            itemsIndexed(rows, key = { _, row -> row.key }) { _, row ->
+            itemsIndexed(rows, key = { _, row -> row.key }) { i, row ->
                 ReorderableItem(reorderState, key = row.key, enabled = !state.shuffle) { dragging ->
                     val metadata = row.item.mediaMetadata
                     val isCurrent = row.index == state.currentIndex
+                    // What already played is dimmed, so the upcoming songs stand out.
+                    val played = i < currentRow && !dragging
                     ListItem(
-                        modifier = Modifier.clickable { player.skipTo(row.index) },
+                        modifier = Modifier.clickable { player.skipTo(row.index) }.alpha(if (played) 0.5f else 1f),
                         tonalElevation = if (dragging) 8.dp else 0.dp,
                         colors = ListItemDefaults.colors(
                             containerColor = if (dragging) MaterialTheme.colorScheme.surfaceContainerHighest else Color.Transparent,
@@ -128,7 +133,8 @@ fun QueueSheet(state: PlayerUiState, onDismiss: () -> Unit) {
                         trailingContent = {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 metadata.durationMs?.let { Text(formatDuration(it / 1000), style = MaterialTheme.typography.bodySmall) }
-                                if (!isCurrent) IconButton(onClick = { player.remove(row.index) }) { Icon(Icons.Rounded.Close, "Remove") }
+                                // The playing song can't be removed; its slot stays so the durations line up.
+                                if (!isCurrent) IconButton(onClick = { player.remove(row.index) }) { Icon(Icons.Rounded.Close, "Remove") } else Spacer(Modifier.size(48.dp))
                                 if (!state.shuffle) {
                                     Icon(
                                         Icons.Rounded.DragHandle, "Reorder",
@@ -150,10 +156,14 @@ fun QueueSheet(state: PlayerUiState, onDismiss: () -> Unit) {
 @Composable
 fun LyricsSheet(entry: QueueSong, onDismiss: () -> Unit) {
     val c = LocalContext.current.container
+    // Only the music server has lyrics: there's nothing to ask for (or retry) for YouTube Music or the phone.
+    val unsupported = when {
+        YouTubeMusic.isYouTube(entry.serverId) -> "Lyrics aren't available for songs playing from YouTube Music."
+        LocalMusic.isLocal(entry.serverId) -> "Lyrics aren't available for songs stored on the phone."
+        else -> null
+    }
     val vm = rememberLoader("lyrics", entry.serverId, entry.song.id) {
-        if (YouTubeMusic.isYouTube(entry.serverId)) throw IOException("No lyrics for songs playing from YouTube Music")
-        if (LocalMusic.isLocal(entry.serverId)) throw IOException("No lyrics for songs stored on the phone")
-        c.api.lyrics(c.sessions.session(entry.serverId) ?: throw NoServerException(), entry.song)
+        if (unsupported != null) null else c.api.lyrics(c.sessions.session(entry.serverId) ?: throw NoServerException(), entry.song)
     }
     val state by c.player.state.collectAsStateWithLifecycle()
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
@@ -163,6 +173,10 @@ fun LyricsSheet(entry: QueueSong, onDismiss: () -> Unit) {
             modifier = Modifier.padding(horizontal = 24.dp),
         )
         Box(Modifier.fillMaxHeight(0.85f)) {
+            if (unsupported != null) {
+                EmptyState(Icons.Rounded.Lyrics, "No lyrics", unsupported)
+                return@Box
+            }
             LoadContent(vm) { lyrics ->
                 if (lyrics == null || lyrics.lines.isEmpty()) {
                     EmptyState(Icons.Rounded.Lyrics, "No lyrics", "The server has no lyrics for this song.")

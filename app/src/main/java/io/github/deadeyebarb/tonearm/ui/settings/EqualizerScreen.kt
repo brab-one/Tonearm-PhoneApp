@@ -2,6 +2,7 @@ package io.github.deadeyebarb.tonearm.ui.settings
 
 import android.content.Intent
 import android.media.audiofx.AudioEffect
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -12,6 +13,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Equalizer
@@ -34,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.deadeyebarb.tonearm.container
@@ -71,9 +74,11 @@ fun EqualizerScreen() {
         var local by remember(levels) { mutableStateOf(levels) }
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
             ListItem(
+                modifier = Modifier.toggleable(value = eq.enabled, role = Role.Switch) { save(eq.copy(enabled = it, bandLevels = levels)) },
                 colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                 headlineContent = { Text("Use equalizer") },
-                trailingContent = { Switch(eq.enabled, { save(eq.copy(enabled = it, bandLevels = levels)) }) },
+                supportingContent = if (eq.enabled) null else ({ Text("Off: music plays as it is. Turn it on to pick a preset or set the bands.") }),
+                trailingContent = { Switch(eq.enabled, null) },
             )
             if (settings.audioOffload) {
                 Text(
@@ -82,44 +87,51 @@ fun EqualizerScreen() {
                     modifier = Modifier.padding(horizontal = 16.dp),
                 )
             }
-            LazyRow(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                item {
-                    FilterChip(selected = eq.preset < 0, enabled = eq.enabled, onClick = { save(eq.copy(preset = -1)) }, label = { Text("Custom") })
-                }
-                itemsIndexed(bands.presets) { i, name ->
-                    FilterChip(
-                        selected = eq.preset == i, enabled = eq.enabled,
-                        onClick = { save(eq.copy(preset = i, bandLevels = c.effects.levelsForPreset(i) ?: levels)) },
-                        label = { Text(name) },
-                    )
-                }
-            }
-            bands.bandCenterHz.forEachIndexed { band, hz ->
-                Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        if (hz >= 1000) String.format(locale, "%.1f kHz", hz / 1000f) else "$hz Hz",
-                        style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(64.dp),
-                    )
-                    Slider(
-                        value = local[band].toFloat(),
-                        onValueChange = { v ->
-                            local = local.toMutableList().also { it[band] = v.toInt() }
-                            c.effects.apply(eq.copy(preset = -1, bandLevels = local))
-                        },
-                        onValueChangeFinished = { save(eq.copy(preset = -1, bandLevels = local)) },
-                        valueRange = bands.minLevel.toFloat()..bands.maxLevel.toFloat(),
-                        enabled = eq.enabled,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Text(
-                        String.format(locale, "%+.1f", local[band] / 100f),
-                        style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(44.dp),
-                    )
+            // Presets and bands only while it's on: greyed out, they looked broken rather than off.
+            AnimatedVisibility(eq.enabled) {
+                Column {
+                    LazyRow(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        item {
+                            FilterChip(selected = eq.preset < 0, enabled = eq.enabled, onClick = { save(eq.copy(preset = -1)) }, label = { Text("Custom") })
+                        }
+                        itemsIndexed(bands.presets) { i, name ->
+                            FilterChip(
+                                selected = eq.preset == i, enabled = eq.enabled,
+                                onClick = { save(eq.copy(preset = i, bandLevels = c.effects.levelsForPreset(i) ?: levels)) },
+                                label = { Text(name) },
+                            )
+                        }
+                    }
+                    bands.bandCenterHz.forEachIndexed { band, hz ->
+                        Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                if (hz >= 1000) String.format(locale, "%.1f kHz", hz / 1000f) else "$hz Hz",
+                                style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(64.dp),
+                            )
+                            Slider(
+                                value = local[band].toFloat(),
+                                onValueChange = { v ->
+                                    local = local.toMutableList().also { it[band] = v.toInt() }
+                                    c.effects.apply(eq.copy(preset = -1, bandLevels = local))
+                                },
+                                onValueChangeFinished = { save(eq.copy(preset = -1, bandLevels = local)) },
+                                valueRange = bands.minLevel.toFloat()..bands.maxLevel.toFloat(),
+                                enabled = eq.enabled,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Text(
+                                String.format(locale, "%+.1f", local[band] / 100f),
+                                style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(44.dp),
+                            )
+                        }
+                    }
                 }
             }
             Row(Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                TextButton(onClick = { save(eq.copy(preset = -1, bandLevels = List(bands.bandCenterHz.size) { 0 })) }, enabled = eq.enabled) {
-                    Text("Reset")
+                if (eq.enabled) {
+                    TextButton(onClick = { save(eq.copy(preset = -1, bandLevels = List(bands.bandCenterHz.size) { 0 })) }) {
+                        Text("Reset")
+                    }
                 }
                 if (hasSystemPanel) {
                     OutlinedButton(onClick = {

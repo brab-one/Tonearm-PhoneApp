@@ -53,6 +53,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -328,15 +329,28 @@ fun HudSeekBar(positionMs: Long, durationMs: Long, onSeek: (Long) -> Unit, modif
     }
 }
 
-/** Icon button for the secondary transport controls, with an "on" pip underneath. */
+/**
+ * Icon button for the secondary transport controls, with an "on" pip underneath. [state] is what TalkBack says it's
+ * set to, since the pip only shows it by colour.
+ */
 @Composable
-fun HudToggleIcon(icon: ImageVector, description: String, active: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+fun HudToggleIcon(
+    icon: ImageVector,
+    description: String,
+    active: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    state: String = if (active) "On" else "Off",
+) {
     val hud = Hud.colors
     Column(
         modifier
             .clip(MaterialTheme.shapes.small)
             .clickable(role = Role.Button, onClickLabel = description, onClick = onClick)
-            .semantics { contentDescription = description }
+            .semantics {
+                contentDescription = description
+                stateDescription = state
+            }
             .size(52.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
