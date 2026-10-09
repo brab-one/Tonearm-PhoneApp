@@ -41,6 +41,11 @@ Related repositories:
 - Queue with drag-to-reorder, play next, add to queue; the queue survives restarts
 - Scrobbling (now playing + submissions, retried when offline)
 - Android Auto browsing, voice search ("play … on Tonearm"), playback resumption
+- **Radio** on Now Playing: keeps the song playing and follows it with an endless radio of songs like it;
+  RADIO ON turns it off again
+- **Home screen widget** (cover, song, previous / play-pause / next), a **quick settings tile** that plays and
+  pauses, and two shortcuts on the app icon: **Picks** (a radio from your weekly picks and the songs you like)
+  and **Radio** (from the song playing or last played). After a restart, play brings the last song back
 - **When the queue ends**: stop, keep going with similar music (library first, then YouTube Music's radio
   for the last song), or play another of your playlists
 - Seeking works even behind proxies that drop range requests: the file size from the server fills in
@@ -49,6 +54,11 @@ Related repositories:
 
 **Library**
 - Home: recently added / played, most played, liked, discover, shuffle all
+- **For you** on Home: this week's picks, albums you liked lately and ones you played a lot but not in months,
+  each saying why it's there (from the music server alone)
+- **A mix from a sentence**: describe one on Home ("rainy sunday, mellow jazz") and the Tonearm server's AI makes
+  it from your library; without the AI it's matched by genres, artists and words. Play, shuffle or save it as a
+  playlist
 - Artists (A–Z), albums (7 sort orders, endless scrolling), playlists, genres, liked
 - Album, artist (bio, popular songs, similar artists), playlist and genre pages; search
 - **Like** button everywhere (mini player, Now Playing, song menus, the notification and the car). Liking a
@@ -71,6 +81,10 @@ Related repositories:
   so Android Auto and other apps can play it), plus the day's recommended artists you don't own,
   with **Request all** to send them all to Lidarr (latest album, all albums, or artist only)
 - Your mix (in Android Auto): songs similar to what you've been playing, minus what you played recently
+- **Daily mixes** on Home (Tonearm server 1.7 or later): up to three mixes a day of the music you play most, each
+  around a few artists and what's like them
+- **History** (the clock on Home, Tonearm server 1.7 or later): what you played by week or month, with plays
+  and hours, top artists and albums, and every play by day
 - Request any artist or album through Lidarr from search, recommendations or the Request screen,
   and follow Lidarr's download queue
 - **Discovery picks** (with the Tonearm server): artists you don't have that the ones you play point to
