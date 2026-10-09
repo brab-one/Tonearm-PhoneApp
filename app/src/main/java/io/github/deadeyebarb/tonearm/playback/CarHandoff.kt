@@ -83,9 +83,10 @@ class CarHandoff(
         val newDrive = cars.isEmpty() && (carLeftAt == 0L || System.currentTimeMillis() - carLeftAt > NEW_DRIVE_MS)
         cars += controller
         if (!newDrive || decision?.isActive == true) return
-        val server = c.tonearmServer.server.value
+        // Not looked up yet right after a cold start: what the last lookup found then.
+        val resume = c.tonearmServer.server.value?.resume ?: c.sessions.active.value?.let(c.knownServers::resume)
         // Without the setting, a connection or a server that keeps where devices left off, nothing waits.
-        if (!c.settings.state.value.continueFromDesktop || !c.network.online.value || server?.resume == false || player.playWhenReady) return
+        if (!c.settings.state.value.continueFromDesktop || !c.network.online.value || resume == false || player.playWhenReady) return
         gate.hold = true
         decision = scope.launch {
             try {
@@ -127,6 +128,10 @@ class CarHandoff(
     private suspend fun takeOver() {
         // Right after a cold start the settings' state may not be loaded yet.
         if (!c.settings.current().continueFromDesktop) return
+        val session = c.sessions.active.value ?: runCatching { c.sessions.awaitActive() }.getOrNull() ?: return
+        // The session wasn't there yet when the car connected: the last lookup, also before this start, may have found no
+        // Tonearm server that keeps where devices left off, and then there's nothing to wait for.
+        if (c.knownServers.resume(session) == false) return
         restored()
         val changes = queueChanges
         val handoff = withTimeoutOrNull(LOOKUP_MS) {
@@ -139,7 +144,6 @@ class CarHandoff(
                 null
             }
         } ?: return
-        val session = c.sessions.active.value ?: runCatching { c.sessions.awaitActive() }.getOrNull() ?: return
         val plan = planOf(handoff, session.config.baseUrl) ?: return
         // Something was picked in the car or on the phone meanwhile: that wins.
         if (queueChanges != changes || player.playWhenReady) return

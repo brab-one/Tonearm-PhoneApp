@@ -9,6 +9,7 @@ import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import coil3.request.crossfade
 import io.github.deadeyebarb.tonearm.connect.ConnectClient
 import io.github.deadeyebarb.tonearm.connect.ConnectRouter
+import io.github.deadeyebarb.tonearm.connect.KnownTonearmServers
 import io.github.deadeyebarb.tonearm.connect.PhoneConnect
 import io.github.deadeyebarb.tonearm.data.IntegrationsRepository
 import io.github.deadeyebarb.tonearm.data.Likes
@@ -110,8 +111,10 @@ class AppContainer(val app: Application) {
 
     private val integrationHttp = IntegrationHttp(baseHttpClient) { sessions.awaitActiveClient() }
     private val connectClient = ConnectClient(integrationHttp, json)
+    /** What the lookups of the Tonearm server found, also before this start. */
+    val knownServers = KnownTonearmServers(app)
     /** The Tonearm server at the music server's address: Connect, Lidarr with its key, history and picks. */
-    val tonearmServer = ConnectRouter(connectClient)
+    val tonearmServer = ConnectRouter(connectClient, onLookup = knownServers::lookedUp)
     /** Disliked songs and artists said no to, from the Tonearm server. */
     val dislikes = Dislikes(connectClient, tonearmServer) { sessions.active.value }
 

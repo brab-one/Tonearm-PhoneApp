@@ -140,6 +140,21 @@ class ConnectClientTest {
     }
 
     @Test
+    fun `the router tells what each lookup found, none too, but not one that failed`() = runTest {
+        val found = mutableListOf<Pair<String, Boolean?>>()
+        val router = ConnectRouter(client) { key, info -> found += key to info?.resume }
+        respond("""{"server":"tonearm","protocol":2,"user":"alice","resume":true}""")
+        router.refresh(session())
+        // Remembered: not looked up again.
+        router.refresh(session())
+        respond("""{"error":"busy"}""", 503)
+        router.refresh(session(username = "bob"))
+        respond("404 page not found", 404)
+        router.refresh(session(username = "carol"))
+        assertEquals(listOf(ConnectRouter.keyOf(session()) to true, ConnectRouter.keyOf(session(username = "carol")) to null), found)
+    }
+
+    @Test
     fun `without a tonearm server connect isn't available`() = runTest {
         // Navidrome's answer for a page it doesn't have.
         respond("404 page not found", 404)

@@ -522,7 +522,11 @@ class ConnectClient(private val http: IntegrationHttp, private val json: Json) {
  * Finds the Tonearm server at the music server's address, for Connect and for what it offers (Lidarr, history,
  * picks). What was found is kept for a while and published in [server].
  */
-class ConnectRouter(private val client: ConnectClient) {
+class ConnectRouter(
+    private val client: ConnectClient,
+    /** Told what each lookup found at a music server ([keyOf]): its Tonearm server, or null when there's none. */
+    private val onLookup: (String, TonearmServerInfo?) -> Unit = { _, _ -> },
+) {
     private data class Found(val server: String, val info: TonearmServerInfo?, val at: Long)
 
     private val lock = Mutex()
@@ -575,6 +579,7 @@ class ConnectRouter(private val client: ConnectClient) {
         }
         found = Found(key, info, now)
         publish(key, info)
+        onLookup(key, info)
         info
     }
 
@@ -583,10 +588,11 @@ class ConnectRouter(private val client: ConnectClient) {
         _server.value = info
     }
 
-    private fun keyOf(session: ServerSession) = session.config.baseUrl + "|" + session.config.username
+    companion object {
+        private const val RECHECK_FOUND_MS = 10 * 60_000L
+        private const val RECHECK_MISSING_MS = 2 * 60_000L
 
-    private companion object {
-        const val RECHECK_FOUND_MS = 10 * 60_000L
-        const val RECHECK_MISSING_MS = 2 * 60_000L
+        /** Which music server and user a lookup is for. */
+        fun keyOf(session: ServerSession) = session.config.baseUrl + "|" + session.config.username
     }
 }
