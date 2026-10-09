@@ -1,5 +1,7 @@
 package io.github.deadeyebarb.tonearm.integrations
 
+import io.github.deadeyebarb.tonearm.connect.ConnectClient
+import io.github.deadeyebarb.tonearm.connect.ConnectRouter
 import io.github.deadeyebarb.tonearm.data.AuthMethod
 import io.github.deadeyebarb.tonearm.data.ServerConfig
 import io.github.deadeyebarb.tonearm.subsonic.ServerSession
@@ -21,12 +23,17 @@ import org.junit.Test
 class ContinuationTest {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true; coerceInputValues = true; explicitNulls = false }
     private val server = MockWebServer()
+    private var tonearmServer = true
 
     @Before
     fun setUp() {
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse {
                 val ok = """{"subsonic-response":{"status":"ok","version":"1.16.1""""
+                // The Tonearm server, which knows whose an API key is.
+                if (request.url.encodedPath == "/connect-tonearm/api/hello") {
+                    return if (tonearmServer) MockResponse(body = """{"server":"tonearm","protocol":2,"user":"alice"}""") else MockResponse(code = 404)
+                }
                 return when (request.url.encodedPath.removePrefix("/rest/").removeSuffix(".view")) {
                     "getPlaylists" -> MockResponse(body = """$ok,"playlists":{"playlist":[
                         {"id":"mine","name":"Mine","owner":"alice","songCount":2},
@@ -48,9 +55,11 @@ class ContinuationTest {
     private fun session(auth: AuthMethod = AuthMethod.TOKEN) =
         ServerSession(ServerConfig(name = "Music", baseUrl = server.url("/").toString(), username = "Alice", auth = auth), "secret", OkHttpClient())
 
+    /** What the queue goes on with, for the user the Tonearm server (when there is one) says is logged in. */
     private suspend fun picked(session: ServerSession): Set<String> {
         val continuation = Continuation(SubsonicApi({ session }, json), YouTubeMusic(OkHttpClient()))
-        return (1..40).map { continuation.anotherPlaylist(session, emptySet()).first().song.id.substringBefore('-') }.toSet()
+        val user = ConnectRouter(ConnectClient(IntegrationHttp(OkHttpClient()) { null }, json)).user(session)
+        return (1..40).map { continuation.anotherPlaylist(session, emptySet(), user).first().song.id.substringBefore('-') }.toSet()
     }
 
     @Test
@@ -59,7 +68,13 @@ class ContinuationTest {
     }
 
     @Test
-    fun `with an api key, which doesn't say who you are, all of them count`() = runTest {
+    fun `with an api key the tonearm server says who you are`() = runTest {
+        assertEquals(setOf("mine", "shared"), picked(session(AuthMethod.API_KEY)))
+    }
+
+    @Test
+    fun `with an api key and nobody to say who you are, all of them count rather than none of your private ones`() = runTest {
+        tonearmServer = false
         assertEquals(setOf("mine", "bobs", "shared"), picked(session(AuthMethod.API_KEY)))
     }
 }

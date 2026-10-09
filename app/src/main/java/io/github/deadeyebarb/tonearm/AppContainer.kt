@@ -118,7 +118,7 @@ class AppContainer(val app: Application) {
     )
     val connect = PhoneConnect(app, sessions, integrations, connectClient, tonearmServer)
     val recommender = Recommender(api, sessions, connect, dislikes)
-    val daily = DailyDiscovery(app, json, scope, api, sessions, integrations, recommender, dislikes)
+    val daily = DailyDiscovery(app, json, scope, api, sessions, integrations, recommender, dislikes, tonearmServer)
 
     init {
         // What the desktop disliked shows up here within a few minutes.
@@ -155,7 +155,7 @@ class AppContainer(val app: Application) {
     val weekly = WeeklyPicks(api, LidarrClient(integrationHttp, json), connectClient, json, connect.deviceId, java.io.File(app.filesDir, "weekly-run.json"))
     /** Radio, mixes from a sentence and daily mixes: from the Tonearm server, else made from the library. */
     val mixer = Mixer(api, connectClient, tonearmServer, youtube, dislikes, weekly)
-    val continuation = QueueContinuation(api, sessions, youtube, settings, dislikes)
+    val continuation = QueueContinuation(api, sessions, youtube, settings, dislikes, tonearmServer)
     val media by lazy { MediaEngine(app, sessions, settings, network, youtube, youtubeHttpClient) }
 
     /** The playback service's, but it outlives the service: the last song still gets sent after that stops. */

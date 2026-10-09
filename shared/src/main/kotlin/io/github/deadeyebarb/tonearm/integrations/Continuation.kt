@@ -60,11 +60,12 @@ class Continuation(
 
     /**
      * Another playlist that isn't mostly what just played: one of yours or a shared one, not someone else's private one
-     * (which Navidrome lists to an admin too).
+     * (which Navidrome lists to an admin too). [user] is who you are; when nobody can say (an API key without a Tonearm
+     * server), all of them count, rather than none of your own private ones.
      */
-    suspend fun anotherPlaylist(session: ServerSession, played: Set<String>): List<NextSong> {
+    suspend fun anotherPlaylist(session: ServerSession, played: Set<String>, user: String? = session.user): List<NextSong> {
         val playlists = runCatching { api.playlists(session) }.getOrDefault(emptyList())
-            .filter { it.songCount > 0 && (it.ownedBy(session.user) || it.public) }.shuffled()
+            .filter { it.songCount > 0 && (it.ownedBy(user) || it.public) }.shuffled()
         for (candidate in playlists) {
             val songs = runCatching { api.playlist(candidate.id, session).entry }.getOrDefault(emptyList()).map { NextSong(it, false) }
             if (songs.isNotEmpty() && songs.count { key(it) !in played } >= songs.size / 2) return songs

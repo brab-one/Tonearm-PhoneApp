@@ -1,6 +1,7 @@
 package io.github.deadeyebarb.tonearm.integrations
 
 import android.content.Context
+import io.github.deadeyebarb.tonearm.connect.ConnectRouter
 import io.github.deadeyebarb.tonearm.data.jsonDataStore
 import io.github.deadeyebarb.tonearm.likes.Dislikes
 import io.github.deadeyebarb.tonearm.media.QueueSong
@@ -69,6 +70,8 @@ class DailyDiscovery(
     private val integrations: IntegrationsService,
     private val recommender: Recommender,
     private val dislikes: Dislikes,
+    /** Says who an API key belongs to, so another user's "Daily Discovery" isn't taken for yours. */
+    private val tonearmServer: ConnectRouter,
 ) {
     private val store = jsonDataStore(context, "daily", DailyState.serializer(), DailyState(), json)
     private val mutex = Mutex()
@@ -171,7 +174,7 @@ class DailyDiscovery(
         val ids = songs.map { it.id }
         val id = existingId?.takeIf { id -> runCatching { api.playlist(id, session) }.isSuccess }?.also { api.replacePlaylist(it, ids, session) }
             ?: api.createPlaylist(PLAYLIST_NAME, ids, session)?.id
-            ?: api.playlists(session).firstOrNull { it.name == PLAYLIST_NAME && it.ownedBy(session.user) }?.id
+            ?: api.playlists(session).firstOrNull { it.name == PLAYLIST_NAME && it.ownedBy(tonearmServer.user(session)) }?.id
         id?.let { runCatching { api.setPlaylistComment(it, "Tonearm: recommendations for $today, from what you play", session) } }
         return id
     }

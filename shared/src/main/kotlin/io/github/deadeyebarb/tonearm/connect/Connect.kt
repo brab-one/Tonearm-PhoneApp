@@ -551,6 +551,9 @@ class ConnectRouter(private val client: ConnectClient) {
         }
     }
 
+    /** Who is logged in to [session]: the login says, and for an API key the Tonearm server does. Null when neither knows. */
+    suspend fun user(session: ServerSession): String? = session.user ?: refresh(session)?.user?.ifEmpty { null }
+
     private suspend fun lookup(session: ServerSession): TonearmServerInfo? = lock.withLock {
         val key = keyOf(session)
         val now = System.currentTimeMillis()
