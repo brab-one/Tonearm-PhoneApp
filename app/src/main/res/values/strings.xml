@@ -1,4 +1,17 @@
 <resources>
     <string name="app_name">Tonearm</string>
     <string name="download_channel_name">Downloads</string>
+    <string name="widget_label">Tonearm player</string>
+    <string name="widget_description">What\'s playing, with play, pause and skip</string>
+    <string name="widget_empty_title">TONEARM</string>
+    <string name="widget_empty">NOTHING QUEUED // TAP TO OPEN</string>
+    <string name="widget_previous">Previous</string>
+    <string name="widget_play">Play</string>
+    <string name="widget_pause">Pause</string>
+    <string name="widget_next">Next</string>
+    <string name="tile_label">Tonearm</string>
+    <string name="shortcut_picks">Picks</string>
+    <string name="shortcut_picks_long">Picks radio</string>
+    <string name="shortcut_radio">Radio</string>
+    <string name="shortcut_radio_long">Radio from this song</string>
 </resources>

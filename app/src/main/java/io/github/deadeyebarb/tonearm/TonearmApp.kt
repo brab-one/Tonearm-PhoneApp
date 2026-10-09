@@ -10,6 +10,7 @@ import coil3.PlatformContext
 import coil3.SingletonImageLoader
 import io.github.deadeyebarb.tonearm.integrations.DailyDiscoveryWorker
 import io.github.deadeyebarb.tonearm.integrations.WeeklyPicksWorker
+import io.github.deadeyebarb.tonearm.widget.PlayerWidgets
 
 class TonearmApp : Application(), SingletonImageLoader.Factory {
     lateinit var container: AppContainer
@@ -22,6 +23,7 @@ class TonearmApp : Application(), SingletonImageLoader.Factory {
         WeeklyPicksWorker.schedule(this)
         DownloadUpgradeWorker.schedule(this)
         container.likes.start()
+        PlayerWidgets.start(this, container)
         // Downloads whose file got better on the server, checked soon after start too (not only every 12 hours).
         container.scope.launch {
             kotlinx.coroutines.delay(20_000)
