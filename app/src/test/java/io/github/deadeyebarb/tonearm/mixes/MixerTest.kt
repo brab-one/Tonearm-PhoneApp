@@ -215,6 +215,27 @@ class MixerTest {
     }
 
     @Test
+    fun `the radio has run out only when the server has no more and nothing turns up here either`() = runTest {
+        hello = """{"server":"tonearm","protocol":2,"radio":true}"""
+        radioAnswer = MockResponse(body = """{"title":"Radio · Middle C","songs":[],"more":false,"problem":"Nothing more like that"}""")
+        // Everything like the seed is queued already, and the seed is the last song queued.
+        val queue = (1..6).map { "al1-2-like-$it" }.let { queueOf(*it.toTypedArray()) } + queueOf("al1-2")
+        val dry = mixer().radio(session, RadioSeed(RadioSeed.SONG, seed), queue, false)
+        assertTrue(dry.songs.isEmpty())
+        assertTrue(dry.dry)
+        // The server has more coming (all queued this time), or it couldn't be asked: not run out, ask again later.
+        radioAnswer = MockResponse(body = """{"title":"Radio · Middle C","songs":[${catalog["al1-1"]}],"more":true}""")
+        assertFalse(mixer().radio(session, RadioSeed(RadioSeed.SONG, seed), queue + queueOf("al1-1"), false).dry)
+        radioAnswer = MockResponse(code = 502, body = "Bad gateway")
+        assertFalse(mixer().radio(session, RadioSeed(RadioSeed.SONG, seed), queue, false).dry)
+        // Songs here keep it going.
+        radioAnswer = MockResponse(body = """{"title":"Radio · Middle C","songs":[],"more":false}""")
+        val here = mixer().radio(session, RadioSeed(RadioSeed.SONG, seed), queueOf("al1-2"), false)
+        assertEquals(6, here.songs.size)
+        assertFalse(here.dry)
+    }
+
+    @Test
     fun `without the server's radio it isn't asked, and every other batch follows the last song queued`() = runTest {
         val mixer = mixer()
         val first = mixer.radio(session, RadioSeed(RadioSeed.SONG, seed), queueOf("al1-1", "al1-2"), false)

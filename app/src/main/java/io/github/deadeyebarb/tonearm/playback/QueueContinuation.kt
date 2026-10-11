@@ -1,5 +1,7 @@
 package io.github.deadeyebarb.tonearm.playback
 
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
 import io.github.deadeyebarb.tonearm.connect.ConnectRouter
 import io.github.deadeyebarb.tonearm.data.QueueEnd
 import io.github.deadeyebarb.tonearm.data.SettingsRepository
@@ -47,4 +49,15 @@ class QueueContinuation(
     companion object {
         fun key(entry: QueueSong) = Continuation.key(entry.song.id, YouTubeMusic.isYouTube(entry.serverId))
     }
+}
+
+/**
+ * Adds [items] at [index] of the queue. When they come after the last song ended while the queue was meant to play (a radio's
+ * or "When the queue ends"' songs held up in a dead zone), the first of them plays: else the player would stay stopped at
+ * the end, and Play would start the finished song over.
+ */
+fun Player.addAndCarryOn(index: Int, items: List<MediaItem>) {
+    val ended = playbackState == Player.STATE_ENDED && playWhenReady
+    addMediaItems(index, items)
+    if (ended) seekToDefaultPosition(index)
 }

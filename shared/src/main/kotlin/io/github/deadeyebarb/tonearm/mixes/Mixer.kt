@@ -39,8 +39,11 @@ data class RadioSeed(val kind: String, val song: Song? = null, val youtube: Bool
     }
 }
 
-/** A radio batch, from the Tonearm server or made here; [problem] says why there's nothing when [songs] is empty. */
-data class RadioResult(val title: String, val songs: List<NextSong>, val more: Boolean, val problem: String? = null)
+/**
+ * A radio batch, from the Tonearm server or made here; [problem] says why there's nothing when [songs] is empty. [dry]: the
+ * server said it has no more, and nothing turned up here either, so the radio has run out (rather than failed for now).
+ */
+data class RadioResult(val title: String, val songs: List<NextSong>, val more: Boolean, val problem: String? = null, val dry: Boolean = false)
 
 /**
  * Radio, mixes from a sentence and daily mixes: from the Tonearm server when it makes them, else made here from the
@@ -61,11 +64,14 @@ class Mixer(
     /** One radio batch. [queue] = the whole queue in order (oldest first). */
     suspend fun radio(session: ServerSession?, seed: RadioSeed, queue: List<NextSong>, allowYouTube: Boolean): RadioResult {
         val keys = queue.map(Continuation::key)
-        if (session != null && router.refresh(session)?.radio == true) fromServer(session, seed, keys)?.let { return it }
-        return if (seed.kind == RadioSeed.PICKS) picksHere(session, keys, allowYouTube) else similarHere(session, seed, queue, keys, allowYouTube)
+        val served = if (session != null && router.refresh(session)?.radio == true) fromServer(session, seed, keys) else null
+        if (served != null && served.songs.isNotEmpty()) return served
+        val here = if (seed.kind == RadioSeed.PICKS) picksHere(session, keys, allowYouTube) else similarHere(session, seed, queue, keys, allowYouTube)
+        // Only the server can say there's no more; nothing here may just be a dead zone.
+        return if (here.songs.isEmpty() && served?.more == false) here.copy(dry = true) else here
     }
 
-    /** The server's batch, without disliked or queued songs; null when it failed, took too long or had nothing. */
+    /** The server's batch, without disliked or queued songs (maybe none of them); null when it failed or took too long. */
     private suspend fun fromServer(session: ServerSession, seed: RadioSeed, keys: List<String>): RadioResult? {
         val picks = seed.kind == RadioSeed.PICKS
         val song = seed.song
@@ -96,7 +102,6 @@ class Mixer(
         val queued = keys.toSet()
         val songs = batch.songs.filterNot { dislikes.isDisliked(it.artistLabel, it.title) }.map { NextSong(it, false) }
             .filterNot { Continuation.key(it) in queued }.distinctBy(Continuation::key)
-        if (songs.isEmpty()) return null
         return RadioResult(batch.title.ifEmpty { seed.title }, songs, batch.more, batch.problem)
     }
 

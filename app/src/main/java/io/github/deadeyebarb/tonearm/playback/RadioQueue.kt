@@ -29,8 +29,8 @@ data class SavedRadio(val seed: RadioSeed, val title: String)
 /**
  * Radio: the song playing stays, what follows becomes music like it (or the user's picks), and more is added as it plays,
  * without end. The car's Radio button, Now Playing, the shortcuts and the widget start it; replacing the queue, turning
- * shuffle on or Stop ends it. The songs come from the Tonearm server, else from the library ([io.github.deadeyebarb.tonearm.mixes.Mixer]).
- * Main thread.
+ * shuffle on or Stop ends it, and so does running out of songs. The songs come from the Tonearm server, else from the
+ * library ([io.github.deadeyebarb.tonearm.mixes.Mixer]). Main thread.
  */
 class RadioQueue(
     private val player: Player,
@@ -40,6 +40,8 @@ class RadioQueue(
     private val leaveOut: (Song) -> Boolean,
     /** The radio started, stopped or got its title. */
     private val onChange: () -> Unit,
+    /** Tells the user something about the radio, on the phone and in the car. */
+    private val tell: (String) -> Unit,
 ) : Player.Listener {
     /** The radio playing; null when none does. */
     var current: SavedRadio? = null
@@ -64,14 +66,15 @@ class RadioQueue(
             if (!refills.finish(ticket, batch.songs.isNotEmpty())) return@async null
             if (batch.songs.isEmpty()) {
                 stop()
-                return@async batch.problem ?: "Nothing to play like that"
+                // Plainly, for the driver too: why the server or the library had nothing doesn't help there.
+                return@async if (seed.kind == RadioSeed.SONG) NO_RADIO else batch.problem ?: "Nothing to play like that"
             }
             set(SavedRadio(seed, batch.title))
             val items = batch.songs.map { c.mediaItems.song(it) }
             if (fromSong && player.currentMediaItem != null) {
                 val after = player.currentMediaItemIndex + 1
                 if (after < player.mediaItemCount) player.removeMediaItems(after, player.mediaItemCount)
-                player.addMediaItems(items)
+                player.addAndCarryOn(player.mediaItemCount, items)
             } else {
                 player.setMediaItems(items)
             }
@@ -138,6 +141,12 @@ class RadioQueue(
         job = scope.launch {
             val batch = fetch(radio.seed, queue)
             if (!refills.finish(ticket, batch.songs.isNotEmpty())) return@launch
+            if (batch.songs.isEmpty() && batch.dry) {
+                // Not on while the music stops: the server has nothing more like it, and neither has the library.
+                stop()
+                tell(RAN_OUT)
+                return@launch
+            }
             if (batch.songs.isEmpty()) {
                 // Asked again in a while (or at the next song), less often the longer it fails.
                 retryJob = scope.launch {
@@ -146,11 +155,12 @@ class RadioQueue(
                 }
                 return@launch
             }
-            player.addMediaItems(batch.songs.map { c.mediaItems.song(it) })
+            // The last song may have ended while this was on its way (a dead zone): then the first of these plays.
+            player.addAndCarryOn(player.mediaItemCount, batch.songs.map { c.mediaItems.song(it) })
         }
     }
 
-    private class Batch(val title: String, val songs: List<QueueSong>, val problem: String?)
+    private class Batch(val title: String, val songs: List<QueueSong>, val problem: String?, val dry: Boolean = false)
 
     private suspend fun fetch(seed: RadioSeed, queue: List<QueueSong>): Batch {
         val session = c.sessions.active.value ?: runCatching { c.sessions.awaitActive() }.getOrNull()
@@ -164,7 +174,7 @@ class RadioQueue(
         val songs = result.songs.filterNot { leaveOut(it.song) }.mapNotNull { next ->
             if (next.youtube) QueueSong(YouTubeMusic.SOURCE_ID, next.song) else session?.let { QueueSong(it.id, next.song) }
         }
-        return Batch(result.title, songs, result.problem)
+        return Batch(result.title, songs, result.problem, result.dry)
     }
 
     /** The queue's songs from the first up to [upTo], in queue order. */
@@ -176,6 +186,9 @@ class RadioQueue(
     }
 
     companion object {
+        const val NO_RADIO = "No radio for this song"
+        const val RAN_OUT = "The radio ran out of songs, so it's off"
+
         /** A radio from [entry], or the picks radio without one. */
         fun seedOf(entry: QueueSong?): RadioSeed = entry?.let {
             RadioSeed(RadioSeed.SONG, it.song, youtube = YouTubeMusic.isYouTube(it.serverId), local = LocalMusic.isLocal(it.serverId))

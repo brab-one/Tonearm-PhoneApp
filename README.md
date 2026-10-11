@@ -298,7 +298,8 @@ work, and the player has these buttons, in this order (the car shows the first o
 **Radio** keeps the song playing and replaces what follows with music like it, and more keeps coming as it plays.
 The Tonearm server (1.7 or later) picks the songs from your library; without it they come from Navidrome's similar
 songs (and YouTube Music, with *Play what you don't have* on). With nothing playing it's a radio from your weekly
-picks and likes. Playing something else or turning shuffle on ends it; it carries on after a restart.
+picks and likes. Playing something else or turning shuffle on ends it; it carries on after a restart. When there's
+no radio for a song, or it runs out of songs, the car says so and the radio goes off.
 
 **Continue from the desktop**: when the car starts and the phone isn't playing, the phone takes over what the
 [desktop player](https://github.com/brab-one/Tonearm-Desktop) played last (its song, place and queue), if the

@@ -169,7 +169,7 @@ class PlaybackService : MediaLibraryService() {
             // Right after a start the Tonearm server isn't looked up yet: what the last lookup found then.
             worthRetrying = { c.tonearmServer.server.value?.dislikes ?: c.sessions.active.value?.let(c.knownServers::dislikes) ?: true },
         )
-        radio = RadioQueue(player, c, scope, leaveOut = ::isUnsavedDislike, onChange = ::onRadioChanged).also(player::addListener)
+        radio = RadioQueue(player, c, scope, leaveOut = ::isUnsavedDislike, onChange = ::onRadioChanged, tell = ::tell).also(player::addListener)
         carHandoff = CarHandoff(
             c, player, gate, scope, restored = { restoreJob.join() }, phonePlayedAt = { lastPlayedAt }, beforeTakeOver = radio::stop,
         ).also(player::addListener)
@@ -269,6 +269,8 @@ class PlaybackService : MediaLibraryService() {
                 val next = player.nextMediaItemIndex.takeIf { it != C.INDEX_UNSET }?.let(player::getMediaItemAt)
                 c.media.keepPinned(listOfNotNull(player.currentMediaItem, next).mapNotNull { it.localConfiguration?.uri })
             }
+            // The last song ended with nothing added yet: whatever comes now plays (see addAndCarryOn).
+            if (events.contains(Player.EVENT_PLAYBACK_STATE_CHANGED) && player.playbackState == Player.STATE_ENDED) continueIfLast()
             if (events.containsAny(
                     Player.EVENT_TIMELINE_CHANGED, Player.EVENT_MEDIA_ITEM_TRANSITION, Player.EVENT_IS_PLAYING_CHANGED,
                     Player.EVENT_SHUFFLE_MODE_ENABLED_CHANGED, Player.EVENT_REPEAT_MODE_CHANGED,
@@ -413,8 +415,8 @@ class PlaybackService : MediaLibraryService() {
         continueJob = scope.launch {
             val more = runCatching { c.continuation.next(last, played) }.getOrDefault(emptyList()).filterNot { isUnsavedDislike(it.song) }
             if (more.isEmpty() || player.hasNextMediaItem() || radio.current != null) return@launch
-            // Right after the song playing, which is the last to play, shuffled or not.
-            player.addMediaItems(player.currentMediaItemIndex + 1, more.map { c.mediaItems.song(it) })
+            // Right after the song playing, which is the last to play, shuffled or not; it may have ended meanwhile.
+            player.addAndCarryOn(player.currentMediaItemIndex + 1, more.map { c.mediaItems.song(it) })
         }
     }
 
@@ -524,6 +526,12 @@ class PlaybackService : MediaLibraryService() {
 
     private fun isUnsavedDislike(song: Song): Boolean = song in unsavedDislikes
 
+    /** Says [message] on the phone and, for a moment, in the car. */
+    private fun tell(message: String) {
+        c.messages.show(message)
+        session.sendError(SessionError(SessionError.ERROR_UNKNOWN, message))
+    }
+
     /**
      * Starts a radio from the current song ([PlaybackCommands.SEED_CURRENT]; the picks without one) or from the picks,
      * once the saved queue is back. A problem is shown on the phone and, for a moment, in the car.
@@ -533,10 +541,8 @@ class PlaybackService : MediaLibraryService() {
         restoreJob.join()
         val from = if (seed == PlaybackCommands.SEED_PICKS) RadioSeed(RadioSeed.PICKS) else RadioQueue.seedOf(player.currentMediaItem?.toQueueSong())
         val problem = radio.start(from, play).await() ?: return SessionResult(SessionResult.RESULT_SUCCESS)
-        val error = SessionError(SessionError.ERROR_UNKNOWN, problem)
-        c.messages.show(problem)
-        session.sendError(error)
-        return SessionResult(error)
+        tell(problem)
+        return SessionResult(SessionError(SessionError.ERROR_UNKNOWN, problem))
     }
 
     /**
