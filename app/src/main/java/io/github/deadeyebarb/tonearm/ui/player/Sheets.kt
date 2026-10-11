@@ -182,6 +182,16 @@ fun SleepTimerSheet(onDismiss: () -> Unit) {
             modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp),
         )
         LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
+            // First, so it shows without pulling the sheet up.
+            if (state != SleepTimer.State.Off) {
+                item {
+                    ListItem(
+                        modifier = Modifier.clickable { timer.cancel(); onDismiss() },
+                        leadingContent = { Icon(Icons.Rounded.TimerOff, null, tint = MaterialTheme.colorScheme.error) },
+                        headlineContent = { Text("Turn off", color = MaterialTheme.colorScheme.error) },
+                    )
+                }
+            }
             item {
                 ListItem(
                     modifier = Modifier.clickable { timer.stopAfterCurrentTrack(); onDismiss() },
@@ -195,15 +205,6 @@ fun SleepTimerSheet(onDismiss: () -> Unit) {
                     leadingContent = { Icon(Icons.Rounded.Timer, null) },
                     headlineContent = { Text(if (minutes < 60) "$minutes minutes" else "${minutes / 60} h" + if (minutes % 60 > 0) " ${minutes % 60} min" else "") },
                 )
-            }
-            if (state != SleepTimer.State.Off) {
-                item {
-                    ListItem(
-                        modifier = Modifier.clickable { timer.cancel(); onDismiss() },
-                        leadingContent = { Icon(Icons.Rounded.TimerOff, null, tint = MaterialTheme.colorScheme.error) },
-                        headlineContent = { Text("Turn off", color = MaterialTheme.colorScheme.error) },
-                    )
-                }
             }
         }
     }

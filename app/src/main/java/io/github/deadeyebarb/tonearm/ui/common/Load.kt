@@ -15,6 +15,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -37,6 +38,8 @@ import io.github.deadeyebarb.tonearm.subsonic.userMessage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 
@@ -52,6 +55,12 @@ class LoaderViewModel<T>(private val loader: suspend () -> T, reloadOn: Flow<*>?
         private set
     var refreshing by mutableStateOf(false)
         private set
+    /** Why the last quiet reload failed while the value from before still shows; null once a load works. */
+    var stale: Throwable? by mutableStateOf(null)
+        private set
+    private val _refreshFailures = MutableSharedFlow<Throwable>(extraBufferCapacity = 1)
+    /** Each quiet reload that failed, for the screen to say so once. */
+    val refreshFailures: SharedFlow<Throwable> = _refreshFailures
 
     private var loading: Job? = null
 
@@ -60,17 +69,27 @@ class LoaderViewModel<T>(private val loader: suspend () -> T, reloadOn: Flow<*>?
         if (reloadOn != null) viewModelScope.launch { reloadOn.drop(1).collect { reload(silent = true) } }
     }
 
-    /** With [silent], keeps showing the current value while reloading (pull to refresh). A newer reload replaces an older one. */
+    /**
+     * With [silent], keeps showing the current value while reloading (pull to refresh); when that fails, the value stays
+     * [stale]. A newer reload replaces an older one.
+     */
     fun reload(silent: Boolean = false) {
         loading?.cancel()
         loading = viewModelScope.launch {
             if (silent) refreshing = true else if (state !is Load.Ready) state = Load.Loading
-            state = try {
-                Load.Ready(loader())
+            try {
+                state = Load.Ready(loader())
+                stale = null
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                if (silent && state is Load.Ready) state else Load.Failed(e)
+                if (silent && state is Load.Ready) {
+                    stale = e
+                    _refreshFailures.tryEmit(e)
+                } else {
+                    state = Load.Failed(e)
+                    stale = null
+                }
             }
             refreshing = false
         }
@@ -88,6 +107,7 @@ class LoaderViewModel<T>(private val loader: suspend () -> T, reloadOn: Flow<*>?
 fun <T> rememberLoader(vararg keys: Any?, reloadOn: Flow<*>? = null, loader: suspend () -> T): LoaderViewModel<T> =
     viewModel(key = keys.joinToString("|")) { LoaderViewModel(loader, reloadOn) }
 
+/** The value once it's there, with pull to refresh; a refresh that fails keeps it and says so. */
 @Composable
 fun <T> LoadContent(
     vm: LoaderViewModel<T>,
@@ -95,6 +115,8 @@ fun <T> LoadContent(
     errorExtra: @Composable () -> Unit = {},
     content: @Composable (T) -> Unit,
 ) {
+    val actions = LocalActions.current
+    LaunchedEffect(vm) { vm.refreshFailures.collect { actions.message("Couldn't refresh: " + it.userMessage()) } }
     when (val state = vm.state) {
         Load.Loading -> Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) { HudLoader() }
         is Load.Failed -> ErrorState(state.error, onRetry = { vm.reload() }, modifier = modifier, extra = errorExtra)

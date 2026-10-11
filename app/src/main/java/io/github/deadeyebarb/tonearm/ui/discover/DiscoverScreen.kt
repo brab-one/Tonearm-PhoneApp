@@ -64,6 +64,7 @@ import io.github.deadeyebarb.tonearm.ui.common.ErrorState
 import io.github.deadeyebarb.tonearm.ui.common.LoadContent
 import io.github.deadeyebarb.tonearm.ui.common.LocalActions
 import io.github.deadeyebarb.tonearm.ui.common.YouTubePlayButton
+import io.github.deadeyebarb.tonearm.ui.common.plural
 import io.github.deadeyebarb.tonearm.ui.common.rememberLoader
 import io.github.deadeyebarb.tonearm.ui.request.RemoteCover
 import io.github.deadeyebarb.tonearm.ui.theme.Hud
@@ -264,7 +265,7 @@ private fun RotationCircle(entry: RotationEntry, actions: AppActions) {
         )
         Spacer(Modifier.height(6.dp))
         Text(entry.name, style = MaterialTheme.typography.titleSmall, maxLines = 2, textAlign = TextAlign.Center, overflow = TextOverflow.Ellipsis)
-        Text("${entry.scrobbles} PLAYS", style = MaterialTheme.typography.labelSmall, color = hud.accent)
+        Text(plural(entry.scrobbles, "play").uppercase(), style = MaterialTheme.typography.labelSmall, color = hud.accent)
         if (entry.artist == null) HudTag(if (youtube) "▶ YOUTUBE MUSIC" else "NOT IN LIBRARY", color = hud.accent2)
     }
 }

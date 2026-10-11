@@ -325,6 +325,21 @@ class MixerTest {
     }
 
     @Test
+    fun `when none of the ai's songs could be used, the note doesn't say nothing fits above the songs found`() = runTest {
+        hello = """{"server":"tonearm","protocol":2,"dislikes":true,"mix":true}"""
+        mixAnswers += """{"id":"mix-1","prompt":"mellow jazz","title":"Mellow Jazz","songs":[],"running":false,"problem":"Nothing in your library fits that","ai":"Ollama gemma4:26b"}"""
+        val mix = mixer().prompt(session, "mellow jazz")
+        assertNull(mix.ai)
+        assertEquals(setOf("al4-1", "al4-2", "al4-3"), mix.songs.map { it.id }.toSet())
+        assertEquals(Mixer.AI_SONGS_LEFT_OUT, mix.problem)
+
+        // Nothing found here either: then the server's words are right.
+        val none = mixer().prompt(session, "zzz")
+        assertTrue(none.songs.isEmpty())
+        assertEquals("Nothing in your library fits that", none.problem)
+    }
+
+    @Test
     fun `when the server doesn't answer, the note says so plainly`() = runTest {
         hello = """{"server":"tonearm","protocol":2,"dislikes":true,"mix":true}"""
         // The proxy in front of it, with nothing behind it.

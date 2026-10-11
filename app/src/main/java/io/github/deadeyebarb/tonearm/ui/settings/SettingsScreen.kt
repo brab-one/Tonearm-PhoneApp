@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Dns
-import androidx.compose.material.icons.rounded.Equalizer
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
@@ -44,6 +43,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import io.github.deadeyebarb.tonearm.ui.theme.Hud
 import io.github.deadeyebarb.tonearm.ui.theme.HudSectionHeader
 import io.github.deadeyebarb.tonearm.ui.theme.glowBorder
@@ -209,7 +209,8 @@ fun SettingsScreen() {
                 item { PreampSlider(settings.replayGainPreampDb) { db -> update { it.copy(replayGainPreampDb = db) } } }
             }
             item {
-                Item("Equalizer", if (settings.equalizer.enabled) "On" else "Off", icon = { Icon(Icons.Rounded.Equalizer, null) }) {
+                // No icon, so its text lines up with the other playback rows.
+                Item("Equalizer", if (settings.equalizer.enabled) "On" else "Off") {
                     actions.navigate(EqualizerRoute)
                 }
             }
@@ -324,7 +325,13 @@ private fun PreampSlider(value: Float, onChange: (Float) -> Unit) {
             Text("Pre-amp", modifier = Modifier.weight(1f))
             Text(String.format(locale, "%+.1f dB", local), style = MaterialTheme.typography.labelLarge)
         }
-        Slider(value = local, onValueChange = { local = it }, onValueChangeFinished = { onChange(local) }, valueRange = -12f..6f, steps = 35)
+        Slider(
+            value = local, onValueChange = { local = it }, onValueChangeFinished = { onChange(local) }, valueRange = -12f..6f, steps = 35,
+            modifier = Modifier.semantics {
+                contentDescription = "Pre-amp"
+                stateDescription = String.format(locale, "%+.1f dB", local)
+            },
+        )
         Text(
             "Songs are never made louder than their original level, so a positive pre-amp only lifts quieter tracks.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,

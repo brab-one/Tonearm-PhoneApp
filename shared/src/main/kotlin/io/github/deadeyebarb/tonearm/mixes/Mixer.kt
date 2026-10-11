@@ -161,7 +161,7 @@ class Mixer(
 
     /**
      * A mix from a sentence; polls every 3 s while the server's AI works (≤ 5 min), calling [onWaiting]. Without the AI, or
-     * when it couldn't answer, the mix is matched in the library ([Mix.ai] null, the AI's trouble in [Mix.problem]).
+     * when it couldn't answer, the mix is matched in the library ([Mix.ai] null, why the AI wasn't used in [Mix.problem]).
      * [refresh] ("Ask again") has the AI make it again, and a mix matched in the library drawn and shuffled anew.
      * Throws when the AI is still at it after 5 minutes (asking again later picks its answer up).
      */
@@ -194,6 +194,9 @@ class Mixer(
         }
         val random = if (refresh) Random(System.nanoTime()) else Random(text.hashCode())
         val songs = SentenceMix.build(api, session, text, dislikes::isDisliked, random = random)
+        // The server's "nothing fits" would say the opposite of the songs found here: its AI did answer, but none of
+        // the AI's songs could be used.
+        if (note == NOTHING_FITS && songs.isNotEmpty()) note = AI_SONGS_LEFT_OUT
         return Mix(
             prompt = text, title = text, songs = songs, ai = null,
             problem = note ?: "Nothing in your library matches “$text”".takeIf { songs.isEmpty() },
@@ -219,6 +222,10 @@ class Mixer(
         const val NO_PICKS = "Picks radio starts from your weekly picks and the songs you like. Like a few songs first."
         /** The note on a mix matched in the library because the Tonearm server didn't answer. */
         const val SERVER_UNREACHABLE = "The Tonearm server couldn't be reached"
+        /** The note on a mix matched in the library because none of the songs the AI picked could be used. */
+        const val AI_SONGS_LEFT_OUT = "The AI's songs were all played lately or not found"
+        /** The Tonearm server's problem when nothing the AI picked is left. */
+        private const val NOTHING_FITS = "Nothing in your library fits that"
         private const val RADIO_TIMEOUT_MS = 8_000L
         private const val POLL_MS = 3_000L
         /** 5 minutes of asking every 3 s. */

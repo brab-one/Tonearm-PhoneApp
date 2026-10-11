@@ -64,6 +64,7 @@ import io.github.deadeyebarb.tonearm.ui.common.CoverSize
 import io.github.deadeyebarb.tonearm.ui.common.EmptyState
 import io.github.deadeyebarb.tonearm.ui.common.LoadContent
 import io.github.deadeyebarb.tonearm.ui.common.LocalActions
+import io.github.deadeyebarb.tonearm.ui.common.plural
 import io.github.deadeyebarb.tonearm.ui.common.rememberLoader
 import io.github.deadeyebarb.tonearm.ui.detail.DetailScaffold
 import io.github.deadeyebarb.tonearm.ui.theme.Hud
@@ -245,7 +246,7 @@ private fun TopArtistRow(rank: Int, count: ArtistCount, artist: Artist?, most: I
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(count.artist, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                 Spacer(Modifier.width(8.dp))
-                Text("${count.plays} PLAYS", style = MaterialTheme.typography.labelSmall, color = hud.accent)
+                Text(plural(count.plays, "play").uppercase(), style = MaterialTheme.typography.labelSmall, color = hud.accent)
             }
             Spacer(Modifier.height(4.dp))
             Box(Modifier.fillMaxWidth(count.plays.toFloat() / most).height(3.dp).clip(CircleShape).background(hud.accent.copy(alpha = 0.7f)))
@@ -260,7 +261,7 @@ private fun TopAlbumCard(rank: Int, count: AlbumCount, album: Album?, actions: A
     AlbumCard(
         album ?: Album("", count.album, count.artist), Modifier.width(140.dp),
         tag = if (album == null) ({ HudTag("Not in library", Modifier.background(hud.void.copy(alpha = 0.75f)), color = hud.accent2) }) else null,
-        caption = "#$rank // ${count.plays} PLAYS" to hud.accent,
+        caption = "#$rank // ${plural(count.plays, "play").uppercase()}" to hud.accent,
     ) { if (album != null) actions.openAlbum(album.id) else actions.openFoundAlbum(count.artist, count.album) }
 }
 
