@@ -595,9 +595,14 @@ class Handler(BaseHTTPRequestHandler):
         command["status"] = "completed"
 
     def queue_albums(self, entry):
-        for title, _, _ in entry["albums"]:
-            self.lib.lidarr_queue.append({"title": f"{entry['artistName']} - {title}", "artist": entry["artistName"],
-                                          "artistMbid": entry["foreignArtistId"], "album": title, "started": time.time()})
+        for title, mbid, _ in entry["albums"]:
+            # Also run on the class at startup, so not through self.
+            Handler.queue_album(self, entry, title, mbid)
+
+    def queue_album(self, entry, title, mbid):
+        """An album downloading, with the ids real Lidarr gives its queue items (artist and album)."""
+        self.lib.lidarr_queue.append({"title": f"{entry['artistName']} - {title}", "artist": entry["artistName"],
+                                      "artistMbid": entry["foreignArtistId"], "albumMbid": mbid, "album": title, "started": time.time()})
 
     def lidarr_put(self, endpoint, body):
         if endpoint == "album/monitor":
@@ -769,9 +774,11 @@ class Handler(BaseHTTPRequestHandler):
                 left = max(0.0, size * (1 - elapsed / 90))
                 if left > 0:
                     artist_id = self.lib.lidarr_artists.get(item.get("artistMbid"), {}).get("id")
+                    album_id = self.lib.lidarr_albums.get(item.get("albumMbid"), {}).get("id")
                     records.append({"id": i + 1, "title": item["title"], "status": "downloading", "trackedDownloadState": "downloading",
                                     "size": size, "sizeleft": left, "timeleft": f"00:{int(left / size * 90) // 60:02d}:{int(left / size * 90) % 60:02d}",
-                                    "artistId": artist_id, "artist": {"id": artist_id or 0, "artistName": item["artist"]}, "album": {"title": item["album"]}})
+                                    "artistId": artist_id, "albumId": album_id, "artist": {"id": artist_id or 0, "artistName": item["artist"]},
+                                    "album": {"id": album_id or 0, "title": item["album"], "foreignAlbumId": item.get("albumMbid")}})
             return self.send_raw({"page": 1, "pageSize": 50, "totalRecords": len(records), "records": records})
         self.send_raw({"message": f"unknown endpoint {endpoint}"}, 404)
 
@@ -803,8 +810,7 @@ class Handler(BaseHTTPRequestHandler):
                 for e in LIDARR_CATALOG:
                     for title, mbid, _ in e["albums"]:
                         if self.lib.lidarr_albums.get(mbid, {}).get("id") in body.get("albumIds", []):
-                            self.lib.lidarr_queue.append({"title": f"{e['artistName']} - {title}", "artist": e["artistName"],
-                                                          "artistMbid": e["foreignArtistId"], "album": title, "started": time.time()})
+                            self.queue_album(e, title, mbid)
                 command["_started"] = 0
             if body.get("name") == "ArtistSearch":
                 entry = next((e for e in LIDARR_CATALOG if self.lib.lidarr_artists.get(e["foreignArtistId"], {}).get("id") == body.get("artistId")), None)
@@ -838,8 +844,7 @@ class Handler(BaseHTTPRequestHandler):
             print(f"    lidarr: added artist {entry['artistName']} monitor={opts.get('monitor')} search={opts.get('searchForMissingAlbums')} "
                   f"quality={body.get('qualityProfileId')} root={body.get('rootFolderPath')}", flush=True)
             if opts.get("searchForMissingAlbums") and opts.get("monitor") != "none":
-                for title, _, _ in entry["albums"]:
-                    self.lib.lidarr_queue.append({"title": f"{entry['artistName']} - {title}", "artist": entry["artistName"], "album": title, "started": time.time()})
+                self.queue_albums(entry)
             return self.send_raw(self.lidarr_artist(entry), 201)
         if endpoint == "album":
             mbid = body.get("foreignAlbumId")
@@ -852,7 +857,7 @@ class Handler(BaseHTTPRequestHandler):
                         self.lib.lidarr_albums[mbid]["monitored"] = True
                         print(f"    lidarr: added album {album[0]} by {e['artistName']} search={body.get('addOptions', {}).get('searchForNewAlbum')} "
                               f"into {self.lib.lidarr_artists[e['foreignArtistId']].get('path')}", flush=True)
-                        self.lib.lidarr_queue.append({"title": f"{e['artistName']} - {album[0]}", "artist": e["artistName"], "album": album[0], "started": time.time()})
+                        self.queue_album(e, album[0], album[1])
                         return self.send_raw(self.lidarr_album(e, album), 201)
             return self.send_raw([{"propertyName": "ForeignAlbumId", "errorMessage": "Album not found"}], 400)
         self.send_raw({"message": "unknown"}, 404)
