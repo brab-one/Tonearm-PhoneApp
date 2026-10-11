@@ -36,6 +36,9 @@ object SongUri {
     /** The file version of a song as the server describes it, e.g. "flac-31457280". */
     fun versionOf(suffix: String?, size: Long?): String? = size?.takeIf { it > 0 }?.let { "${suffix.orEmpty()}-$it" }
 
+    /** The file size a [versionOf] names; null when there's none. */
+    fun sizeOf(version: String?): Long? = version?.substringAfterLast('-')?.toLongOrNull()?.takeIf { it > 0 }
+
     /** Splits a quality like `mp3_320` into format and max bitrate; raw/downloaded map to the original file. */
     fun formatOf(quality: String?): Pair<String, Int> {
         if (quality == null || quality == RAW || quality == DOWNLOADED || quality == YOUTUBE) return RAW to 0

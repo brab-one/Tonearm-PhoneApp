@@ -31,4 +31,16 @@ class DownloadEntryTest {
         val upgrade = DownloadMeta("s1", Song(id = "b", title = "Slow Rain", suffix = "flac"), replaces = "s1/a")
         assertEquals(upgrade, json.decodeFromString(DownloadMeta.serializer(), json.encodeToString(DownloadMeta.serializer(), upgrade)))
     }
+
+    @Test
+    fun `a download finished short of the song's size before sizes were checked was cut off`() {
+        // The proxy sent no length, and the connection dropped at 475 136 of 685 000 bytes.
+        assertTrue(DownloadRepository.cutOff(475_136, 685_000, checked = false))
+        assertFalse(DownloadRepository.cutOff(685_000, 685_000, checked = false))
+        // Without a size there's nothing to tell by.
+        assertFalse(DownloadRepository.cutOff(475_136, null, checked = false))
+        assertFalse(DownloadRepository.cutOff(475_136, 0, checked = false))
+        // Checked as it came in: what finished is the whole file the server sent, even when it changed since.
+        assertFalse(DownloadRepository.cutOff(475_136, 685_000, checked = true))
+    }
 }

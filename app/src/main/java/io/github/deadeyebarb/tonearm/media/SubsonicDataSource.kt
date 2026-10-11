@@ -32,12 +32,20 @@ class SubsonicDataSource private constructor(
 
     private val listeners = mutableListOf<TransferListener>()
     private var delegate: DataSource? = null
+    private var opened: DataSpec? = null
+    /**
+     * Bytes the response still owes, counted when it came without a Content-Length for a file whose size is known; unset
+     * otherwise (OkHttp checks a Content-Length itself).
+     */
+    private var owed = C.LENGTH_UNSET.toLong()
 
     override fun addTransferListener(transferListener: TransferListener) {
         listeners += transferListener
     }
 
     override fun open(dataSpec: DataSpec): Long {
+        owed = C.LENGTH_UNSET.toLong()
+        opened = dataSpec
         val parts = SongUri.parse(dataSpec.uri)
         if (parts != null && YouTubeMusic.isYouTube(parts.serverId)) return openYouTube(dataSpec, parts.songId, retry = true)
         val (callFactory, uri) = resolve(dataSpec.uri)
@@ -45,11 +53,16 @@ class SubsonicDataSource private constructor(
         listeners.forEach(source::addTransferListener)
         delegate = source
         val length = source.open(dataSpec.buildUpon().setUri(uri).build())
-        if (length != C.LENGTH_UNSET.toLong() || dataSpec.length != C.LENGTH_UNSET.toLong() || parts == null) return length
-        // No Content-Length (a proxy re-chunked the response): the original file's size is known.
+        if (parts == null || source.responseHeaders.keys.any { it.equals("Content-Length", ignoreCase = true) }) return length
+        // No Content-Length (a proxy re-chunked the response): the original file's size is known, from the version the
+        // song was asked for at (a download's too), else from the queue.
         if (SongUri.formatOf(parts.quality).first != SongUri.RAW) return length
-        val size = SongSizes.of(parts.serverId, parts.songId) ?: return length
-        return (size - dataSpec.position).takeIf { it > 0 } ?: length
+        val size = SongUri.sizeOf(parts.version) ?: SongSizes.of(parts.serverId, parts.songId) ?: return length
+        val expected = SongSizes.expected(size, dataSpec.position, dataSpec.length) ?: return length
+        // A response that ends before that was cut off: it mustn't pass for the whole file (a download, the cache). Asked
+        // for part of the file (a download carrying on), OkHttp counts on the part's length and ends it early without a word.
+        owed = expected
+        return if (length == C.LENGTH_UNSET.toLong()) expected else length
     }
 
     private fun openYouTube(dataSpec: DataSpec, videoId: String, retry: Boolean): Long {
@@ -87,8 +100,16 @@ class SubsonicDataSource private constructor(
         return session.client to session.streamUrl(parts.songId, format, maxBitRate).toString().toUri()
     }
 
-    override fun read(buffer: ByteArray, offset: Int, length: Int): Int =
-        checkNotNull(delegate) { "read() before open()" }.read(buffer, offset, length)
+    override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+        val read = checkNotNull(delegate) { "read() before open()" }.read(buffer, offset, length)
+        if (owed == C.LENGTH_UNSET.toLong()) return read
+        // Like OkHttp's own "unexpected end of stream": a lost connection, which the download and the player try again.
+        owed = SongSizes.afterRead(owed, read) ?: throw HttpDataSource.HttpDataSourceException.createForIOException(
+            IOException("The connection ended $owed bytes before the end of the song"),
+            checkNotNull(opened), HttpDataSource.HttpDataSourceException.TYPE_READ,
+        )
+        return read
+    }
 
     override fun getUri(): Uri? = delegate?.uri
 
@@ -99,6 +120,7 @@ class SubsonicDataSource private constructor(
             delegate?.close()
         } finally {
             delegate = null
+            owed = C.LENGTH_UNSET.toLong()
         }
     }
 }

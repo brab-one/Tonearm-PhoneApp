@@ -194,7 +194,7 @@ class OfflineSync(private val c: AppContainer) {
         val kept = (before.kept.filter { it in entries } - plan.remove.toSet()) + plan.add.map { DownloadRepository.keyOf(it.serverId, it.song.id) }
         withContext(Dispatchers.Main) {
             plan.remove.forEach(downloads.manager::removeDownload)
-            for (item in plan.add) downloads.manager.addDownload(downloads.request(item))
+            plan.add.forEach(downloads::keep)
             // Held by the last run: they carry on now.
             for (id in plan.wanted) if (entries[id]?.state == Download.STATE_STOPPED) downloads.manager.setStopReason(id, Download.STOP_REASON_NONE)
         }

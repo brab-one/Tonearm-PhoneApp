@@ -45,6 +45,11 @@ data class DownloadEntry(
     val stopReason: Int = Download.STOP_REASON_NONE,
     /** The download this one is the better file of (see [DownloadRepository.replace]). */
     val replaces: String? = null,
+    /**
+     * Finished before downloads were checked against the song's size, and shorter than the file: cut off. It shows as
+     * failed ([state]), and its bytes go before it's downloaded again.
+     */
+    val cutOff: Boolean = false,
 ) {
     val completed get() = state == Download.STATE_COMPLETED
     val failed get() = state == Download.STATE_FAILED
@@ -154,6 +159,8 @@ class DownloadRepository(
                 continue
             }
             if (existing != null && !existing.failed) continue
+            // The manager would find all of a cut-off copy's bytes there and finish at once: they go first.
+            if (existing?.cutOff == true) delete(listOf(id))
             addRequest(request(item))
         }
     }
@@ -162,13 +169,25 @@ class DownloadRepository(
         send({ DownloadService.sendAddDownload(context, TonearmDownloadService::class.java, request, false) }) { manager.addDownload(request) }
 
     /**
-     * What the download manager gets for [item]: the original file, kept under the song's download key. Tried again
-     * after it failed, it still [replaces] the old copy it did.
+     * Keep offline's: adds [item] to the manager directly, as its worker may run in the background. A cut-off copy goes
+     * first, as in [download]. Main thread.
+     */
+    fun keep(item: QueueSong) {
+        val id = key(item.serverId, item.song.id)
+        if (_entries.value[id]?.cutOff == true) manager.removeDownload(id)
+        manager.addDownload(request(item))
+    }
+
+    /**
+     * What the download manager gets for [item]: the original file, kept under the song's download key. Its file version
+     * in the URI gives the data source the file's size, so a download cut off before the end fails (and is tried again)
+     * instead of passing for the whole song. Tried again after it failed, it still [replaces] the old copy it did.
      */
     fun request(item: QueueSong, replaces: String? = null): DownloadRequest {
         val id = key(item.serverId, item.song.id)
         val meta = DownloadMeta(item.serverId, item.song, replaces ?: _entries.value[id]?.takeIf { it.failed }?.replaces)
-        return DownloadRequest.Builder(id, SongUri.build(item.serverId, item.song.id, SongUri.RAW))
+        val uri = SongUri.build(item.serverId, item.song.id, SongUri.RAW, SongUri.versionOf(item.song.suffix, item.song.size))
+        return DownloadRequest.Builder(id, uri)
             .setCustomCacheKey(engine.downloadKey(item.serverId, item.song.id))
             .setData(json.encodeToString(DownloadMeta.serializer(), meta).encodeToByteArray())
             .build()
@@ -248,15 +267,18 @@ class DownloadRepository(
             json.decodeFromString(DownloadMeta.serializer(), download.request.data.decodeToString())
         }.getOrNull() ?: return null
         val id = download.request.id
-        if (download.state == Download.STATE_COMPLETED) completed += id else completed -= id
+        val cutOff = download.state == Download.STATE_COMPLETED &&
+            cutOff(download.bytesDownloaded, meta.song.size, checked = SongUri.parse(download.request.uri)?.version != null)
+        if (download.state == Download.STATE_COMPLETED && !cutOff) completed += id else completed -= id
         val entry = DownloadEntry(
             id = id,
             item = QueueSong(meta.serverId, meta.song),
-            state = download.state,
+            state = if (cutOff) Download.STATE_FAILED else download.state,
             percent = download.percentDownloaded.coerceAtLeast(0f),
             bytes = download.bytesDownloaded,
             stopReason = download.stopReason,
             replaces = meta.replaces,
+            cutOff = cutOff,
         )
         _entries.value += id to entry
         return entry
@@ -285,6 +307,13 @@ class DownloadRepository(
 
         /** On kept downloads a Keep offline run couldn't finish: they only carry on in the next run, on Wi-Fi. */
         const val STOP_REASON_KEEP_OFFLINE = 7
+
+        /**
+         * Whether a finished download of [bytes] was cut off: shorter than the song's [size]. Only for one made before
+         * downloads were [checked] against the size as they came in (see [request]); a later one the server sent with a
+         * Content-Length of its own (the file changed since) is the whole file.
+         */
+        fun cutOff(bytes: Long, size: Long?, checked: Boolean): Boolean = !checked && size != null && size > 0 && bytes < size
 
         /** By album (title, then which album), then disc and track: the order the Downloads screen lists them in. */
         val ALBUM_ORDER: Comparator<QueueSong> = compareBy(
