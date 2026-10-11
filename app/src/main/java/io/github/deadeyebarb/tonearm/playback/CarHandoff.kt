@@ -7,8 +7,8 @@ import androidx.media3.session.MediaSession
 import io.github.deadeyebarb.tonearm.AppContainer
 import io.github.deadeyebarb.tonearm.connect.ConnectCommand
 import io.github.deadeyebarb.tonearm.connect.DeviceState
-import io.github.deadeyebarb.tonearm.connect.Handoff
 import io.github.deadeyebarb.tonearm.connect.Handoffs
+import io.github.deadeyebarb.tonearm.connect.PlaybackState
 import io.github.deadeyebarb.tonearm.connect.toQueueSong
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -52,8 +52,8 @@ class HandoffGatePlayer(player: Player) : ForwardingPlayer(player) {
 
 /**
  * Continue from the desktop: when the car starts and the phone isn't playing, the phone takes over the queue the desktop
- * played last (its song, place and queue), if the desktop played after the phone did. The desktop is paused once the
- * phone really plays.
+ * played last (its song, place and queue), if the desktop played after the phone did. A desktop still playing is paused
+ * once the phone really plays, and the phone starts where the desktop has got to by then.
  */
 class CarHandoff(
     private val c: AppContainer,
@@ -75,6 +75,10 @@ class CarHandoff(
     private var picks = 0
     /** The device to pause once this phone plays. */
     private var pauseOnPlay: String? = null
+    /** The song taken over from a desktop that plays on, to catch up with it when this phone starts playing. */
+    private var catchUp: CatchUp? = null
+
+    private class CatchUp(val mediaId: String, val fromMs: Long, val playback: PlaybackState)
 
     fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo) {
         if (!isCar(session, controller)) return
@@ -120,6 +124,15 @@ class CarHandoff(
         picks++
     }
 
+    override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+        if (!playWhenReady) return
+        val catchUp = catchUp ?: return
+        this.catchUp = null
+        // Still on the song taken over: it starts where the desktop has got to, before a sound of it is heard.
+        if (player.currentMediaItem?.mediaId != catchUp.mediaId) return
+        Handoffs.catchUp(catchUp.playback, catchUp.fromMs, player.currentPosition, System.currentTimeMillis())?.let(player::seekTo)
+    }
+
     override fun onIsPlayingChanged(isPlaying: Boolean) {
         if (!isPlaying) return
         val device = pauseOnPlay ?: return
@@ -148,7 +161,8 @@ class CarHandoff(
                 null
             }
         } ?: return
-        val plan = planOf(handoff, session.config.baseUrl) ?: return
+        val state = runCatching { c.json.decodeFromString(DeviceState.serializer(), handoff.state) }.getOrNull() ?: return
+        val plan = Handoffs.plan(handoff, state, session.config.baseUrl, phonePlayedAt(), System.currentTimeMillis()) ?: return
         // Something was picked in the car or on the phone meanwhile: that wins.
         if (picks != picked || player.playWhenReady) return
         Log.i(TAG, "Continuing from ${handoff.name}: ${plan.queue.size} songs")
@@ -161,11 +175,13 @@ class CarHandoff(
             else -> Player.REPEAT_MODE_OFF
         }
         pauseOnPlay = plan.pause
-    }
-
-    private fun planOf(handoff: Handoff, server: String): Handoffs.Plan? {
-        val state = runCatching { c.json.decodeFromString(DeviceState.serializer(), handoff.state) }.getOrNull() ?: return null
-        return Handoffs.plan(handoff, state, server, phonePlayedAt(), System.currentTimeMillis())
+        // The desktop's own song, from where it was then: it plays on until this phone does.
+        val playback = state.playback
+        catchUp = if (plan.pause != null && playback != null && plan.queue[plan.index] == playback.current) {
+            CatchUp(player.currentMediaItem?.mediaId.orEmpty(), plan.positionMs, playback)
+        } else {
+            null
+        }
     }
 
     private fun isCar(session: MediaSession, controller: MediaSession.ControllerInfo) =

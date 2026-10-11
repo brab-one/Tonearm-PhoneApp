@@ -305,8 +305,10 @@ no radio for a song, or it runs out of songs, the car says so and the radio goes
 
 **Continue from the desktop**: when the car starts and the phone isn't playing, the phone takes over what the
 [desktop player](https://github.com/brab-one/Tonearm-Desktop) played last (its song, place and queue), if the
-desktop played after the phone did, and pauses the desktop once the car plays. It needs the Tonearm server (1.7 or
-later), waits for it three seconds at most, and can be turned off in Settings → Car.
+desktop played after the phone did. A desktop still playing is paused once the car plays, and the car starts where
+the desktop has got to by then. The two apps may use different addresses for the music server (a LAN address on
+the desktop, a domain on the phone): the Tonearm server they share serves one Navidrome. It needs the Tonearm server
+(1.7 or later), waits for it three seconds at most, and can be turned off in Settings → Car.
 
 Streaming, mTLS and downloads all run on the phone as usual.
 
