@@ -65,6 +65,8 @@ data class LidarrAlbum(
     val artist: LidarrArtist? = null,
     /** Its tracks and files (trackFileCount: what's on disk). */
     val statistics: LidarrStatistics? = null,
+    /** Who asked for it, when the Tonearm server shows an admin everyone's wanted list (logins; empty when unknown). */
+    val requestedBy: List<String> = emptyList(),
 )
 
 @Serializable
@@ -118,6 +120,8 @@ data class LidarrQueueItem(
     val artistId: Int? = null,
     val artist: LidarrArtist? = null,
     val album: LidarrAlbum? = null,
+    /** Who asked for it, when the Tonearm server shows an admin everyone's queue (logins; empty when unknown). */
+    val requestedBy: List<String> = emptyList(),
 ) {
     val progress: Float
         get() = if (size != null && size > 0 && sizeleft != null) (1 - sizeleft / size).toFloat().coerceIn(0f, 1f) else 0f

@@ -364,6 +364,14 @@ class ConnectClientTest {
     }
 
     @Test
+    fun `the server's hello says when lidarr's lists hold only your own requests`() = runTest {
+        respond("""{"server":"tonearm","protocol":2,"version":"1.8.0","user":"guest","lidarr":true,"ownRequests":true}""")
+        assertTrue(client.findServer(session())!!.ownRequests)
+        respond("""{"server":"tonearm","protocol":2,"version":"1.7.0","user":"guest","lidarr":true}""")
+        assertFalse(client.findServer(session())!!.ownRequests)
+    }
+
+    @Test
     fun `remote positions move on while playing`() {
         val state = PlaybackState(playing = true, positionMs = 10_000, durationMs = 60_000, at = 1_000)
         assertEquals(15_000, state.positionAt(now = 6_000))
