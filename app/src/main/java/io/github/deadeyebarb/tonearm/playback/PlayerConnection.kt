@@ -273,11 +273,12 @@ class PlayerConnection(private val context: Context, private val factory: MediaI
 
     /**
      * Removes everything that would play after the current song (when shuffling, everything else). The song
-     * playing carries on undisturbed.
+     * playing carries on undisturbed. A radio goes off, as it would fill the queue straight back up.
      */
     fun clearUpcoming() = withController { c ->
         val current = c.currentMediaItemIndex
         if (current == C.INDEX_UNSET) return@withController
+        c.sendCustomCommand(SessionCommand(PlaybackCommands.STOP_RADIO, Bundle.EMPTY), Bundle.EMPTY)
         if (current + 1 < c.mediaItemCount) c.removeMediaItems(current + 1, c.mediaItemCount)
         if (c.shuffleModeEnabled && current > 0) c.removeMediaItems(0, current)
     }

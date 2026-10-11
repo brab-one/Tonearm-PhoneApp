@@ -16,6 +16,7 @@ import androidx.media3.common.TrackSelectionParameters.AudioOffloadPreferences
 import androidx.media3.common.util.Util
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.PlayerMessage
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.extractor.DefaultExtractorsFactory
@@ -98,6 +99,8 @@ class PlaybackService : MediaLibraryService() {
 
     /** The queue entry the queue was last extended after ("When the queue ends"); a new queue has new entries. */
     private var continuedAfter: Any? = null
+    /** Extends it once the song left last by "Clear upcoming" is about to end. */
+    private var continueLater: PlayerMessage? = null
     private val searchResults = mutableMapOf<String, List<MediaItem>>()
     private var saveJob: Job? = null
     private var recoverJob: Job? = null
@@ -262,7 +265,8 @@ class PlaybackService : MediaLibraryService() {
                 this@PlaybackService.player.setShuffleOrder(QueueShuffleOrder().cloneAndSet(player.mediaItemCount, player.currentMediaItemIndex))
             }
             if (events.containsAny(Player.EVENT_MEDIA_ITEM_TRANSITION, Player.EVENT_TIMELINE_CHANGED, Player.EVENT_REPEAT_MODE_CHANGED)) {
-                continueIfLast()
+                // Only the queue changed, not the song: what came after it was taken out ("Clear upcoming").
+                continueIfLast(edited = !events.containsAny(Player.EVENT_MEDIA_ITEM_TRANSITION, Player.EVENT_REPEAT_MODE_CHANGED))
                 updateButtons()
                 useLibraryFiles()
                 // The songs playing and up next keep their quality; others choose again when they play.
@@ -399,8 +403,12 @@ class PlaybackService : MediaLibraryService() {
         }
     }
 
-    /** On the last song, appends what "When the queue ends" asks for, so playback carries on gaplessly. */
-    private fun continueIfLast() {
+    /**
+     * On the last song, appends what "When the queue ends" asks for, so playback carries on gaplessly. When the queue was
+     * [edited] down to the song playing ("Clear upcoming"), that waits until the song is about to end, as the user just
+     * emptied what comes next (a radio goes off then: [PlayerConnection.clearUpcoming]).
+     */
+    private fun continueIfLast(edited: Boolean = false) {
         // A radio adds its own.
         if (radio.current != null) return
         if (player.mediaItemCount == 0 || player.hasNextMediaItem() || player.repeatMode != Player.REPEAT_MODE_OFF) return
@@ -409,6 +417,8 @@ class PlaybackService : MediaLibraryService() {
         // The entry, not the song: the same song played again in a new queue gets its continuation too.
         val entry = player.currentTimeline.getWindow(player.currentMediaItemIndex, Timeline.Window()).uid
         if (continuedAfter == entry) return
+        if (edited && continueNearEnd()) return
+        continueLater?.cancel()
         continuedAfter = entry
         val last = item.toQueueSong() ?: return
         val played = (0 until player.mediaItemCount).mapNotNull { player.getMediaItemAt(it).toQueueSong() }.map(QueueContinuation::key).toSet()
@@ -418,6 +428,23 @@ class PlaybackService : MediaLibraryService() {
             // Right after the song playing, which is the last to play, shuffled or not; it may have ended meanwhile.
             player.addAndCarryOn(player.currentMediaItemIndex + 1, more.map { c.mediaItems.song(it) })
         }
+    }
+
+    /**
+     * Has [continueIfLast] run again [CONTINUE_BEFORE_END_MS] before the song playing ends, or (its length unknown) when it
+     * has ended; false when that's now.
+     */
+    private fun continueNearEnd(): Boolean {
+        val duration = player.duration.takeIf { it != C.TIME_UNSET } ?: player.mediaMetadata.durationMs ?: C.TIME_UNSET
+        val at = duration - CONTINUE_BEFORE_END_MS
+        if (duration != C.TIME_UNSET && player.currentPosition >= at) return false
+        continueLater?.cancel()
+        continueLater = if (duration == C.TIME_UNSET) null else player.createMessage { _, _ -> continueIfLast() }
+            .setLooper(mainLooper)
+            .setPosition(player.currentMediaItemIndex, at)
+            .setDeleteAfterDelivery(true)
+            .send()
+        return true
     }
 
     /**
@@ -487,6 +514,8 @@ class PlaybackService : MediaLibraryService() {
         val index = player.currentMediaItemIndex
         scope.launch {
             if (!player.hasNextMediaItem()) {
+                // Held back after "Clear upcoming": they're needed now.
+                continueIfLast()
                 withTimeoutOrNull(MORE_FOR_SKIP_MS) { if (radio.current != null) radio.awaitMore() else continueJob?.join() }
             }
             if (player.currentMediaItemIndex == index && player.currentMediaItem?.mediaId == item.mediaId && player.hasNextMediaItem()) {
@@ -802,6 +831,8 @@ class PlaybackService : MediaLibraryService() {
         private const val RECOVER_DELAY_MS = 2_000L
         /** How long "Not this one" on the last song waits for more songs to move on to. */
         private const val MORE_FOR_SKIP_MS = 5_000L
+        /** How long before the end of a song left last by "Clear upcoming" the queue is extended: time to find and load more. */
+        private const val CONTINUE_BEFORE_END_MS = 30_000L
         const val CMD_TOGGLE_STAR = "io.github.deadeyebarb.tonearm.TOGGLE_STAR"
         /** Subsonic codes meaning the login is wrong or not accepted. */
         private val AUTH_ERRORS = setOf(40, 41, 42, 43, 44)
