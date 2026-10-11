@@ -69,6 +69,7 @@ import io.github.deadeyebarb.tonearm.integrations.LidarrAlbum
 import io.github.deadeyebarb.tonearm.integrations.LidarrCandidate
 import io.github.deadeyebarb.tonearm.integrations.LidarrQueueItem
 import io.github.deadeyebarb.tonearm.integrations.Recommender
+import io.github.deadeyebarb.tonearm.integrations.WhoseRequests
 import io.github.deadeyebarb.tonearm.subsonic.userMessage
 import io.github.deadeyebarb.tonearm.ui.LidarrSettingsRoute
 import io.github.deadeyebarb.tonearm.ui.common.EmptyState
@@ -290,6 +291,14 @@ fun RemoteCover(
 private fun QueueSection(c: AppContainer) {
     val hud = Hud.colors
     val actions = LocalActions.current
+    // A user sees their own requests; an admin everyone's, each tagged with who asked.
+    val server by c.tonearmServer.server.collectAsStateWithLifecycle()
+    val whose = WhoseRequests.of(server)
+    val session by c.sessions.active.collectAsStateWithLifecycle()
+    val me by produceState(session?.user, session) { value = session?.let { c.tonearmServer.user(it) } }
+    val requester = @Composable { requestedBy: List<String> ->
+        whose.tag(requestedBy, me)?.let { HudTag(it, color = hud.dim) }
+    }
     val wanted by produceState<List<LidarrAlbum>?>(null) {
         value = runCatching { c.integrations.requireLidarr().let { (config, key) -> c.integrations.lidarr.wanted(config, key) } }
             .getOrNull()?.sortedByDescending { it.releaseDate.orEmpty() }
@@ -313,7 +322,7 @@ private fun QueueSection(c: AppContainer) {
         }
     }
     LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
-        item { HudSectionHeader("Downloading in Lidarr") }
+        item { HudSectionHeader(whose.label?.let { "Downloading // $it" } ?: "Downloading in Lidarr") }
         when (val q = queue) {
             Load.Loading -> item { Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) { HudLoader(label = "CHECKING QUEUE") } }
             is Load.Failed -> item {
@@ -336,6 +345,7 @@ private fun QueueSection(c: AppContainer) {
                         )
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             HudTag(item.trackedDownloadState ?: item.status ?: "queued", color = if (item.errorMessage != null) hud.danger else hud.accent)
+                            requester(item.requestedBy)
                             Text(
                                 listOfNotNull("${(item.progress * 100).toInt()}%", item.timeleft?.let { "ETA $it" }).joinToString(" // "),
                                 style = MaterialTheme.typography.labelSmall, color = hud.dim,
@@ -348,12 +358,13 @@ private fun QueueSection(c: AppContainer) {
                 }
             }
         }
-            // What Lidarr is still looking for (monitored albums without their files).
-        item { HudSectionHeader("Wanted in Lidarr") }
+        // What Lidarr is still looking for (monitored albums without their files).
+        item { HudSectionHeader(whose.label?.let { "Wanted // $it" } ?: "Wanted in Lidarr") }
         when (val w = wanted) {
             null -> Unit
             else -> if (w.isEmpty()) {
-                item { Text("Nothing wanted: everything Lidarr monitors is on your server.", style = MaterialTheme.typography.bodyMedium, color = hud.dim, modifier = Modifier.padding(horizontal = 16.dp)) }
+                val text = if (whose == WhoseRequests.OWN) "Nothing wanted: everything you asked for is on your server." else "Nothing wanted: everything Lidarr monitors is on your server."
+                item { Text(text, style = MaterialTheme.typography.bodyMedium, color = hud.dim, modifier = Modifier.padding(horizontal = 16.dp)) }
             } else {
                 items(w, key = { "wanted:" + it.id }) { album ->
                     Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -361,10 +372,14 @@ private fun QueueSection(c: AppContainer) {
                         Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) {
                             Text(album.title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(
-                                listOfNotNull(album.artist?.artistName, album.releaseDate?.take(4)).joinToString(" · ").uppercase(),
-                                style = MaterialTheme.typography.labelSmall, color = hud.accent2, maxLines = 1,
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(
+                                    listOfNotNull(album.artist?.artistName, album.releaseDate?.take(4)).joinToString(" · ").uppercase(),
+                                    style = MaterialTheme.typography.labelSmall, color = hud.accent2, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false),
+                                )
+                                requester(album.requestedBy)
+                            }
                         }
                         HudButton("Search", {
                             actions.launch {
