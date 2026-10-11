@@ -564,7 +564,11 @@ class ConnectRouter(
     /** Who is logged in to [session]: the login says, and for an API key the Tonearm server does. Null when neither knows. */
     suspend fun user(session: ServerSession): String? = session.user ?: refresh(session)?.user?.ifEmpty { null }
 
-    private suspend fun lookup(session: ServerSession): TonearmServerInfo? = lock.withLock {
+    /**
+     * Like [refresh], but a server that can't be reached throws instead of giving what was known: for a caller that has
+     * to tell "there's no Tonearm server" (null) from "it can't be reached now".
+     */
+    suspend fun lookup(session: ServerSession): TonearmServerInfo? = lock.withLock {
         val key = keyOf(session)
         val now = System.currentTimeMillis()
         found?.takeIf { it.server == key && now - it.at < if (it.info != null) RECHECK_FOUND_MS else RECHECK_MISSING_MS }?.let {

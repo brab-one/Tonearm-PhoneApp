@@ -63,8 +63,12 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import okio.Path.Companion.toOkioPath
@@ -115,8 +119,8 @@ class AppContainer(val app: Application) {
     val knownServers = KnownTonearmServers(app)
     /** The Tonearm server at the music server's address: Connect, Lidarr with its key, history and picks. */
     val tonearmServer = ConnectRouter(connectClient, onLookup = knownServers::lookedUp)
-    /** Disliked songs and artists said no to, from the Tonearm server. */
-    val dislikes = Dislikes(connectClient, tonearmServer) { sessions.active.value }
+    /** Disliked songs and artists said no to, from the Tonearm server; kept for a start without it. */
+    val dislikes = Dislikes(connectClient, tonearmServer, java.io.File(app.filesDir, "dislikes.json")) { sessions.active.value }
 
     /** A liked song isn't disliked anymore. */
     suspend fun undislike(song: Song) {
@@ -135,14 +139,23 @@ class AppContainer(val app: Application) {
     val daily = DailyDiscovery(app, json, scope, api, sessions, integrations, recommender, dislikes, tonearmServer)
 
     init {
-        // What the desktop disliked shows up here within a few minutes.
+        // What the desktop disliked shows up here within a few minutes. When the Tonearm server couldn't be reached (a
+        // start in a dead zone, the server down), only the list kept last time is known: it's fetched again as soon as a
+        // lookup finds the server (the network back, a radio, a skip), else in 5 minutes as usual.
         scope.launch {
             sessions.active.collectLatest {
                 while (true) {
-                    dislikes.refresh()
-                    delay(5 * 60_000L)
+                    if (dislikes.refresh()) {
+                        delay(5 * 60_000L)
+                    } else {
+                        withTimeoutOrNull(5 * 60_000L) { tonearmServer.server.drop(1).first { it?.dislikes == true } }
+                    }
                 }
             }
+        }
+        // Back online: the Tonearm server is looked up again, so what it offers is there (the car's "Not this one").
+        scope.launch {
+            network.online.drop(1).filter { it }.collect { tonearmServer.refresh(sessions.active.value) }
         }
     }
     val mediaItems = MediaItemFactory(app)

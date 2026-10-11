@@ -54,6 +54,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filter
@@ -182,8 +183,8 @@ class PlaybackService : MediaLibraryService() {
         scope.launch { c.starred.overrides.collect { updateButtons() } }
         scope.launch { c.likes.pending.items.collect { updateButtons() } }
         scope.launch { c.likes.phone.collect { updateButtons() } }
-        // "Not this one" shows once the Tonearm server that keeps dislikes is found.
-        scope.launch { c.tonearmServer.server.map { it?.dislikes == true }.distinctUntilChanged().collect { updateButtons() } }
+        // "Not this one" shows once the Tonearm server that keeps dislikes is found, or as the last lookup found it.
+        scope.launch { combine(c.tonearmServer.server, c.sessions.active) { _, _ -> keepsDislikes() }.distinctUntilChanged().collect { updateButtons() } }
         // Back online: what couldn't be scrobbled or disliked goes now.
         scope.launch {
             c.network.online.filter { it }.collect {
@@ -348,7 +349,7 @@ class PlaybackService : MediaLibraryService() {
             .setSessionCommand(notThisOneCommand)
             .setEnabled(entry != null)
             .build()
-            .takeIf { c.tonearmServer.server.value?.dislikes == true }
+            .takeIf { keepsDislikes() }
         val star = CommandButton.Builder(if (liked) CommandButton.ICON_HEART_FILLED else CommandButton.ICON_HEART_UNFILLED)
             .setDisplayName(if (liked) "Unlike" else "Like")
             .setSessionCommand(toggleStarCommand)
@@ -535,7 +536,7 @@ class PlaybackService : MediaLibraryService() {
         } catch (e: Exception) {
             Log.w(TAG, "Couldn't save the dislike", e)
             // Without a server that keeps dislikes, trying again won't help.
-            if (c.tonearmServer.server.value?.dislikes != true) return c.messages.show(e.userMessage())
+            if (!keepsDislikes()) return c.messages.show(e.userMessage())
             unsavedDislikes.add(entry)
             return
         }
@@ -554,6 +555,13 @@ class PlaybackService : MediaLibraryService() {
     }
 
     private fun isUnsavedDislike(song: Song): Boolean = song in unsavedDislikes
+
+    /**
+     * Whether the Tonearm server keeps dislikes. Right after a start it isn't looked up yet (or can't be, in a dead zone):
+     * then what the last lookup found, so "Not this one" is there and its dislike is sent once the server can be reached.
+     */
+    private fun keepsDislikes(): Boolean =
+        c.tonearmServer.server.value?.dislikes ?: c.sessions.active.value?.let(c.knownServers::dislikes) ?: false
 
     /** Says [message] on the phone and, for a moment, in the car. */
     private fun tell(message: String) {

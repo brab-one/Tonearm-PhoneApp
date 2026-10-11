@@ -20,18 +20,26 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 /** Dislikes against a fake Tonearm server. */
 class DislikesTest {
+    @get:Rule val tmp = TemporaryFolder()
     private val json = Json { ignoreUnknownKeys = true; isLenient = true; coerceInputValues = true; explicitNulls = false }
     private val server = MockWebServer()
+    /** The Tonearm server is down behind its proxy. */
+    @Volatile private var down = false
+    @Volatile private var hello = """{"server":"tonearm","protocol":2,"history":true,"dislikes":true}"""
+    @Volatile private var disliked = """{"songs":[{"artist":"Kongos","title":"Come with Me Now","at":5}],"artists":["Mazzy Star"]}"""
     private var dislikeAnswer = 200
     /** Holds the answer to a dislike back until it's opened. */
     @Volatile private var dislikeGate: CountDownLatch? = null
     private val dislikeCalls = mutableListOf<String>()
+    private lateinit var client: ConnectClient
     private lateinit var dislikes: Dislikes
     private var session: ServerSession? = null
 
@@ -39,9 +47,10 @@ class DislikesTest {
     fun setUp() {
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse {
+                if (down) return MockResponse.Builder().code(502).body("Bad gateway").build()
                 val body = when (request.url.encodedPath) {
-                    "/connect-tonearm/api/hello" -> """{"server":"tonearm","protocol":2,"history":true,"dislikes":true}"""
-                    "/connect-tonearm/api/disliked" -> """{"songs":[{"artist":"Kongos","title":"Come with Me Now","at":5}],"artists":["Mazzy Star"]}"""
+                    "/connect-tonearm/api/hello" -> hello
+                    "/connect-tonearm/api/disliked" -> disliked
                     "/connect-tonearm/api/dislike" -> {
                         synchronized(dislikeCalls) { dislikeCalls += request.url.query.orEmpty() }
                         dislikeGate?.await(5, TimeUnit.SECONDS)
@@ -54,7 +63,7 @@ class DislikesTest {
             }
         }
         server.start()
-        val client = ConnectClient(IntegrationHttp(OkHttpClient()) { null }, json)
+        client = ConnectClient(IntegrationHttp(OkHttpClient()) { null }, json)
         session = ServerSession(ServerConfig(name = "Music", baseUrl = server.url("/").toString(), username = "alice"), "wonderland", OkHttpClient())
         dislikes = Dislikes(client, ConnectRouter(client)) { session }
     }
@@ -122,9 +131,52 @@ class DislikesTest {
         dislikes.refresh()
         assertFalse(dislikes.isDisliked("Kongos", "Come with Me Now"))
         assertFalse(dislikes.isArtistDisliked("Mazzy Star"))
-        // A server without a Tonearm server keeps none either.
+        // Nor does another account, on a server that can't be reached: nothing was kept for it.
         session = ServerSession(ServerConfig(name = "Other", baseUrl = "http://127.0.0.1:9/", username = "bob"), "secret", OkHttpClient())
         dislikes.refresh()
         assertTrue(dislikes.state.value.songs.isEmpty())
+    }
+
+    @Test
+    fun `when the tonearm server can't be reached the last list stays, also after a restart`() = runTest {
+        val file = tmp.root.resolve("dislikes.json")
+        dislikes = Dislikes(client, ConnectRouter(client), file) { session }
+        assertTrue(dislikes.refresh())
+        down = true
+        // Not reached: the app asks again as soon as a lookup finds the server.
+        assertFalse(dislikes.refresh())
+        assertTrue(dislikes.isDisliked("Kongos", "Come with Me Now"))
+        // Started again with the server down (or in a dead zone): what was kept last time.
+        val again = Dislikes(client, ConnectRouter(client), file) { session }
+        assertFalse(again.refresh())
+        assertTrue(again.isDisliked("Kongos", "Come with Me Now"))
+        assertTrue(again.isArtistDisliked("Mazzy Star"))
+        // Another account doesn't get them.
+        val alice = session
+        session = ServerSession(ServerConfig(name = "Music", baseUrl = server.url("/").toString(), username = "bob"), "builder", OkHttpClient())
+        again.refresh()
+        assertFalse(again.isDisliked("Kongos", "Come with Me Now"))
+        // The server is back: its list.
+        session = alice
+        down = false
+        disliked = """{"songs":[{"artist":"Sia","title":"Rewrite","at":7}],"artists":[]}"""
+        assertTrue(again.refresh())
+        assertTrue(again.isDisliked("Sia", "Rewrite"))
+        assertFalse(again.isDisliked("Kongos", "Come with Me Now"))
+    }
+
+    @Test
+    fun `a tonearm server that answers it keeps no dislikes clears them, kept that way`() = runTest {
+        val file = tmp.root.resolve("dislikes.json")
+        dislikes = Dislikes(client, ConnectRouter(client), file) { session }
+        dislikes.refresh()
+        hello = """{"server":"tonearm","protocol":2,"history":true}"""
+        val older = Dislikes(client, ConnectRouter(client), file) { session }
+        older.refresh()
+        assertTrue(older.state.value.songs.isEmpty())
+        down = true
+        val again = Dislikes(client, ConnectRouter(client), file) { session }
+        again.refresh()
+        assertFalse(again.isDisliked("Kongos", "Come with Me Now"))
     }
 }

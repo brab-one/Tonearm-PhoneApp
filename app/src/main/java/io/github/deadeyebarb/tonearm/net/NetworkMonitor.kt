@@ -10,16 +10,14 @@ import kotlinx.coroutines.flow.StateFlow
 
 class NetworkMonitor(context: Context) {
     private val connectivity = context.getSystemService(ConnectivityManager::class.java)
-    private val _online = MutableStateFlow(true)
+    // As it is now: started without any network, no callback comes until one does, and that has to count as coming back.
+    private val _online = MutableStateFlow(onlineWith(connectivity.getNetworkCapabilities(connectivity.activeNetwork)))
     val online: StateFlow<Boolean> = _online
 
     init {
         connectivity.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
             override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
-                // Mobile data in a tunnel keeps its network, only suspended: no connection all the same.
-                val suspended = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
-                    !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED)
-                _online.value = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) && !suspended
+                _online.value = onlineWith(caps)
             }
 
             override fun onLost(network: Network) {
@@ -30,4 +28,12 @@ class NetworkMonitor(context: Context) {
 
     /** True on mobile data and metered Wi-Fi hotspots. */
     fun isMetered(): Boolean = connectivity.isActiveNetworkMetered
+
+    private fun onlineWith(caps: NetworkCapabilities?): Boolean {
+        if (caps == null) return false
+        // Mobile data in a tunnel keeps its network, only suspended: no connection all the same.
+        val suspended = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
+            !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED)
+        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) && !suspended
+    }
 }

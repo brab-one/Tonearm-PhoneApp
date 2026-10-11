@@ -97,7 +97,8 @@ Related repositories:
 - **Not for me**: the thumbs-down on a pick keeps that artist out of the picks (until you play them a few times)
 - **Dislike** a song (thumbs-down on Now Playing or in its menu, with the Tonearm server 1.5.4 or later): it's
   skipped when it plays, goes to the end of searches and out of mixes, Daily Discovery and Android Auto's mix,
-  and the server's AI steers away from it. The desktop app sees the same dislikes; liking a song takes it back
+  and the server's AI steers away from it. The desktop app sees the same dislikes; liking a song takes it back.
+  The phone keeps the last list, so they're left out after a start without the Tonearm server too
 - **Delete from server** (Lidarr with full rights): a song from its menu, an album or an artist from its page,
   after a yes. Lidarr deletes the files and won't download them again unless you ask; Navidrome drops them after
   its scan. Nothing is deleted when Lidarr has more than one match for it
