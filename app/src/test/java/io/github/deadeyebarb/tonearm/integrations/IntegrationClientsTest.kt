@@ -1,6 +1,7 @@
 package io.github.deadeyebarb.tonearm.integrations
 
 import io.github.deadeyebarb.tonearm.data.LidarrConfig
+import io.github.deadeyebarb.tonearm.data.TonearmServerInfo
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -146,6 +147,40 @@ class IntegrationClientsTest {
         val item = LidarrClient(http, json).queue(lidarr.copy(url = base()), "key").single()
         assertEquals(0.75f, item.progress, 0.001f)
         assertEquals("Debut", item.album!!.title)
+    }
+
+    @Test
+    fun `queue items and wanted albums say who asked for them, when the server tells`() = runTest {
+        respond("""{"records":[{"id":1,"title":"New - Debut","requestedBy":["alice","demo"]},{"id":2,"title":"Old - Best of"}]}""")
+        val queue = LidarrClient(http, json).queue(lidarr.copy(url = base()), "key")
+        assertEquals(listOf(listOf("alice", "demo"), emptyList()), queue.map { it.requestedBy })
+        respond("""{"page":1,"records":[{"id":7,"title":"Debut","requestedBy":["bob"],"artist":{"artistName":"New"}},{"id":8,"title":"Second"}]}""")
+        val wanted = LidarrClient(http, json).wanted(lidarr.copy(url = base()), "key")
+        assertEquals(listOf(listOf("bob"), emptyList()), wanted.map { it.requestedBy })
+    }
+
+    @Test
+    fun `all requests are shown to an admin, a user's own to them, and lidarr's lists as they are by an older server`() {
+        val server = TonearmServerInfo(baseUrl = "https://music.example/", lidarr = true, ownRequests = true)
+        assertEquals(WhoseRequests.OWN, WhoseRequests.of(server))
+        assertEquals(WhoseRequests.EVERYONE, WhoseRequests.of(server.copy(admin = true, lidarrAdmin = true)))
+        assertEquals(WhoseRequests.UNSORTED, WhoseRequests.of(server.copy(admin = true, ownRequests = false)))
+        assertEquals(WhoseRequests.UNSORTED, WhoseRequests.of(null))
+        assertEquals(null, WhoseRequests.UNSORTED.label)
+    }
+
+    @Test
+    fun `who asked reads you for your own and names the others`() {
+        assertEquals("you", WhoseRequests.requester(listOf("Demo"), "demo"))
+        assertEquals("by alice", WhoseRequests.requester(listOf("alice"), "demo"))
+        assertEquals("by you, alice", WhoseRequests.requester(listOf("alice", "demo"), "demo"))
+        assertEquals("by alice, bob +1", WhoseRequests.requester(listOf("alice", "bob", "carol", "bob"), "demo"))
+        assertEquals("by alice", WhoseRequests.requester(listOf("alice"), null))
+        assertEquals(null, WhoseRequests.requester(emptyList(), "demo"))
+        // Only everyone's lists say who asked.
+        assertEquals("by alice", WhoseRequests.EVERYONE.tag(listOf("alice"), "demo"))
+        assertEquals(null, WhoseRequests.OWN.tag(listOf("alice"), "demo"))
+        assertEquals(null, WhoseRequests.UNSORTED.tag(listOf("alice"), "demo"))
     }
 
     @Test

@@ -340,6 +340,7 @@ class ConnectClient(private val http: IntegrationHttp, private val json: Json) {
             dailyMixes = flag("dailyMixes"),
             resume = flag("resume"),
             stats = flag("stats"),
+            ownRequests = flag("ownRequests"),
         )
     }
 

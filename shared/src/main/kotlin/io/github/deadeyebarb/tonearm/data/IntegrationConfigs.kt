@@ -70,6 +70,8 @@ data class TonearmServerInfo(
     val resume: Boolean = false,
     /** Listening stats over any span (from/to, albums, minutes). */
     val stats: Boolean = false,
+    /** Lidarr's queue and wanted list hold only this user's own requests; an admin's hold everyone's, with who asked. */
+    val ownRequests: Boolean = false,
 ) {
     fun serviceUrl(service: String) = baseUrl.trimEnd('/') + "/connect-tonearm/" + service
 }
