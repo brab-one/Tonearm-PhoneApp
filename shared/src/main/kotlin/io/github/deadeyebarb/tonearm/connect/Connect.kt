@@ -391,7 +391,7 @@ class ConnectClient(private val http: IntegrationHttp, private val json: Json) {
     /**
      * A batch of radio from the [seed] ("song" with a library song's [id], or its [artist] and [title]; or "picks").
      * [exclude] is the queue so far as [io.github.deadeyebarb.tonearm.integrations.Continuation.key]s, oldest first:
-     * the server leaves those out and follows the last of them.
+     * the server leaves those out and follows the last of them, from the song radio's seed ([key], its own key) on.
      */
     suspend fun radio(
         session: ServerSession,
@@ -399,13 +399,14 @@ class ConnectClient(private val http: IntegrationHttp, private val json: Json) {
         id: String? = null,
         artist: String? = null,
         title: String? = null,
+        key: String? = null,
         exclude: List<String> = emptyList(),
         count: Int = 25,
     ): RadioBatch = json.decodeFromJsonElement(
         RadioBatch.serializer(),
         call(
             ConnectRoute.Server(session), "radio",
-            listOf("seed" to seed, "id" to id, "artist" to artist, "title" to title, "count" to count),
+            listOf("seed" to seed, "id" to id, "artist" to artist, "title" to title, "key" to key, "count" to count),
             json.encodeToString(Exclude.serializer(), Exclude(exclude)),
         ),
     )

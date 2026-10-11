@@ -152,36 +152,35 @@ class MixerTest {
         radioAnswer = MockResponse(body = """{"title":"Radio · Middle C","songs":[${catalog["al3-1"]},${catalog["al3-2"]},${catalog["al1-1"]},${catalog["al4-1"]}],"more":true,"problem":null}""")
         val result = mixer().radio(session, RadioSeed(RadioSeed.SONG, seed), queueOf("al1-1", "al1-2"), allowYouTube = false)
         assertEquals("Radio · Middle C", result.title)
-        // Low Hum played before the seed: it doesn't steer the radio, and doesn't come again either.
+        // Low Hum played before the seed: left out, and the seed's key tells the server not to steer by it.
         assertEquals(listOf("al3-1", "al4-1"), ids(result.songs))
         assertTrue(result.more)
         val asked = requested("radio").single()
-        assertEquals(listOf("song", "al1-2", "25", null), listOf("seed", "id", "count", "artist").map(asked::queryParameter))
-        assertEquals(listOf("lib/al1-2"), excluded())
+        assertEquals(listOf("song", "al1-2", "lib/al1-2", "25", null), listOf("seed", "id", "key", "count", "artist").map(asked::queryParameter))
+        assertEquals(listOf("lib/al1-1", "lib/al1-2"), excluded())
         assertTrue(requested("getSimilarSongs2").isEmpty())
     }
 
     @Test
-    fun `only what was queued from the seed on steers a song radio`() = runTest {
+    fun `the whole queue is left out, and a song radio's key says where the seed is in it`() = runTest {
         hello = """{"server":"tonearm","protocol":2,"radio":true}"""
         radioAnswer = MockResponse(body = """{"title":"Radio · Middle C","songs":[${catalog["al3-1"]}],"more":true}""")
         val mixer = mixer()
-        // Shuffle all played three other songs before it: the first batch is just the seed's.
+        // Shuffle all played three other songs before it: they don't come again, but only the seed on steers.
         val before = queueOf("al4-1", "al3-2", "al4-2")
-        mixer.radio(session, RadioSeed(RadioSeed.SONG, seed), before + queueOf("al1-2"), false)
-        assertEquals(listOf("lib/al1-2"), excluded())
-        // Later batches: the seed and the radio's songs after it.
-        mixer.radio(session, RadioSeed(RadioSeed.SONG, seed), before + queueOf("al1-2", "al3-1", "al4-3"), false)
-        assertEquals(listOf("lib/al1-2", "lib/al3-1", "lib/al4-3"), excluded())
-        // The seed was taken out of the queue: all of it.
-        mixer.radio(session, RadioSeed(RadioSeed.SONG, seed), before, false)
-        assertEquals(listOf("lib/al4-1", "lib/al3-2", "lib/al4-2"), excluded())
-        // A YouTube Music seed by its own key; the picks radio sends the whole queue.
+        mixer.radio(session, RadioSeed(RadioSeed.SONG, seed), before + queueOf("al1-2", "al3-1"), false)
+        assertEquals(listOf("lib/al4-1", "lib/al3-2", "lib/al4-2", "lib/al1-2", "lib/al3-1"), excluded())
+        assertEquals("lib/al1-2", requested("radio").last().queryParameter("key"))
+        // A YouTube Music seed and a file on the phone by their own keys; the picks radio has none.
         val youtube = Song("dQw4w9WgXcQ", title = "Rewrite", artist = "Sia")
         mixer.radio(session, RadioSeed(RadioSeed.SONG, youtube, youtube = true), before + NextSong(youtube, true), false)
-        assertEquals(listOf("yt/dQw4w9WgXcQ"), excluded())
+        assertEquals(listOf("lib/al4-1", "lib/al3-2", "lib/al4-2", "yt/dQw4w9WgXcQ"), excluded())
+        assertEquals("yt/dQw4w9WgXcQ", requested("radio").last().queryParameter("key"))
+        mixer.radio(session, RadioSeed(RadioSeed.SONG, Song("1234", title = "Chandelier", artist = "Sia"), local = true), before, false)
+        assertEquals("lib/1234", requested("radio").last().queryParameter("key"))
         mixer.radio(session, RadioSeed(RadioSeed.PICKS), before, false)
         assertEquals(listOf("lib/al4-1", "lib/al3-2", "lib/al4-2"), excluded())
+        assertNull(requested("radio").last().queryParameter("key"))
     }
 
     @Test

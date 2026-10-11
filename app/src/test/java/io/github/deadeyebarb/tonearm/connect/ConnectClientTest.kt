@@ -250,10 +250,10 @@ class ConnectClientTest {
     }
 
     @Test
-    fun `radio sends the seed in the query and the queue as the body, and gives the server's subsonic songs`() = runTest {
+    fun `radio sends the seed and its key in the query and the queue as the body, and gives the server's subsonic songs`() = runTest {
         respond("""{"title":"Radio · Middle C","songs":[{"id":"al2-1","title":"Forty-Four","artist":"The Oscillators","size":4096,"suffix":"flac",
             "replayGain":{"trackGain":-4.0,"albumGain":-4.5}}],"more":true,"problem":null}""")
-        val batch = client.radio(session(), "song", id = "al1-2", exclude = listOf("lib/al1-1", "yt/dQw4w9WgXcQ"), count = 5)
+        val batch = client.radio(session(), "song", id = "al1-2", key = "lib/al1-2", exclude = listOf("lib/al1-1", "lib/al1-2", "yt/dQw4w9WgXcQ"), count = 5)
         assertEquals("Radio · Middle C", batch.title)
         assertTrue(batch.more)
         assertEquals(4096L, batch.songs.single().size)
@@ -262,16 +262,17 @@ class ConnectClientTest {
         assertEquals("/connect-tonearm/api/radio", request.url.encodedPath)
         assertEquals("song", request.url.queryParameter("seed"))
         assertEquals("al1-2", request.url.queryParameter("id"))
+        assertEquals("lib/al1-2", request.url.queryParameter("key"))
         assertEquals("5", request.url.queryParameter("count"))
         assertEquals(null, request.url.queryParameter("artist"))
-        assertEquals(listOf("lib/al1-1", "yt/dQw4w9WgXcQ"), Json.parseToJsonElement(request.body!!.utf8()).jsonObject["exclude"]!!.jsonArray.map { it.jsonPrimitive.content })
+        assertEquals(listOf("lib/al1-1", "lib/al1-2", "yt/dQw4w9WgXcQ"), Json.parseToJsonElement(request.body!!.utf8()).jsonObject["exclude"]!!.jsonArray.map { it.jsonPrimitive.content })
 
         respond("""{"title":"Picks radio","songs":[],"more":false,"problem":"Nothing like that in your library"}""")
         val none = client.radio(session(), "song", artist = "Sia", title = "Rewrite")
         assertEquals("Nothing like that in your library", none.problem)
         assertFalse(none.more)
         val byName = server.takeRequest().url
-        assertEquals(listOf("Sia", "Rewrite", null, "25"), listOf("artist", "title", "id", "count").map(byName::queryParameter))
+        assertEquals(listOf("Sia", "Rewrite", null, null, "25"), listOf("artist", "title", "id", "key", "count").map(byName::queryParameter))
     }
 
     @Test
