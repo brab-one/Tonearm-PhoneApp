@@ -1,6 +1,7 @@
 package io.github.deadeyebarb.tonearm
 
 import android.app.Application
+import android.util.Log
 import androidx.compose.runtime.mutableStateListOf
 import coil3.ImageLoader
 import coil3.disk.DiskCache
@@ -177,7 +178,12 @@ class AppContainer(val app: Application) {
     val versions = LibraryVersions(api)
     val fetches = FetchTracker(LidarrClient(integrationHttp, json), api)
     val local = LocalMusic(app)
-    val songRequests = SongRequests(LidarrClient(integrationHttp, json), ownPicks = { tonearmServer.server.value?.picksFolder })
+    val songRequests = SongRequests(
+        LidarrClient(integrationHttp, json),
+        ownPicks = { tonearmServer.server.value?.picksFolder },
+        ownRequests = { tonearmServer.server.value?.ownRequests == true },
+        log = { message, e -> Log.w("SongRequests", message, e) },
+    )
     val likes = Likes(app, json, scope, api, sessions, starred, integrations, songRequests, LikesSync(connectClient, json), connect, settings, messages)
     val weekly = WeeklyPicks(api, LidarrClient(integrationHttp, json), connectClient, json, connect.deviceId, java.io.File(app.filesDir, "weekly-run.json"))
     /** Radio, mixes from a sentence and daily mixes: from the Tonearm server, else made from the library. */

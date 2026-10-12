@@ -1,6 +1,7 @@
 package io.github.deadeyebarb.tonearm.integrations
 
 import io.github.deadeyebarb.tonearm.data.LidarrConfig
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -34,6 +35,10 @@ class SongRequests(
     private val lidarr: LidarrClient,
     /** This user's own picks folder on the Tonearm server, when each user has one. */
     private val ownPicks: () -> String? = { null },
+    /** The Tonearm server keeps who asked for what (its `ownRequests`), so an album Lidarr has already is still asked for. */
+    private val ownRequests: () -> Boolean = { false },
+    /** Where a claim on an album Lidarr has already that didn't go through is told. */
+    private val log: (String, Throwable) -> Unit = { _, _ -> },
     /** Waits between looks while Lidarr fetches a new artist's albums. */
     private val pause: suspend (Long) -> Unit = { delay(it) },
 ) {
@@ -74,7 +79,7 @@ class SongRequests(
 
     private suspend fun want(config: LidarrConfig, key: String, album: LidarrClient.AlbumHit, artist: String): SongRequestResult {
         if (album.inLidarr) {
-            if (album.monitored) return alreadyWanted(config, key, album.title, album.artistName ?: artist, album.artistPath)
+            if (album.monitored) return alreadyWanted(config, key, album.lidarrId, album.title, album.artistName ?: artist, album.artistPath)
             lidarr.monitorAlbum(config, key, album.lidarrId, search = config.searchOnAdd)
         } else {
             lidarr.addAlbum(config, key, album.candidate, lidarr.resolveDefaults(config, key))
@@ -101,7 +106,7 @@ class SongRequests(
             if (added != null) runCatching { lidarr.deleteArtist(config, key, added.id, deleteFiles = false, exclude = false) }
             return null
         }
-        if (album.monitored) return alreadyWanted(config, key, album.title, existing?.artistName ?: artist.title, existing?.path)
+        if (album.monitored) return alreadyWanted(config, key, album.id, album.title, existing?.artistName ?: artist.title, existing?.path)
         lidarr.monitorAlbum(config, key, album.id, search = config.searchOnAdd)
         if (added != null) keepWanted(config, key, album.id)
         return SongRequestResult.Album(album.title, (existing ?: added)?.artistName?.ifEmpty { null } ?: artist.title)
@@ -111,14 +116,35 @@ class SongRequests(
      * Lidarr has the album already, which is it for the user unless it's in someone else's private weekly picks: it
      * would never show up in their library then (the Tonearm server refuses to put more there, too).
      */
-    private suspend fun alreadyWanted(config: LidarrConfig, key: String, title: String, artist: String, artistPath: String?): SongRequestResult {
-        val path = artistPath?.trimEnd('/') ?: return SongRequestResult.AlreadyWanted(title)
-        val own = ownPicks()?.trimEnd('/')
-        val picks = runCatching { lidarr.rootFolders(config, key) }.getOrDefault(emptyList()).filter { it.isPicks }.map { it.path.trimEnd('/') }
-        if (picks.any { it != own && path.startsWith("$it/") }) {
-            throw IntegrationHttpException(409, "$artist is in someone else's private weekly picks, so “$title” won't reach your library; an admin can move $artist to a shared root folder in Lidarr")
+    private suspend fun alreadyWanted(config: LidarrConfig, key: String, albumId: Int, title: String, artist: String, artistPath: String?): SongRequestResult {
+        val path = artistPath?.trimEnd('/')
+        if (path != null) {
+            val own = ownPicks()?.trimEnd('/')
+            val picks = runCatching { lidarr.rootFolders(config, key) }.getOrDefault(emptyList()).filter { it.isPicks }.map { it.path.trimEnd('/') }
+            if (picks.any { it != own && path.startsWith("$it/") }) {
+                throw IntegrationHttpException(409, "$artist is in someone else's private weekly picks, so “$title” won't reach your library; an admin can move $artist to a shared root folder in Lidarr")
+            }
         }
+        claim(config, key, albumId, title)
         return SongRequestResult.AlreadyWanted(title)
+    }
+
+    /**
+     * Asks for an album Lidarr already wants once more, without searching again, so a Tonearm server that keeps who
+     * asked for what has it in this user's requests too. Only the server's 409 (someone else's picks) gets through.
+     */
+    private suspend fun claim(config: LidarrConfig, key: String, albumId: Int, title: String) {
+        if (!ownRequests()) return
+        try {
+            lidarr.monitorAlbum(config, key, albumId, search = false)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: IntegrationHttpException) {
+            if (e.code == 409) throw e
+            log("Couldn't add “$title” to your requests", e)
+        } catch (e: Exception) {
+            log("Couldn't add “$title” to your requests", e)
+        }
     }
 
     /**

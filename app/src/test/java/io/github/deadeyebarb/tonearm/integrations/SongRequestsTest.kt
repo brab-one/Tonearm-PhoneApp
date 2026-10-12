@@ -31,6 +31,8 @@ class SongRequestsTest {
     private lateinit var config: LidarrConfig
     private var radioheadInLidarr = false
     private var trackLooks = 0
+    /** Lidarr's answer to marking an album wanted (500: it couldn't). */
+    private var monitorAnswer = 200
 
     private val album = """{"title":"OK Computer","foreignAlbumId":"rg-ok","albumType":"Album","monitored":false,
         "artist":{"artistName":"Radiohead","foreignArtistId":"a-rh"}}"""
@@ -60,6 +62,9 @@ class SongRequestsTest {
                     // Kept in someone's private weekly picks.
                     path == "/api/v1/album/lookup" && term == "Slowdive Souvlaki" -> MockResponse(body = """[{"id":30,"title":"Souvlaki","foreignAlbumId":"rg-s",
                         "monitored":true,"artistId":7,"artist":{"id":7,"artistName":"Slowdive","foreignArtistId":"a-s","path":"/picks/carol/Slowdive"}}]""")
+                    // Someone asked for it already: Lidarr wants it, in the shared library.
+                    path == "/api/v1/album/lookup" && term == "Low Things We Lost in the Fire" -> MockResponse(body = """[{"id":40,"title":"Things We Lost in the Fire",
+                        "foreignAlbumId":"rg-low","monitored":true,"artistId":8,"artist":{"id":8,"artistName":"Low","foreignArtistId":"a-low","path":"/music/Low"}}]""")
                     path == "/api/v1/album/lookup" -> MockResponse(body = "[]")
                     path == "/api/v1/artist/lookup" && term == "Radiohead" ->
                         MockResponse(body = """[{"artistName":"Radiohead","foreignArtistId":"a-rh"${if (radioheadInLidarr) ""","id":4""" else ""}}]""")
@@ -75,7 +80,8 @@ class SongRequestsTest {
                         {"id":11,"title":"Karma Police","artistId":4,"albumType":"Single","releaseDate":"1997-08-25T00:00:00Z"},
                         {"id":12,"title":"The Best Of","artistId":4,"albumType":"Album","releaseDate":"2008-06-02T00:00:00Z","secondaryTypes":[{"id":1,"name":"Compilation"}]}]""")
                     path == "/api/v1/album" && request.method == "POST" -> MockResponse(body = album)
-                    path == "/api/v1/album/monitor" || path == "/api/v1/command" || path.startsWith("/api/v1/artist/") -> MockResponse(body = "{}")
+                    path == "/api/v1/album/monitor" -> MockResponse(code = monitorAnswer, body = "{}")
+                    path == "/api/v1/command" || path.startsWith("/api/v1/artist/") -> MockResponse(body = "{}")
                     else -> MockResponse(code = 404)
                 }
             }
@@ -150,5 +156,25 @@ class SongRequestsTest {
         // In carol's own picks it is: it's in her library.
         val carol = SongRequests(LidarrClient(IntegrationHttp(OkHttpClient()) { null }, json), ownPicks = { "/picks/carol" }, pause = { })
         assertEquals(SongRequestResult.AlreadyWanted("Souvlaki"), carol.request(config, "k", ref))
+    }
+
+    @Test
+    fun `an album someone else asked for is asked for again where the server keeps who asked`() = runTest {
+        val ref = TrackRef(title = "Sunflower", artist = "Low", album = "Things We Lost in the Fire")
+        // An older server: nothing to note, nothing sent.
+        assertEquals(SongRequestResult.AlreadyWanted("Things We Lost in the Fire"), requests.request(config, "k", ref))
+        assertTrue(changes.isEmpty())
+        // A server that keeps who asked: marked wanted once more, so it's in this user's requests too, without a new search.
+        val logged = mutableListOf<String>()
+        val mine = SongRequests(LidarrClient(IntegrationHttp(OkHttpClient()) { null }, json), ownRequests = { true }, log = { m, _ -> logged += m }, pause = { })
+        assertEquals(SongRequestResult.AlreadyWanted("Things We Lost in the Fire"), mine.request(config, "k", ref))
+        val monitored = json.parseToJsonElement(change("PUT", "/api/v1/album/monitor").third).jsonObject
+        assertEquals("[40]", monitored["albumIds"].toString())
+        assertTrue(changes.none { it.second.startsWith("/api/v1/command") })
+        // If that doesn't go through, it's still "already wanted", and the log says why.
+        changes.clear()
+        monitorAnswer = 500
+        assertEquals(SongRequestResult.AlreadyWanted("Things We Lost in the Fire"), mine.request(config, "k", ref))
+        assertEquals(listOf("Couldn't add “Things We Lost in the Fire” to your requests"), logged)
     }
 }

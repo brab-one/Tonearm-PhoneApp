@@ -15,6 +15,9 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonPrimitive
 import java.io.IOException
 
 class IntegrationNotConfiguredException(message: String) : IOException(message)
@@ -70,8 +73,19 @@ class IntegrationsService(
     /** Asks Lidarr to get [candidate] (artist or album) with the saved defaults. */
     suspend fun request(candidate: LidarrCandidate) {
         val (config, key) = requireLidarr()
+        val id = candidate.raw["id"]?.jsonPrimitive?.intOrNull
+        if (candidate.isAlbum && candidate.inLidarr && id != null) return claim(config, key, candidate, id)
         val defaults = lidarr.resolveDefaults(config, key)
         if (candidate.isAlbum) lidarr.addAlbum(config, key, candidate, defaults) else lidarr.addArtist(config, key, candidate, defaults)
+    }
+
+    /**
+     * An album Lidarr has already, asked for as this user's: the Tonearm server notes who asked (see [SongRequests]).
+     * One Lidarr isn't watching yet is searched for, like a new request.
+     */
+    private suspend fun claim(config: LidarrConfig, key: String, candidate: LidarrCandidate, id: Int) {
+        val monitored = candidate.raw["monitored"]?.jsonPrimitive?.booleanOrNull == true
+        lidarr.monitorAlbum(config, key, id, search = config.searchOnAdd && !monitored)
     }
 
     enum class ArtistRequestResult { REQUESTED, ALREADY_IN_LIDARR, NOT_FOUND }

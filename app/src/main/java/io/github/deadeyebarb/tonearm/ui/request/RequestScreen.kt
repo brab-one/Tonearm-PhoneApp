@@ -129,7 +129,7 @@ class RequestViewModel(private val c: AppContainer) : androidx.lifecycle.ViewMod
             try {
                 c.integrations.request(candidate)
                 requested = requested + candidate.foreignId
-                c.messages.show("Requested “${candidate.title}”. Lidarr is on it.")
+                c.messages.show(if (candidate.inLidarr) "“${candidate.title}” is in your requests now." else "Requested “${candidate.title}”. Lidarr is on it.")
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -146,6 +146,9 @@ fun RequestScreen(initialQuery: String) {
     val c = LocalContext.current.container
     val actions = LocalActions.current
     val integrations by c.integrations.state.collectAsStateWithLifecycle()
+    val server by c.tonearmServer.server.collectAsStateWithLifecycle()
+    // Albums Lidarr has already can still be asked for, to have them in your own requests.
+    val claimable = WhoseRequests.of(server) == WhoseRequests.OWN
     val vm = viewModel { RequestViewModel(c) }
     var query by rememberSaveable { mutableStateOf(initialQuery) }
     val keyboard = LocalSoftwareKeyboardController.current
@@ -204,7 +207,7 @@ fun RequestScreen(initialQuery: String) {
                         items(state.value, key = { (if (it.isAlbum) "al:" else "ar:") + it.foreignId }) { candidate ->
                             CandidateRow(
                                 candidate, requested = candidate.foreignId in vm.requested, sending = candidate.foreignId in vm.sending,
-                                onRequest = { vm.request(candidate) },
+                                claimable = claimable && candidate.isAlbum, onRequest = { vm.request(candidate) },
                             )
                         }
                     }
@@ -215,17 +218,34 @@ fun RequestScreen(initialQuery: String) {
 }
 
 @Composable
-fun CandidateRow(candidate: LidarrCandidate, requested: Boolean, sending: Boolean = false, stacked: Boolean = false, onRequest: () -> Unit) {
+fun CandidateRow(
+    candidate: LidarrCandidate,
+    requested: Boolean,
+    sending: Boolean = false,
+    stacked: Boolean = false,
+    /** Already in Lidarr, and still to be asked for as yours (a Tonearm server that keeps who asked). */
+    claimable: Boolean = false,
+    onRequest: () -> Unit,
+) {
     val hud = Hud.colors
     var details by remember { mutableStateOf(false) }
     // MORE only when the overview doesn't fit in its two lines.
     var cut by remember { mutableStateOf(false) }
-    val status = @Composable {
+    val ask = @Composable {
         when {
-            candidate.inLidarr -> HudTag("IN LIDARR", color = hud.ok)
             requested -> HudTag("REQUESTED", color = hud.ok, filled = true)
             sending -> HudButton("Requesting…", {}, filled = false, enabled = false)
             else -> HudButton("Request", onRequest, filled = false)
+        }
+    }
+    val status = @Composable {
+        when {
+            candidate.inLidarr && claimable -> Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                HudTag("IN LIDARR", color = hud.ok)
+                ask()
+            }
+            candidate.inLidarr -> HudTag("IN LIDARR", color = hud.ok)
+            else -> ask()
         }
     }
     Row(
