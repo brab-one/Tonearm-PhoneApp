@@ -41,6 +41,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -103,6 +104,9 @@ class RequestViewModel(private val c: AppContainer) : androidx.lifecycle.ViewMod
     /** Wanted albums (Lidarr ids) being fetched from YouTube Music right now. */
     var fromYouTube by mutableStateOf(setOf<Int>())
         private set
+    /** Goes up when a YouTube now is done, so the wanted list is fetched again and its tags show what came of it. */
+    var youtubeAnswers by mutableIntStateOf(0)
+        private set
     private var job: Job? = null
     private var lastQuery = ""
 
@@ -163,6 +167,7 @@ class RequestViewModel(private val c: AppContainer) : androidx.lifecycle.ViewMod
                 c.messages.show(e.userMessage())
             } finally {
                 fromYouTube = fromYouTube - album.id
+                youtubeAnswers++
             }
         }
     }
@@ -347,9 +352,9 @@ private fun QueueSection(c: AppContainer, vm: RequestViewModel) {
         whose.tag(requestedBy, me)?.let { HudTag(it, color = hud.dim) }
     }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
-    // With the server's YouTube fallback, the list is fetched again now and then, so its tags follow what the server did.
+    // With the server's YouTube fallback the list is fetched again now and then, and after a YouTube now, so its tags follow what the server did.
     val fallback = (server?.youtubeFallback ?: 0) > 0
-    val wanted by produceState<List<LidarrAlbum>?>(null, lifecycle, fallback) {
+    val wanted by produceState<List<LidarrAlbum>?>(null, lifecycle, fallback, vm.youtubeAnswers) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (true) {
                 runCatching { c.integrations.requireLidarr().let { (config, key) -> c.integrations.lidarr.wanted(config, key) } }
@@ -359,8 +364,9 @@ private fun QueueSection(c: AppContainer, vm: RequestViewModel) {
             }
         }
     }
-    // The YouTube tags count down while the screen is open.
-    val now by produceState(System.currentTimeMillis()) {
+    // The YouTube tags count down while the screen is open, from when the list came.
+    val now by produceState(System.currentTimeMillis(), wanted) {
+        value = System.currentTimeMillis()
         while (true) {
             delay(15_000)
             value = System.currentTimeMillis()
@@ -431,36 +437,49 @@ private fun QueueSection(c: AppContainer, vm: RequestViewModel) {
                 // The server's fallback leaves albums with a download under way alone.
                 val queued = (queue as? Load.Ready)?.value.orEmpty().mapNotNullTo(HashSet()) { it.album?.id }
                 items(w, key = { "wanted:" + it.id }) { album ->
-                    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        RemoteCover(album.remoteCover ?: album.images.firstOrNull { it.coverType.equals("cover", true) }?.remoteUrl, Icons.Rounded.Album, Modifier.size(44.dp))
-                        Spacer(Modifier.width(12.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(album.title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Text(
-                                    listOfNotNull(album.artist?.artistName, album.releaseDate?.take(4)).joinToString(" · ").uppercase(),
-                                    style = MaterialTheme.typography.labelSmall, color = hud.accent2, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f, fill = false),
-                                )
-                                requester(album.requestedBy)
+                    val search = @Composable {
+                        HudButton("Search", {
+                            actions.launch {
+                                val (config, key) = c.integrations.requireLidarr()
+                                c.integrations.lidarr.monitorAlbum(config, key, album.id, search = true)
+                                actions.message("Lidarr is searching for ${album.title}")
                             }
-                            YouTubeFallback.tag(album, now, queued = album.id in queued)?.let { tag ->
-                                HudTag(tag, color = if (album.youtubeTried != null) hud.dim else hud.accent, modifier = Modifier.padding(top = 4.dp))
-                            }
-                        }
-                        Spacer(Modifier.width(8.dp))
-                        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            HudButton("Search", {
-                                actions.launch {
-                                    val (config, key) = c.integrations.requireLidarr()
-                                    c.integrations.lidarr.monitorAlbum(config, key, album.id, search = true)
-                                    actions.message("Lidarr is searching for ${album.title}")
+                        }, filled = false)
+                    }
+                    // With YouTube now there are two buttons: they go on a line of their own, under the album.
+                    val youtubeNow = server?.youtubeNow == true
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            RemoteCover(album.remoteCover ?: album.images.firstOrNull { it.coverType.equals("cover", true) }?.remoteUrl, Icons.Rounded.Album, Modifier.size(44.dp))
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(album.title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text(
+                                        listOfNotNull(album.artist?.artistName, album.releaseDate?.take(4)).joinToString(" · ").uppercase(),
+                                        style = MaterialTheme.typography.labelSmall, color = hud.accent2, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f, fill = false),
+                                    )
+                                    requester(album.requestedBy)
                                 }
-                            }, filled = false)
-                            if (server?.youtubeNow == true) {
+                                YouTubeFallback.tag(album, now, queued = album.id in queued)?.let { tag ->
+                                    HudTag(tag, color = if (album.youtubeTried != null) hud.dim else hud.accent, modifier = Modifier.padding(top = 4.dp))
+                                }
+                            }
+                            if (!youtubeNow) search()
+                        }
+                        if (youtubeNow) {
+                            Row(
+                                Modifier.fillMaxWidth().padding(start = 56.dp, top = 8.dp),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.End),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                search()
                                 if (album.id in vm.fromYouTube) {
-                                    Box(Modifier.heightIn(min = 46.dp).padding(horizontal = 14.dp), contentAlignment = Alignment.Center) {
-                                        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = hud.accent)
+                                    Row(Modifier.heightIn(min = 46.dp).padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = hud.accent)
+                                        Spacer(Modifier.width(10.dp))
+                                        Text("ASKING YOUTUBE…", style = MaterialTheme.typography.labelMedium, color = hud.dim)
                                     }
                                 } else {
                                     HudButton("From YouTube now", { vm.youtubeNow(album) }, filled = false)
