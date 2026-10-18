@@ -28,6 +28,7 @@ import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -70,6 +71,7 @@ import io.github.deadeyebarb.tonearm.integrations.LidarrCandidate
 import io.github.deadeyebarb.tonearm.integrations.LidarrQueueItem
 import io.github.deadeyebarb.tonearm.integrations.Recommender
 import io.github.deadeyebarb.tonearm.integrations.WhoseRequests
+import io.github.deadeyebarb.tonearm.integrations.YouTubeFallback
 import io.github.deadeyebarb.tonearm.subsonic.userMessage
 import io.github.deadeyebarb.tonearm.ui.LidarrSettingsRoute
 import io.github.deadeyebarb.tonearm.ui.common.EmptyState
@@ -83,7 +85,9 @@ import io.github.deadeyebarb.tonearm.ui.theme.HudSectionHeader
 import io.github.deadeyebarb.tonearm.ui.theme.HudTag
 import io.github.deadeyebarb.tonearm.ui.theme.HudTopBar
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -95,6 +99,9 @@ class RequestViewModel(private val c: AppContainer) : androidx.lifecycle.ViewMod
         private set
     /** Foreign IDs being requested right now. */
     var sending by mutableStateOf(setOf<String>())
+        private set
+    /** Wanted albums (Lidarr ids) being fetched from YouTube Music right now. */
+    var fromYouTube by mutableStateOf(setOf<Int>())
         private set
     private var job: Job? = null
     private var lastQuery = ""
@@ -136,6 +143,26 @@ class RequestViewModel(private val c: AppContainer) : androidx.lifecycle.ViewMod
                 c.messages.show(e.userMessage())
             } finally {
                 sending = sending - candidate.foreignId
+            }
+        }
+    }
+
+    /**
+     * Has the Tonearm server get a wanted album from YouTube Music now and says what came of it. That takes Lidarr a
+     * minute or two, so it runs in the app's scope: leaving the screen doesn't stop it, and the answer still shows.
+     */
+    fun youtubeNow(album: LidarrAlbum) {
+        if (album.id in fromYouTube) return
+        fromYouTube = fromYouTube + album.id
+        c.scope.launch(Dispatchers.Main) {
+            try {
+                c.messages.show(YouTubeFallback.message(c.connect.youtubeNow(album.id), album.title))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                c.messages.show(e.userMessage())
+            } finally {
+                fromYouTube = fromYouTube - album.id
             }
         }
     }
@@ -197,7 +224,7 @@ fun RequestScreen(initialQuery: String) {
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
             )
             when (val state = vm.results) {
-                null -> QueueSection(c)
+                null -> QueueSection(c, vm)
                 Load.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { HudLoader(label = "QUERYING LIDARR") }
                 is Load.Failed -> ErrorState(state.error, onRetry = { vm.search(query, debounce = false) })
                 is Load.Ready -> if (state.value.isEmpty()) {
@@ -308,7 +335,7 @@ fun RemoteCover(
 }
 
 @Composable
-private fun QueueSection(c: AppContainer) {
+private fun QueueSection(c: AppContainer, vm: RequestViewModel) {
     val hud = Hud.colors
     val actions = LocalActions.current
     // A user sees their own requests; an admin everyone's, each tagged with who asked.
@@ -319,12 +346,27 @@ private fun QueueSection(c: AppContainer) {
     val requester = @Composable { requestedBy: List<String> ->
         whose.tag(requestedBy, me)?.let { HudTag(it, color = hud.dim) }
     }
-    val wanted by produceState<List<LidarrAlbum>?>(null) {
-        value = runCatching { c.integrations.requireLidarr().let { (config, key) -> c.integrations.lidarr.wanted(config, key) } }
-            .getOrNull()?.sortedByDescending { it.releaseDate.orEmpty() }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    // With the server's YouTube fallback, the list is fetched again now and then, so its tags follow what the server did.
+    val fallback = (server?.youtubeFallback ?: 0) > 0
+    val wanted by produceState<List<LidarrAlbum>?>(null, lifecycle, fallback) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                runCatching { c.integrations.requireLidarr().let { (config, key) -> c.integrations.lidarr.wanted(config, key) } }
+                    .getOrNull()?.let { list -> value = list.sortedByDescending { it.releaseDate.orEmpty() } }
+                if (!fallback) awaitCancellation()
+                delay(WANTED_AGAIN_MS)
+            }
+        }
+    }
+    // The YouTube tags count down while the screen is open.
+    val now by produceState(System.currentTimeMillis()) {
+        while (true) {
+            delay(15_000)
+            value = System.currentTimeMillis()
+        }
     }
     // Poll Lidarr's queue while this screen is on screen.
-    val lifecycle = LocalLifecycleOwner.current.lifecycle
     val queue by produceState<Load<List<LidarrQueueItem>>>(Load.Loading, lifecycle) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (true) {
@@ -386,6 +428,8 @@ private fun QueueSection(c: AppContainer) {
                 val text = if (whose == WhoseRequests.OWN) "Nothing wanted: everything you asked for is on your server." else "Nothing wanted: everything Lidarr monitors is on your server."
                 item { Text(text, style = MaterialTheme.typography.bodyMedium, color = hud.dim, modifier = Modifier.padding(horizontal = 16.dp)) }
             } else {
+                // The server's fallback leaves albums with a download under way alone.
+                val queued = (queue as? Load.Ready)?.value.orEmpty().mapNotNullTo(HashSet()) { it.album?.id }
                 items(w, key = { "wanted:" + it.id }) { album ->
                     Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                         RemoteCover(album.remoteCover ?: album.images.firstOrNull { it.coverType.equals("cover", true) }?.remoteUrl, Icons.Rounded.Album, Modifier.size(44.dp))
@@ -400,20 +444,38 @@ private fun QueueSection(c: AppContainer) {
                                 )
                                 requester(album.requestedBy)
                             }
-                        }
-                        HudButton("Search", {
-                            actions.launch {
-                                val (config, key) = c.integrations.requireLidarr()
-                                c.integrations.lidarr.monitorAlbum(config, key, album.id, search = true)
-                                actions.message("Lidarr is searching for ${album.title}")
+                            YouTubeFallback.tag(album, now, queued = album.id in queued)?.let { tag ->
+                                HudTag(tag, color = if (album.youtubeTried != null) hud.dim else hud.accent, modifier = Modifier.padding(top = 4.dp))
                             }
-                        }, filled = false)
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            HudButton("Search", {
+                                actions.launch {
+                                    val (config, key) = c.integrations.requireLidarr()
+                                    c.integrations.lidarr.monitorAlbum(config, key, album.id, search = true)
+                                    actions.message("Lidarr is searching for ${album.title}")
+                                }
+                            }, filled = false)
+                            if (server?.youtubeNow == true) {
+                                if (album.id in vm.fromYouTube) {
+                                    Box(Modifier.heightIn(min = 46.dp).padding(horizontal = 14.dp), contentAlignment = Alignment.Center) {
+                                        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = hud.accent)
+                                    }
+                                } else {
+                                    HudButton("From YouTube now", { vm.youtubeNow(album) }, filled = false)
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
 }
 }
+
+/** How often the wanted list is fetched again while the server's YouTube fallback is on: as often as it looks. */
+private const val WANTED_AGAIN_MS = 2 * 60_000L
 
 /** Request a recommended artist by name: looks it up in Lidarr and lets you pick the right match. */
 @Composable
