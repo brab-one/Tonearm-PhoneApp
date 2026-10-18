@@ -14,6 +14,10 @@ Log in with user "demo", password "demo". From the Android emulator the host is 
 The same address also serves a mock Lidarr (API key "lidarr-key", under /api/v1/) so requests can be
 tried, and a mock Maloja (API key "maloja-key", under /apis/mlj_1/) for the Tonearm server's one-time
 import of a Maloja's history (MALOJA_URL=http://127.0.0.1:8444).
+Its Lidarr has a torrent indexer and Tubifarry's YouTube one (id 7): a release search (GET /api/v1/release?albumId=)
+finds a YouTube release for every album, an approved FLAC torrent Lidarr ranks above it for Afterglow and Prism Fields,
+and only YouTube results Lidarr turns down for Choral Static; grabbing one (POST /api/v1/release) queues it on the
+"YouTube" or "qBittorrent" download client.
 Test hooks: GET /mock/arrive?title=&artist=&album= (Lidarr downloaded a song), /mock/replace?id=&from= (a better file),
 /mock/plays?album=al3&count=5&daysAgo=120 (those songs were played; also id= for one song).
 With --connect http://127.0.0.1:8790 and --plain-port 8444 it also stands in for the proxy in front of a
@@ -86,6 +90,14 @@ LIDARR_ALBUM_TYPES = {"mb-midnight-signal": "Single"}
 BRAINARR_LIST_ID = 7
 BRAINARR_TAG = {"id": 1, "label": "brainarr"}
 BRAINARR_ADDS = [("mb-neon-cascade", False), ("mb-aurora-lattice", True)]  # (artist, monitored)
+# Lidarr's indexers: a torrent one and Tubifarry's YouTube one, which only interactive searches (and the Tonearm server) use.
+TORRENT_INDEXER = {"id": 3, "name": "Knaben", "implementation": "Torznab", "implementationName": "Torznab", "protocol": "TorrentDownloadProtocol",
+                   "enableRss": True, "enableAutomaticSearch": True, "enableInteractiveSearch": True, "priority": 25}
+YOUTUBE_INDEXER = {"id": 7, "name": "YouTube", "implementation": "YouTubeIndexer", "implementationName": "YouTube", "protocol": "YoutubeDownloadProtocol",
+                   "enableRss": False, "enableAutomaticSearch": False, "enableInteractiveSearch": True, "priority": 50}
+# Albums with a FLAC torrent Lidarr ranks above YouTube, and the one whose YouTube results it turns down.
+LIDARR_TORRENT_ALBUMS = {"mb-afterglow", "mb-prism-fields"}
+LIDARR_NO_YOUTUBE = {"mb-choral-static"}
 
 
 def run(cmd):
@@ -149,6 +161,8 @@ class Library:
         self.lidarr_commands: dict[int, dict] = {}
         self.lidarr_albums: dict[str, dict] = {}
         self.lidarr_queue: list[dict] = []
+        # What the last release searches found, by guid, as Lidarr keeps them for a grab.
+        self.lidarr_releases: dict[str, tuple] = {}
         self.lidarr_roots: list[dict] = [{"id": 1, "path": "/music", "name": "Music", "defaultQualityProfileId": 2,
                                           "defaultMetadataProfileId": 1, "freeSpace": 2_400_000_000_000, "accessible": True}]
         # Users whose picks folder (/picks/<user>) exists on the mock Lidarr's disk.
@@ -599,10 +613,41 @@ class Handler(BaseHTTPRequestHandler):
             # Also run on the class at startup, so not through self.
             Handler.queue_album(self, entry, title, mbid)
 
-    def queue_album(self, entry, title, mbid):
-        """An album downloading, with the ids real Lidarr gives its queue items (artist and album)."""
-        self.lib.lidarr_queue.append({"title": f"{entry['artistName']} - {title}", "artist": entry["artistName"],
-                                      "artistMbid": entry["foreignArtistId"], "albumMbid": mbid, "album": title, "started": time.time()})
+    def queue_album(self, entry, title, mbid, release=None):
+        """An album downloading, with the ids real Lidarr gives its queue items (artist and album), from a torrent unless
+        it's a [release] grabbed from YouTube."""
+        youtube = release is not None and release["indexerId"] == YOUTUBE_INDEXER["id"]
+        self.lib.lidarr_queue.append({"title": release["title"] if release else f"{entry['artistName']} - {title}", "artist": entry["artistName"],
+                                      "artistMbid": entry["foreignArtistId"], "albumMbid": mbid, "album": title, "started": time.time(),
+                                      "client": "YouTube" if youtube else "qBittorrent",
+                                      "protocol": YOUTUBE_INDEXER["protocol"] if youtube else TORRENT_INDEXER["protocol"],
+                                      "indexer": YOUTUBE_INDEXER["name"] if youtube else TORRENT_INDEXER["name"]})
+
+    def lidarr_releases(self, entry, album):
+        """What a search of every indexer finds for an album, as Lidarr lists it: approved or not, and its releaseWeight
+        (Lidarr's ranking, lowest best). The download links have the indexer's key in them, like Prowlarr's."""
+        title, mbid, date = album
+        name = f"{entry['artistName']} - {title}"
+        youtube_ok = mbid not in LIDARR_NO_YOUTUBE
+
+        def release(guid, indexer, release_title, quality, weight, approved, rejections=(), size=90_000_000):
+            return {"guid": guid, "indexerId": indexer["id"], "indexer": indexer["name"], "protocol": indexer["protocol"], "title": release_title,
+                    "quality": {"quality": {"name": quality}}, "releaseWeight": weight, "approved": approved, "rejected": not approved,
+                    "temporarilyRejected": False, "rejections": list(rejections), "size": size, "artistName": entry["artistName"],
+                    "albumTitle": title, "publishDate": date + "T00:00:00Z",
+                    "downloadUrl": f"http://prowlarr:9696/{indexer['id']}/download?apikey=mock-prowlarr-key&guid={guid}"}
+
+        out = [release(f"youtube-{mbid}", YOUTUBE_INDEXER, f"{name} [AAC 256]", "AAC-VBR", 20, youtube_ok,
+                       [] if youtube_ok else ["Album match is not close enough: 61.0 % vs 80 % [album, country]"])]
+        if not youtube_ok:
+            out.append(release(f"youtube-{mbid}-2", YOUTUBE_INDEXER, f"Somebody Else - {title} [AAC 128]", "AAC-192", 30, False,
+                               ["Wrong album", "Unknown Artist"]))
+        if mbid in LIDARR_TORRENT_ALBUMS:
+            out.append(release(f"knaben-{mbid}-flac", TORRENT_INDEXER, f"{name} ({date[:4]}) [FLAC]", "FLAC", 5, True, size=400_000_000))
+        # A release Lidarr ranks first but won't take, on every album.
+        out.append(release(f"knaben-{mbid}-cue", TORRENT_INDEXER, f"{name} [FLAC+CUE image]", "FLAC", 1, False,
+                           ["Not an upgrade for existing album file(s)"], size=450_000_000))
+        return out
 
     def lidarr_put(self, endpoint, body):
         if endpoint == "album/monitor":
@@ -737,6 +782,17 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_raw(tracks)
         if endpoint == "importlist":
             return self.send_raw([self.brainarr_list()])
+        if endpoint == "indexer":
+            return self.send_raw([TORRENT_INDEXER, YOUTUBE_INDEXER])
+        if endpoint == "release" and one("albumId"):
+            # A search of every indexer for one of Lidarr's albums; the library's own (and unknown ones) have nothing new.
+            album_id = int(one("albumId"))
+            found = next(((e, a) for e in LIDARR_CATALOG for a in e["albums"] if self.lib.lidarr_albums.get(a[1], {}).get("id") == album_id), None)
+            releases = self.lidarr_releases(*found) if found else []
+            for r in releases:
+                self.lib.lidarr_releases[r["guid"]] = (r, found)
+            print(f"    lidarr: searched every indexer for album {album_id}: {len(releases)} releases, {sum(r['approved'] for r in releases)} approved", flush=True)
+            return self.send_raw(releases)
         if endpoint == "tag":
             return self.send_raw(self.lib.lidarr_tags)
         if endpoint.startswith("command/"):
@@ -776,6 +832,8 @@ class Handler(BaseHTTPRequestHandler):
                     artist_id = self.lib.lidarr_artists.get(item.get("artistMbid"), {}).get("id")
                     album_id = self.lib.lidarr_albums.get(item.get("albumMbid"), {}).get("id")
                     records.append({"id": i + 1, "title": item["title"], "status": "downloading", "trackedDownloadState": "downloading",
+                                    "downloadClient": item.get("client", "qBittorrent"), "protocol": item.get("protocol", TORRENT_INDEXER["protocol"]),
+                                    "indexer": item.get("indexer", TORRENT_INDEXER["name"]),
                                     "size": size, "sizeleft": left, "timeleft": f"00:{int(left / size * 90) // 60:02d}:{int(left / size * 90) % 60:02d}",
                                     "artistId": artist_id, "albumId": album_id, "artist": {"id": artist_id or 0, "artistName": item["artist"]},
                                     "album": {"id": album_id or 0, "title": item["album"], "foreignAlbumId": item.get("albumMbid")}})
@@ -783,6 +841,15 @@ class Handler(BaseHTTPRequestHandler):
         self.send_raw({"message": f"unknown endpoint {endpoint}"}, 404)
 
     def lidarr_post(self, endpoint, body):
+        if endpoint == "release":
+            # A grab of what the last search found, by guid, as Lidarr does it.
+            kept = self.lib.lidarr_releases.get(body.get("guid"))
+            if not kept or kept[0]["indexerId"] != body.get("indexerId"):
+                return self.send_raw({"message": "Couldn't find requested release in cache, try searching again"}, 404)
+            release, (entry, album) = kept
+            self.queue_album(entry, album[0], album[1], release)
+            print(f"    lidarr: grabbed {release['title']} from {release['indexer']}", flush=True)
+            return self.send_raw(release)
         if endpoint == "rootfolder":
             # Like Lidarr, only a folder that exists (here: the users given with --picks-dirs).
             path = body.get("path", "").rstrip("/")
