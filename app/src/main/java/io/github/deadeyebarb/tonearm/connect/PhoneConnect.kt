@@ -95,6 +95,9 @@ class PhoneConnect(
     /** "Not for me": the Tonearm server leaves [artist] (or just this [album]) out of the picks from now on. */
     suspend fun dismiss(artist: String, album: String? = null) = client.dismiss(sessions.active.value ?: sessions.awaitActive(), artist, album)
 
+    /** Has the Tonearm server get the wanted album [albumId] (Lidarr's id) from YouTube Music now. */
+    suspend fun youtubeNow(albumId: Int): YouTubeNow = client.youtubeNow(sessions.active.value ?: sessions.awaitActive(), albumId)
+
     /** Artists like [artist] (Deezer's related artists, through the Tonearm server), marked when you have them. */
     suspend fun similarArtists(artist: String): List<SimilarArtist> = client.similarArtists(sessions.active.value ?: sessions.awaitActive(), artist)
 

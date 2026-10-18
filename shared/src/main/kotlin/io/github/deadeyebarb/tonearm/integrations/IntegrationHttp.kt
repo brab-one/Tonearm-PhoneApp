@@ -60,9 +60,19 @@ class IntegrationHttp(
         service,
     )
 
-    /** POSTs [body] with a given [client], e.g. a music server's own with its client certificate. */
-    suspend fun post(url: HttpUrl, body: String, client: OkHttpClient, contentType: String = "text/plain; charset=utf-8", service: String = ""): String =
-        execute(Request.Builder().url(url).header("Accept", "application/json").post(body.toRequestBody(contentType.toMediaType())).build(), client, service)
+    /** POSTs [body] with a given [client], e.g. a music server's own with its client certificate; [waitSeconds] as for [send]. */
+    suspend fun post(
+        url: HttpUrl,
+        body: String,
+        client: OkHttpClient,
+        contentType: String = "text/plain; charset=utf-8",
+        service: String = "",
+        waitSeconds: Long? = null,
+    ): String = execute(
+        Request.Builder().url(url).header("Accept", "application/json").post(body.toRequestBody(contentType.toMediaType())).build(),
+        waitSeconds?.let { client.newBuilder().readTimeout(it, TimeUnit.SECONDS).build() } ?: client,
+        service,
+    )
 
     private suspend fun execute(request: Request, useServerTls: Boolean, service: String): String =
         execute(request, client(useServerTls), service)

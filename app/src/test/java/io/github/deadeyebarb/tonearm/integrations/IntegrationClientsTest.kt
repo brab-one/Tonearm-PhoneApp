@@ -160,6 +160,14 @@ class IntegrationClientsTest {
     }
 
     @Test
+    fun `wanted albums say when the server gets them from youtube music, or that it found nothing`() = runTest {
+        respond("""{"page":1,"records":[{"id":7,"title":"Debut","youtubeAt":1760000000000},{"id":8,"title":"Second","youtubeTried":1760000060000},{"id":9,"title":"Third"}]}""")
+        val wanted = LidarrClient(http, json).wanted(lidarr.copy(url = base()), "key")
+        assertEquals(listOf(1_760_000_000_000L, null, null), wanted.map { it.youtubeAt })
+        assertEquals(listOf(null, 1_760_000_060_000L, null), wanted.map { it.youtubeTried })
+    }
+
+    @Test
     fun `all requests are shown to an admin, a user's own to them, and lidarr's lists as they are by an older server`() {
         val server = TonearmServerInfo(baseUrl = "https://music.example/", lidarr = true, ownRequests = true)
         assertEquals(WhoseRequests.OWN, WhoseRequests.of(server))
