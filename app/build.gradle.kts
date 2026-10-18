@@ -19,8 +19,8 @@ android {
         applicationId = "io.github.deadeyebarb.tonearm"
         minSdk = 26
         targetSdk = 37
-        versionCode = 20
-        versionName = "1.13.1"
+        versionCode = 21
+        versionName = "1.14.0"
     }
 
     signingConfigs {
