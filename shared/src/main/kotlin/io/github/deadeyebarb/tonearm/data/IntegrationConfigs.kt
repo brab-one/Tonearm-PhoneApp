@@ -72,6 +72,10 @@ data class TonearmServerInfo(
     val stats: Boolean = false,
     /** Lidarr's queue and wanted list hold only this user's own requests; an admin's hold everyone's, with who asked. */
     val ownRequests: Boolean = false,
+    /** Minutes an album stays wanted before the server gets it from YouTube Music by itself; 0 when it doesn't (server 1.8.0 and later). */
+    val youtubeFallback: Int = 0,
+    /** A wanted album can be had from YouTube Music right away: Lidarr has a YouTube indexer. */
+    val youtubeNow: Boolean = false,
 ) {
     fun serviceUrl(service: String) = baseUrl.trimEnd('/') + "/connect-tonearm/" + service
 }

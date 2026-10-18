@@ -67,6 +67,10 @@ data class LidarrAlbum(
     val statistics: LidarrStatistics? = null,
     /** Who asked for it, when the Tonearm server shows an admin everyone's wanted list (logins; empty when unknown). */
     val requestedBy: List<String> = emptyList(),
+    /** When the Tonearm server gets it from YouTube Music if nothing else turns up by then (ms); until it has tried. */
+    val youtubeAt: Long? = null,
+    /** When the Tonearm server tried YouTube Music for it and found nothing to grab (ms). */
+    val youtubeTried: Long? = null,
 )
 
 @Serializable

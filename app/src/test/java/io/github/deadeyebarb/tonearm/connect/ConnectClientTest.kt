@@ -373,6 +373,47 @@ class ConnectClientTest {
     }
 
     @Test
+    fun `the server's hello says how long its youtube fallback waits and whether youtube now is there`() = runTest {
+        respond("""{"server":"tonearm","protocol":2,"version":"1.8.0","user":"demo","lidarr":true,"youtubeFallback":20,"youtubeNow":true}""")
+        val info = client.findServer(session())!!
+        assertEquals(20, info.youtubeFallback)
+        assertTrue(info.youtubeNow)
+        // Off on the server: no minutes, but Lidarr's YouTube indexer still gets an album right away.
+        respond("""{"server":"tonearm","protocol":2,"version":"1.8.0","user":"demo","lidarr":true,"youtubeNow":true}""")
+        assertEquals(listOf(0, true), client.findServer(session())!!.let { listOf(it.youtubeFallback, it.youtubeNow) })
+        respond("""{"server":"tonearm","protocol":2,"version":"1.7.0","user":"demo","lidarr":true}""")
+        assertEquals(listOf(0, false), client.findServer(session())!!.let { listOf(it.youtubeFallback, it.youtubeNow) })
+        respond("""{"server":"tonearm","protocol":2,"user":"demo","youtubeFallback":"soon"}""")
+        assertEquals(0, client.findServer(session())!!.youtubeFallback)
+    }
+
+    @Test
+    fun `youtube now posts the lidarr album id and reads what was grabbed, or the problem`() = runTest {
+        respond("""{"grabbed":true,"title":"Portishead - Dummy (YouTube Music)"}""")
+        assertEquals(YouTubeNow(grabbed = true, title = "Portishead - Dummy (YouTube Music)"), client.youtubeNow(session(), 42))
+        val request = server.takeRequest()
+        assertEquals("POST", request.method)
+        assertEquals("/connect-tonearm/api/youtubenow", request.url.encodedPath)
+        assertEquals("42", request.url.queryParameter("albumId"))
+        assertEquals("alice", request.url.queryParameter("u"))
+
+        respond("""{"grabbed":false,"problem":"No YouTube Music match for “Dummy”"}""")
+        assertEquals(YouTubeNow(problem = "No YouTube Music match for “Dummy”"), client.youtubeNow(session(), 42))
+    }
+
+    @Test
+    fun `youtube now for an album that isn't yours gives the server's reason`() = runTest {
+        respond("""{"error":"That album isn't one of your requests"}""", 403)
+        try {
+            client.youtubeNow(session(), 42)
+            error("expected failure")
+        } catch (e: IntegrationHttpException) {
+            assertEquals(403, e.code)
+            assertEquals("That album isn't one of your requests", e.reason)
+        }
+    }
+
+    @Test
     fun `remote positions move on while playing`() {
         val state = PlaybackState(playing = true, positionMs = 10_000, durationMs = 60_000, at = 1_000)
         assertEquals(15_000, state.positionAt(now = 6_000))

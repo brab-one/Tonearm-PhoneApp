@@ -129,6 +129,10 @@ data class AiPick(val artist: String, val album: String, val year: Int? = null, 
 @Serializable
 data class PicksFolder(val path: String, val ready: Boolean = false, val problem: String? = null)
 
+/** What asking for a wanted album from YouTube Music right away came to: Lidarr [grabbed] that release ([title]), or the [problem]. */
+@Serializable
+data class YouTubeNow(val grabbed: Boolean = false, val title: String? = null, val problem: String? = null)
+
 @Serializable
 data class AiPicks(
     val picks: List<AiPick> = emptyList(),
@@ -341,6 +345,8 @@ class ConnectClient(private val http: IntegrationHttp, private val json: Json) {
             resume = flag("resume"),
             stats = flag("stats"),
             ownRequests = flag("ownRequests"),
+            youtubeFallback = response["youtubeFallback"]?.jsonPrimitive?.contentOrNull?.toIntOrNull()?.coerceAtLeast(0) ?: 0,
+            youtubeNow = flag("youtubeNow"),
         )
     }
 
@@ -445,6 +451,13 @@ class ConnectClient(private val http: IntegrationHttp, private val json: Json) {
         if (e.code == 404) null else throw e
     }
 
+    /**
+     * Has Lidarr get the wanted album [albumId] (Lidarr's id) from YouTube Music now, without waiting for its usual
+     * search or the server's own fallback. Lidarr's search of all indexers can take a minute or two, so this waits long.
+     */
+    suspend fun youtubeNow(session: ServerSession, albumId: Int): YouTubeNow =
+        json.decodeFromJsonElement(YouTubeNow.serializer(), call(ConnectRoute.Server(session), "youtubenow", listOf("albumId" to albumId), waitSeconds = SLOW_SECONDS))
+
     /** Artists like [artist], marked when the library has them. */
     suspend fun similarArtists(session: ServerSession, artist: String): List<SimilarArtist> =
         json.decodeFromJsonElement(ListSerializer(SimilarArtist.serializer()), call(ConnectRoute.Server(session), "similar", listOf("artist" to artist))["similar"] ?: JsonArray(emptyList()))
@@ -506,9 +519,15 @@ class ConnectClient(private val http: IntegrationHttp, private val json: Json) {
         return if (response["ok"]?.jsonPrimitive?.contentOrNull == "true") Stored(value, response["version"]?.jsonPrimitive?.long ?: 0) else null
     }
 
-    private suspend fun call(route: ConnectRoute, op: String, params: List<Pair<String, Any?>> = emptyList(), payload: String = ""): JsonObject {
+    private suspend fun call(
+        route: ConnectRoute,
+        op: String,
+        params: List<Pair<String, Any?>> = emptyList(),
+        payload: String = "",
+        waitSeconds: Long? = null,
+    ): JsonObject {
         val session = (route as ConnectRoute.Server).session
-        val text = http.post(session.connectUrl(op, params), payload, session.client, service = "Tonearm server")
+        val text = http.post(session.connectUrl(op, params), payload, session.client, service = "Tonearm server", waitSeconds = waitSeconds)
         val response = json.parseToJsonElement(text).jsonObject
         response["error"]?.jsonPrimitive?.contentOrNull?.let { throw IntegrationHttpException(0, "Tonearm server: $it", reason = it) }
         return response
@@ -517,6 +536,9 @@ class ConnectClient(private val http: IntegrationHttp, private val json: Json) {
     companion object {
         /** How long a poll waits; below common proxy timeouts (60 s) and OkHttp's read timeout. */
         const val POLL_WAIT_SECONDS = 20
+
+        /** How long a call that has Lidarr search all its indexers may take. */
+        private const val SLOW_SECONDS = 300L
     }
 }
 
